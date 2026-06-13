@@ -90,3 +90,18 @@ if [ "$b_count" -eq 0 ]; then
 fi
 
 echo "[test] PASS: $b_count key(s) migrated to B, $a_count stayed on A"
+
+# Verify all keys are still accessible via HTTP after rebalance.
+# Each key lives on exactly one node; GET it from that node with ?local=1
+# (bypasses ring redirect so we test the actual file, not another redirect).
+echo "[test] verifying all keys accessible via HTTP after rebalance"
+for k in "${KEYS[@]}"; do
+    if [ -f "$DIRA/cache/testbucket/$k" ]; then
+        resp=$(curl -s "http://$ADDRA/testbucket/$k?local=1")
+    else
+        resp=$(curl -s "http://$ADDRB/testbucket/$k?local=1")
+    fi
+    echo "$resp" | grep -q "data_$k" \
+        || { echo "FAIL: $k not accessible after rebalance (got: $resp)"; exit 1; }
+done
+echo "[test] all 5 keys accessible after rebalance"

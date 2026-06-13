@@ -164,4 +164,43 @@ TEST_SUITE("KeyLock") {
     kl.release("cache/b/k1");
     kl.release("cache/b/k2");
   }
+
+  TEST_CASE("try_acquire succeeds when idle") {
+    KeyLock kl;
+    CHECK(kl.try_acquire("cache/b/k"));
+    kl.release("cache/b/k");
+  }
+
+  TEST_CASE("try_acquire fails immediately when in-flight") {
+    KeyLock kl;
+    REQUIRE(kl.try_acquire("cache/b/k"));
+    // key is now in-flight; second try must not block and must fail
+    CHECK_FALSE(kl.try_acquire("cache/b/k"));
+    kl.release("cache/b/k");
+  }
+
+  TEST_CASE("try_acquire succeeds again after release") {
+    KeyLock kl;
+    REQUIRE(kl.try_acquire("cache/b/k"));
+    kl.release("cache/b/k");
+    CHECK(kl.try_acquire("cache/b/k"));
+    kl.release("cache/b/k");
+  }
+
+  TEST_CASE("try_acquire does not block waiting acquire") {
+    KeyLock kl;
+    // acquire holds the key; a concurrent try_acquire must return false quickly
+    bool owner = kl.acquire("cache/b/k");
+    REQUIRE(owner);
+
+    std::atomic<bool> done{false};
+    std::thread t([&] {
+      bool r = kl.try_acquire("cache/b/k");
+      CHECK_FALSE(r);
+      done.store(true);
+    });
+    t.join();
+    CHECK(done.load()); // returned without waiting for release
+    kl.release("cache/b/k");
+  }
 }

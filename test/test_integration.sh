@@ -70,6 +70,17 @@ echo "$resp" | grep -q '"hint_pull"' || fail "_health missing hint_pull: $resp"
 http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/_health")
 [[ "$http_code" == "200" ]] || fail "_health status $http_code, want 200"
 
+# PUT a key then GET with ?local=1 (local hit — bypasses ring redirect)
+resp=$(curl -s -X PUT "http://127.0.0.1:$PORT/bucket/localkey" -d "localdata")
+check_fin "$resp"
+resp=$(curl -s "http://127.0.0.1:$PORT/bucket/localkey?local=1")
+check_fin "$resp"
+echo "$resp" | grep -q "localdata" || fail "?local=1 hit should return cached data, got: $resp"
+
+# GET with ?local=1 for absent key — must return ERR_NOT_CACHED (no S3 fetch)
+resp=$(curl -s "http://127.0.0.1:$PORT/bucket/nokey?local=1")
+echo "$resp" | grep -q "ERR_NOT_CACHED" || fail "?local=1 miss should return ERR_NOT_CACHED, got: $resp"
+
 # SIGTERM exits cleanly
 kill -TERM "$PID"
 wait "$PID"

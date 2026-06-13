@@ -7,3 +7,4 @@ test/*.o
 test/test_ring
 test/test_lru
 test/test_wire
+test/test_rebalance

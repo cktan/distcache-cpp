@@ -50,6 +50,17 @@ resp=$(curl -s "http://127.0.0.1:$PORT/bucket/path/to/obj")
 check_fin "$resp"
 echo "$resp" | grep -q "data" || fail "nested key GET failed"
 
+# GET /_health
+resp=$(curl -s "http://127.0.0.1:$PORT/_health")
+echo "$resp" | grep -q '"addr"' || fail "_health missing addr: $resp"
+echo "$resp" | grep -q '"lru_size"' || fail "_health missing lru_size: $resp"
+echo "$resp" | grep -q '"disk_pct"' || fail "_health missing disk_pct: $resp"
+echo "$resp" | grep -q '"peers"' || fail "_health missing peers: $resp"
+echo "$resp" | grep -q '"upsince"' || fail "_health missing upsince: $resp"
+echo "$resp" | grep -q '"upfor"' || fail "_health missing upfor: $resp"
+http_code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:$PORT/_health")
+[[ "$http_code" == "200" ]] || fail "_health status $http_code, want 200"
+
 # SIGTERM exits cleanly
 kill -TERM "$PID"
 wait "$PID"

@@ -17,6 +17,8 @@
 
 HttpServer g_http;
 
+static time_t g_start_time = 0;
+
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
 // Split "/bucket/key/with/slashes" into {bucket, key}.
@@ -175,6 +177,44 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
   send_raw(res, wire_data(data.data(), data.size()));
 }
 
+// ── GET /_health
+// ─────────────────────────────────────────────────────────────
+
+static void handle_health(const httplib::Request &, httplib::Response &res) {
+  auto peers = g_membership.alive_peers();
+  std::string peers_json = "[";
+  for (size_t i = 0; i < peers.size(); ++i) {
+    if (i)
+      peers_json += ',';
+    peers_json += '"' + peers[i] + '"';
+  }
+  peers_json += ']';
+
+  char upsince[32] = {};
+  struct tm tm_buf = {};
+  gmtime_r(&g_start_time, &tm_buf);
+  strftime(upsince, sizeof(upsince), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
+
+  long diff = static_cast<long>(time(nullptr) - g_start_time);
+  long d = diff / 86400;
+  long h = (diff % 86400) / 3600;
+  long m = (diff % 3600) / 60;
+  std::string upfor = std::to_string(d) + "d " + std::to_string(h) + "h " +
+                      std::to_string(m) + "m";
+
+  res.status = 200;
+  res.set_header("Content-Type", "application/json");
+  res.body = "{\"addr\":\"" + g_config.addr +
+             "\""
+             ",\"lru_size\":" +
+             std::to_string(g_lru.size()) +
+             ",\"disk_pct\":" + std::to_string(LRU::disk_usepct()) +
+             ",\"peers\":" + peers_json + ",\"upsince\":\"" + upsince +
+             "\""
+             ",\"upfor\":\"" +
+             upfor + "\"}";
+}
+
 // ── POST /_claim_keyspace
 // ─────────────────────────────────────────────────────
 
@@ -266,9 +306,11 @@ static void handle_delete(const httplib::Request &req, httplib::Response &res) {
 static httplib::Server *g_svr = nullptr;
 
 void HttpServer::start(const std::string &host, int port) {
+  g_start_time = time(nullptr);
   auto *svr = new httplib::Server();
   g_svr = svr;
 
+  svr->Get("/_health", handle_health);
   svr->Post("/_claim_keyspace", handle_claim_keyspace);
   svr->Post("/_hint_pull", handle_hint_pull);
   svr->Get(R"(/[^/]+/.+)", handle_get);

@@ -96,7 +96,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
     std::string dest = ring->successor(rp_id);
     if (!dest.empty() && dest != g_config.addr) {
       g_membership.hint_alive(dest);
-      g_feed.put(4, "cache.redirect", relpath.c_str(), "dest", dest.c_str());
+      g_feed.put("cache.redirect", relpath.c_str(), "dest", dest.c_str());
       // On-hit hint: if we hold the file locally, tell dest to pull it.
       if (cache_exists(abspath)) {
         auto peers = g_membership.alive_peers();
@@ -105,7 +105,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
         if (dest_alive) {
           time_t mt = g_lru.get_mtime(relpath);
           std::string mt_str = std::to_string(mt ? mt : time(nullptr));
-          g_jobq.put(4, "hint_pull", dest.c_str(), relpath.c_str(),
+          g_jobq.put("hint_pull", dest.c_str(), relpath.c_str(),
                      mt_str.c_str());
         }
       }
@@ -128,7 +128,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
     } else {
       g_lru.touch(relpath);
     }
-    g_feed.put(2, "cache.hit", relpath.c_str());
+    g_feed.put("cache.hit", relpath.c_str());
     g_stats.hits++;
     g_stats.served++;
     send_raw(res, wire_data(data.data(), data.size()));
@@ -143,7 +143,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
 
   // Cache miss on owned key: fetch from S3 via sidecar.
   g_stats.misses++;
-  g_feed.put(2, "cache.miss", relpath.c_str());
+  g_feed.put("cache.miss", relpath.c_str());
 
   bool is_owner = g_keylock.acquire(relpath);
   if (!is_owner) {
@@ -166,14 +166,14 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
 
   if (!ok) {
     g_stats.errors++;
-    g_feed.put(3, "s3copy.err", relpath.c_str(), "fetch failed");
+    g_feed.put("s3copy.err", relpath.c_str(), "fetch failed");
     send_raw(res, wire_err("s3copy failed"));
     return;
   }
 
-  g_feed.put(2, "s3copy.ok", relpath.c_str());
+  g_feed.put("s3copy.ok", relpath.c_str());
   g_lru.insert(relpath, time(nullptr), rp_id);
-  g_jobq.put(1, "evict");
+  g_jobq.put("evict");
 
   std::string data;
   if (!cache_read(abspath, data)) {
@@ -256,7 +256,7 @@ static void handle_claim_keyspace(const httplib::Request &req,
 
   // Offload inject + scan + enqueue to g_jobq worker.
   const char *fid = first_id_s.empty() ? "0" : first_id_s.c_str();
-  g_jobq.put(3, "claim_scan", addr.c_str(), fid);
+  g_jobq.put("claim_scan", addr.c_str(), fid);
   send_raw(res, wire_fin());
 }
 
@@ -276,7 +276,7 @@ static void handle_hint_pull(const httplib::Request &req,
 
   // Offload pull to g_jobq worker; return immediately.
   g_stats.hint_pull++;
-  g_jobq.put(4, "do_pull", src.c_str(), relpath.c_str(), mtime.c_str());
+  g_jobq.put("do_pull", src.c_str(), relpath.c_str(), mtime.c_str());
   send_raw(res, wire_fin());
 }
 
@@ -303,7 +303,7 @@ static void handle_put(const httplib::Request &req, httplib::Response &res) {
     return;
   }
   g_lru.insert(relpath, time(nullptr), rp_id);
-  g_jobq.put(1, "evict");
+  g_jobq.put("evict");
   send_raw(res, wire_fin());
 }
 

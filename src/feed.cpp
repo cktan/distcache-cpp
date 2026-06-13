@@ -1,5 +1,4 @@
 #include "feed.h"
-#include <cstdarg>
 #include <cstdio>
 #include <ctime>
 
@@ -49,37 +48,4 @@ void Feed::stop() {
   swim_feed_wakeall(feed_);
   if (thread_.joinable())
     thread_.join();
-}
-
-bool Feed::put(int n, ...) {
-  va_list ap;
-  va_start(ap, n);
-
-  // Collect args; swim_feed_put is variadic so we rebuild the call.
-  // Max 10 strings per SWIM_FEED_MAX_ELEMENTS.
-  const char *args[SWIM_FEED_MAX_ELEMENTS];
-  if (n < 1 || n > SWIM_FEED_MAX_ELEMENTS) {
-    va_end(ap);
-    return false;
-  }
-  for (int i = 0; i < n; i++)
-    args[i] = va_arg(ap, const char *);
-  va_end(ap);
-
-  // swim_feed_put is variadic; build the call for up to 10 args.
-  switch (n) {
-  case 1:
-    return swim_feed_put(feed_, 1, args[0]) == 0;
-  case 2:
-    return swim_feed_put(feed_, 2, args[0], args[1]) == 0;
-  case 3:
-    return swim_feed_put(feed_, 3, args[0], args[1], args[2]) == 0;
-  case 4:
-    return swim_feed_put(feed_, 4, args[0], args[1], args[2], args[3]) == 0;
-  case 5:
-    return swim_feed_put(feed_, 5, args[0], args[1], args[2], args[3],
-                         args[4]) == 0;
-  default:
-    return false;
-  }
 }

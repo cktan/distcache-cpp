@@ -13,6 +13,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
@@ -36,10 +37,7 @@ static bool mkdir_p(const std::string &path) {
 }
 
 static bool wipe_dir(const std::string &path) {
-  // Remove directory and recreate it.
-  std::string cmd = "rm -rf " + path;
-  if (system(cmd.c_str()) != 0)
-    return false;
+  std::filesystem::remove_all(path);
   return mkdir_p(path);
 }
 

@@ -102,8 +102,7 @@ void Rebalancer::start() {
       auto entries = g_rebalancer.scan_for_peer(addr);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
-        g_jobq.put(4, "hint_pull", addr.c_str(), relpath.c_str(),
-                   mt_str.c_str());
+        g_jobq.put("hint_pull", addr.c_str(), relpath.c_str(), mt_str.c_str());
       }
       return;
     }
@@ -261,7 +260,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
     if (mt == 0)
       mt = time(nullptr);
     g_lru.insert(relpath, mt, rp_id);
-    g_jobq.put(1, "evict");
-    g_feed.put(3, "rebalance.pull", relpath.c_str(), src_addr.c_str());
+    g_jobq.put("evict");
+    g_feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
   }
 }

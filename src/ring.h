@@ -47,5 +47,8 @@ private:
   size_t bisect_left(uint32_t target) const;
 };
 
-// Global ring, atomically swapped by the SWIM event consumer thread.
+// g_ring is written only by the SWIM event consumer thread (via
+// g_ring.store()) and read lock-free by all other threads (via
+// g_ring.load()). std::atomic<shared_ptr> provides acquire/release
+// semantics on load/store, so readers always see a consistent Ring.
 extern std::atomic<std::shared_ptr<Ring>> g_ring;

@@ -1,6 +1,7 @@
 #include "lru.h"
 #include "cache.h"
 #include "config.h"
+#include "keylock.h"
 #include "relpath.h"
 #include <cstdlib>
 #include <ctime>
@@ -8,9 +9,12 @@
 
 LRU g_lru;
 
-static constexpr int EVICT_MIN_AGE_S = 300; // 5 minutes
-static constexpr int LOW_THRESHOLD = 70;
-static constexpr int HIGH_THRESHOLD = 90;
+static constexpr int EVICT_MIN_AGE_S =
+    300; // don't evict files touched in the last 5 min
+static constexpr int LOW_THRESHOLD =
+    70; // below this disk%, skip eviction entirely
+static constexpr int HIGH_THRESHOLD =
+    90; // above this disk%, evict twice per PUT
 
 void LRU::insert(const std::string &relpath, time_t mtime,
                  uint32_t relpath_id) {
@@ -99,9 +103,25 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
     if (mtime > cutoff)
       break; // heap is sorted; remaining are newer
 
+    // Try to grab the key lock without blocking. If the key is in-flight
+    // (S3 fetch in progress), skip it and pick another candidate.
+    lk.unlock();
+    if (!g_keylock.try_acquire(relpath)) {
+      lk.lock();
+      continue;
+    }
+
+    // Re-validate: a concurrent PUT may have refreshed mtime.
+    lk.lock();
+    it = map_.find(relpath);
+    if (it == map_.end() || it->second.mtime != mtime) {
+      g_keylock.release(relpath);
+      continue;
+    }
     map_.erase(it);
     lk.unlock();
     del_cb(to_abs(g_config.homedir, relpath));
+    g_keylock.release(relpath);
     return true;
   }
   return false;

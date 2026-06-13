@@ -13,6 +13,11 @@ public:
   // Returns false if the caller was a waiter (file should now be present).
   bool acquire(const std::string &relpath);
 
+  // Non-blocking acquire. Returns true (lock granted) if the key is not
+  // currently in-flight. Returns false immediately if busy.
+  // Caller must call release() iff true is returned.
+  bool try_acquire(const std::string &relpath);
+
   // Release the lock; wake all waiters.
   void release(const std::string &relpath);
 

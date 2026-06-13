@@ -4,6 +4,7 @@
 #include <string>
 #include <swim.h>
 #include <thread>
+#include <utility>
 #include <vector>
 
 // Wraps swim_feed_t with a background consumer thread.
@@ -21,9 +22,11 @@ public:
   // Signal shutdown and join consumer thread.
   void stop();
 
-  // Emit a record. n must be 1..SWIM_FEED_MAX_ELEMENTS.
-  // Returns false on error.
-  bool put(int n, ...);
+  // Emit a record with 1..SWIM_FEED_MAX_ELEMENTS const char* args.
+  template <typename... Args> bool put(Args &&...args) {
+    return swim_feed_put(feed_, static_cast<int>(sizeof...(args)),
+                         std::forward<Args>(args)...) == 0;
+  }
 
   swim_feed_t *raw() { return feed_; }
 

@@ -192,11 +192,10 @@ static void handle_health(const httplib::Request &, httplib::Response &res) {
   auto peers = g_membership.alive_peers();
   std::string peers_json = "[";
   for (size_t i = 0; i < peers.size(); ++i) {
-    if (i)
-      peers_json += ',';
-    peers_json += '"' + peers[i] + '"';
+    peers_json +=
+        std::format("\"{}\"{}", peers[i], (i + 1 < peers.size() ? "," : ""));
   }
-  peers_json += ']';
+  peers_json += "]";
 
   char upsince[32] = {};
   struct tm tm_buf = {};
@@ -218,27 +217,12 @@ static void handle_health(const httplib::Request &, httplib::Response &res) {
 
   res.status = 200;
   res.set_header("Content-Type", "application/json");
-  res.body = "{\"addr\":\"" + g_config.addr +
-             "\""
-             ",\"upsince\":\"" +
-             upsince +
-             "\""
-             ",\"upfor\":\"" +
-             upfor +
-             "\""
-             ",\"nodes\":" +
-             std::to_string(nodes) +
-             ",\"lru_size\":" + std::to_string(g_lru.size()) +
-             ",\"disk_pct\":" + std::to_string(LRU::disk_usepct()) +
-             ",\"used_gib\":" + used_gib_buf +
-             ",\"df_error\":" + (LRU::disk_error() ? "true" : "false") +
-             ",\"hits\":" + std::to_string(g_stats.hits.load()) +
-             ",\"misses\":" + std::to_string(g_stats.misses.load()) +
-             ",\"served\":" + std::to_string(g_stats.served.load()) +
-             ",\"redirects\":" + std::to_string(g_stats.redirects.load()) +
-             ",\"errors\":" + std::to_string(g_stats.errors.load()) +
-             ",\"hint_pull\":" + std::to_string(g_stats.hint_pull.load()) +
-             ",\"peers\":" + peers_json + "}";
+  res.body = std::format(
+      R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
+      g_config.addr, upsince, upfor, nodes, g_lru.size(), LRU::disk_usepct(),
+      used_gib_buf, LRU::disk_error() ? "true" : "false", g_stats.hits.load(),
+      g_stats.misses.load(), g_stats.served.load(), g_stats.redirects.load(),
+      g_stats.errors.load(), g_stats.hint_pull.load(), peers_json);
 }
 
 // ── POST /_claim_keyspace

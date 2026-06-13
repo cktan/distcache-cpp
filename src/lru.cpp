@@ -19,7 +19,7 @@ static constexpr int HIGH_THRESHOLD =
 void LRU::insert(const std::string &relpath, time_t mtime,
                  uint32_t relpath_id) {
   std::lock_guard<std::mutex> lk(map_mtx_);
-  map_[relpath] = {mtime, relpath_id};
+  map_.insert_or_assign(relpath, LRUEntry{mtime, relpath_id});
 }
 
 void LRU::remove(const std::string &relpath) {

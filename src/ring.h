@@ -4,6 +4,7 @@
 #include <map>
 #include <memory>
 #include <string>
+#include <string_view>
 #include <vector>
 
 struct RingEntry {
@@ -34,7 +35,7 @@ public:
 
   // Compute 10 ring IDs for node_name.
   // first_id == 0 means derive id[0] from hash; non-zero overrides it.
-  static std::vector<uint32_t> compute_ids(const std::string &node_name,
+  static std::vector<uint32_t> compute_ids(std::string_view node_name,
                                            uint32_t first_id = 0);
 
   // relpath_id = ring_hash(0, relpath) — same formula as relpath_id in Elixir.

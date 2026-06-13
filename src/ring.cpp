@@ -1,8 +1,8 @@
 #include "ring.h"
 #include "fnv.h"
+#include <format>
 #include <set>
 #include <unordered_set>
-
 std::atomic<std::shared_ptr<Ring>> g_ring{std::make_shared<Ring>()};
 
 Ring::Ring(std::vector<RingEntry> entries) : entries_(std::move(entries)) {}
@@ -42,7 +42,7 @@ std::string Ring::next_after(const std::vector<std::string> &excluded,
   if (excluded.empty())
     return successor(target_id);
 
-  std::set<std::string> excl(excluded.begin(), excluded.end());
+  std::unordered_set<std::string> excl(excluded.begin(), excluded.end());
   size_t n = entries_.size();
   size_t start = bisect_left(target_id);
   if (start == n)
@@ -56,7 +56,7 @@ std::string Ring::next_after(const std::vector<std::string> &excluded,
   return "";
 }
 
-std::vector<uint32_t> Ring::compute_ids(const std::string &node_name,
+std::vector<uint32_t> Ring::compute_ids(std::string_view node_name,
                                         uint32_t first_id) {
   std::vector<uint32_t> ids;
   ids.reserve(10);
@@ -66,9 +66,9 @@ std::vector<uint32_t> Ring::compute_ids(const std::string &node_name,
     if (i == 0 && first_id != 0) {
       id = first_id;
     } else if (i == 0) {
-      id = ring_hash(0, node_name);
+      id = ring_hash(0, std::string(node_name));
     } else {
-      id = ring_hash(prev, node_name + ":" + std::to_string(prev));
+      id = ring_hash(prev, std::format("{}:{}", node_name, prev));
     }
     ids.push_back(id);
     prev = id;

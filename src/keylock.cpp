@@ -6,9 +6,8 @@ bool KeyLock::acquire(const std::string &relpath) {
   std::shared_ptr<Entry> e;
   {
     std::lock_guard<std::mutex> lk(map_mtx_);
-    auto &slot = map_[relpath];
-    if (!slot)
-      slot = std::make_shared<Entry>();
+    auto &slot =
+        map_.try_emplace(relpath, std::make_shared<Entry>()).first->second;
     e = slot;
     e->waiters++;
   }
@@ -32,9 +31,8 @@ bool KeyLock::acquire(const std::string &relpath) {
 
 bool KeyLock::try_acquire(const std::string &relpath) {
   std::lock_guard<std::mutex> lk(map_mtx_);
-  auto &slot = map_[relpath];
-  if (!slot)
-    slot = std::make_shared<Entry>();
+  auto &slot =
+      map_.try_emplace(relpath, std::make_shared<Entry>()).first->second;
   if (slot->in_flight)
     return false;
   slot->in_flight = true;

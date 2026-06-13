@@ -1,11 +1,11 @@
 #include "cache.h"
 #include "config.h"
 #include <atomic>
-#include <cerrno>
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
 #include <fcntl.h>
+#include <filesystem>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -15,19 +15,12 @@ bool cache_exists(const std::string &abspath) {
   return access(abspath.c_str(), R_OK) == 0;
 }
 
-// Create parent directories recursively (like mkdir -p).
-static bool mkdirs(const std::string &path) {
-  for (size_t i = 1; i < path.size(); i++) {
-    if (path[i] != '/')
-      continue;
-    std::string dir = path.substr(0, i);
-    if (mkdir(dir.c_str(), 0755) < 0 && errno != EEXIST)
-      return false;
-  }
-  return true;
+bool cache_mkdirs(const std::string &abspath) {
+  std::error_code ec;
+  std::filesystem::create_directories(
+      std::filesystem::path(abspath).parent_path(), ec);
+  return !ec;
 }
-
-bool cache_mkdirs(const std::string &abspath) { return mkdirs(abspath); }
 
 bool cache_write(const std::string &abspath, const char *data, size_t len) {
   std::string tmp = tmp_path();
@@ -53,7 +46,7 @@ bool cache_write(const std::string &abspath, const char *data, size_t len) {
     return false;
   }
 
-  if (!mkdirs(abspath)) {
+  if (!cache_mkdirs(abspath)) {
     unlink(tmp.c_str());
     return false;
   }

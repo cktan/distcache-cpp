@@ -37,9 +37,12 @@ format:
 test-rebalance: all
 	bash integration_rebalance.sh
 
+test-s3cluster: all
+	bash integration_s3cluster.sh
+
 clean:
 	rm -f $(TESTBINS) *.d
 
 distclean: clean
 
-.PHONY: all test format test-rebalance clean distclean
+.PHONY: all test format test-rebalance test-s3cluster clean distclean

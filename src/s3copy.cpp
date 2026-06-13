@@ -69,7 +69,8 @@ bool s3copy_fetch(const std::string &bucket, const std::string &key,
     remove(tmp.c_str());
     return false;
   }
-  if (rename(tmp.c_str(), dest_abspath.c_str()) != 0) {
+  if (!cache_mkdirs(dest_abspath) ||
+      rename(tmp.c_str(), dest_abspath.c_str()) != 0) {
     remove(tmp.c_str());
     return false;
   }

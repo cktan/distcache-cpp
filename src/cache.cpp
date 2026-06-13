@@ -27,6 +27,8 @@ static bool mkdirs(const std::string &path) {
   return true;
 }
 
+bool cache_mkdirs(const std::string &abspath) { return mkdirs(abspath); }
+
 bool cache_write(const std::string &abspath, const char *data, size_t len) {
   std::string tmp = tmp_path();
 

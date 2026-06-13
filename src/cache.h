@@ -19,6 +19,9 @@ bool cache_del(const std::string &abspath);
 // Generate a unique tmp path under g_config.homedir/tmp/.
 std::string tmp_path();
 
+// Create parent directories of abspath (like mkdir -p on the dirname).
+bool cache_mkdirs(const std::string &abspath);
+
 // Walk cache/ subtree calling cb(relpath, mtime) for each file.
 // Uses 1024-file batches internally; cb is called for every file found.
 void scan_cache(

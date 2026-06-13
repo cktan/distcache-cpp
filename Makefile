@@ -26,5 +26,11 @@ $(CLEANDIRS):
 $(FORMATDIRS):
 	$(MAKE) -C $(@:format-%=%) format
 
+test-rebalance:
+	$(MAKE) -C test test-rebalance
+
+test-s3cluster:
+	$(MAKE) -C test test-s3cluster
+
 .PHONY: $(BUILDDIRS) $(CLEANDIRS) $(TESTDIRS) $(FORMATDIRS)
-.PHONY: all test format clean
+.PHONY: all test format clean test-rebalance test-s3cluster

@@ -1,10 +1,18 @@
 #include "ring.h"
 #include "fnv.h"
 #include <set>
+#include <unordered_set>
 
 std::atomic<std::shared_ptr<Ring>> g_ring{std::make_shared<Ring>()};
 
 Ring::Ring(std::vector<RingEntry> entries) : entries_(std::move(entries)) {}
+
+size_t Ring::node_count() const {
+  std::unordered_set<std::string> seen;
+  for (const auto &e : entries_)
+    seen.insert(e.node);
+  return seen.size();
+}
 
 size_t Ring::bisect_left(uint32_t target) const {
   size_t lo = 0, hi = entries_.size();

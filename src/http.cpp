@@ -10,6 +10,7 @@
 #include "relpath.h"
 #include "ring.h"
 #include "s3copy.h"
+#include "stats.h"
 #include "wire.h"
 #include <algorithm>
 #include <ctime>
@@ -108,6 +109,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
                      mt_str.c_str());
         }
       }
+      g_stats.redirects++;
       send_raw(res, wire_redirect(dest));
       return;
     }
@@ -127,6 +129,8 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
       g_lru.touch(relpath);
     }
     g_feed.put(2, "cache.hit", relpath.c_str());
+    g_stats.hits++;
+    g_stats.served++;
     send_raw(res, wire_data(data.data(), data.size()));
     return;
   }
@@ -138,6 +142,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
   }
 
   // Cache miss on owned key: fetch from S3 via sidecar.
+  g_stats.misses++;
   g_feed.put(2, "cache.miss", relpath.c_str());
 
   bool is_owner = g_keylock.acquire(relpath);
@@ -160,6 +165,7 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
   g_keylock.release(relpath);
 
   if (!ok) {
+    g_stats.errors++;
     g_feed.put(3, "s3copy.err", relpath.c_str(), "fetch failed");
     send_raw(res, wire_err("s3copy failed"));
     return;
@@ -171,9 +177,11 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
 
   std::string data;
   if (!cache_read(abspath, data)) {
+    g_stats.errors++;
     send_raw(res, wire_err("read after fetch failed"));
     return;
   }
+  g_stats.served++;
   send_raw(res, wire_data(data.data(), data.size()));
 }
 
@@ -202,17 +210,35 @@ static void handle_health(const httplib::Request &, httplib::Response &res) {
   std::string upfor = std::to_string(d) + "d " + std::to_string(h) + "h " +
                       std::to_string(m) + "m";
 
+  auto ring = g_ring.load();
+  size_t nodes = ring->node_count();
+
+  char used_gib_buf[32];
+  snprintf(used_gib_buf, sizeof(used_gib_buf), "%.2f", LRU::disk_used_gib());
+
   res.status = 200;
   res.set_header("Content-Type", "application/json");
   res.body = "{\"addr\":\"" + g_config.addr +
              "\""
-             ",\"lru_size\":" +
-             std::to_string(g_lru.size()) +
-             ",\"disk_pct\":" + std::to_string(LRU::disk_usepct()) +
-             ",\"peers\":" + peers_json + ",\"upsince\":\"" + upsince +
+             ",\"upsince\":\"" +
+             upsince +
              "\""
              ",\"upfor\":\"" +
-             upfor + "\"}";
+             upfor +
+             "\""
+             ",\"nodes\":" +
+             std::to_string(nodes) +
+             ",\"lru_size\":" + std::to_string(g_lru.size()) +
+             ",\"disk_pct\":" + std::to_string(LRU::disk_usepct()) +
+             ",\"used_gib\":" + used_gib_buf +
+             ",\"df_error\":" + (LRU::disk_error() ? "true" : "false") +
+             ",\"hits\":" + std::to_string(g_stats.hits.load()) +
+             ",\"misses\":" + std::to_string(g_stats.misses.load()) +
+             ",\"served\":" + std::to_string(g_stats.served.load()) +
+             ",\"redirects\":" + std::to_string(g_stats.redirects.load()) +
+             ",\"errors\":" + std::to_string(g_stats.errors.load()) +
+             ",\"hint_pull\":" + std::to_string(g_stats.hint_pull.load()) +
+             ",\"peers\":" + peers_json + "}";
 }
 
 // ── POST /_claim_keyspace
@@ -249,6 +275,7 @@ static void handle_hint_pull(const httplib::Request &req,
   }
 
   // Offload pull to g_jobq worker; return immediately.
+  g_stats.hint_pull++;
   g_jobq.put(4, "do_pull", src.c_str(), relpath.c_str(), mtime.c_str());
   send_raw(res, wire_fin());
 }

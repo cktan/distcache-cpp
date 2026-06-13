@@ -42,6 +42,8 @@ public:
 
   // Disk usage percentage via statvfs on g_config.homedir.
   static int disk_usepct();
+  static double disk_used_gib();
+  static bool disk_error();
 
 private:
   std::mutex map_mtx_;

@@ -25,6 +25,7 @@ public:
 
   size_t size() const { return entries_.size(); }
   bool empty() const { return entries_.empty(); }
+  size_t node_count() const;
 
   // Build ring from membership map {node -> [ids]}.
   // Collision resolution: lexicographically smaller node name wins.

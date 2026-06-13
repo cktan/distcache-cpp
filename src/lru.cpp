@@ -52,6 +52,19 @@ int LRU::disk_usepct() {
   return static_cast<int>(100 * (st.f_blocks - st.f_bavail) / st.f_blocks);
 }
 
+double LRU::disk_used_gib() {
+  struct statvfs st;
+  if (statvfs(g_config.homedir.c_str(), &st) < 0)
+    return 0.0;
+  return static_cast<double>(st.f_blocks - st.f_bavail) * st.f_frsize /
+         (1024.0 * 1024.0 * 1024.0);
+}
+
+bool LRU::disk_error() {
+  struct statvfs st;
+  return statvfs(g_config.homedir.c_str(), &st) < 0;
+}
+
 void LRU::rebuild_cold_list_locked() {
   // Clear and rebuild from map, filtering to entries older than
   // EVICT_MIN_AGE_S.

@@ -5,7 +5,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-static bool try_acquire(const std::string &path) {
+static bool try_acquire(const std::string &path, bool can_retry = true) {
   int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
   if (fd >= 0) {
     char buf[32];
@@ -36,8 +36,9 @@ static bool try_acquire(const std::string &path) {
     return false;
 
   // Stale lock — remove and retry once.
-  unlink(path.c_str());
-  return try_acquire(path);
+  if (!can_retry || unlink(path.c_str()) != 0)
+    return false;
+  return try_acquire(path, false);
 }
 
 bool pidlock_acquire(const std::string &path) { return try_acquire(path); }

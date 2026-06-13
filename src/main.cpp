@@ -177,8 +177,8 @@ int main(int argc, char **argv) {
   g_http.start(host, port);
 
   // ── Shutdown sequence ─────────────────────────────────────────────────────
+  g_feed.stop(); // join consumer thread before SWIM teardown
   g_membership.leave();
-  g_feed.stop();
   g_rebalancer.stop();
   pidlock_release(lockpath);
 

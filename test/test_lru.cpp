@@ -98,50 +98,46 @@ TEST_SUITE("LRU") {
   }
 }
 
-TEST_SUITE("KeyLock") {
-  TEST_CASE("first acquirer is owner") {
-    KeyLock kl;
-    bool owner = kl.acquire("cache/b/k");
-    CHECK(owner);
+TEST_SUITE("keylock_t") {
+  TEST_CASE("acquire and release") {
+    keylock_t kl;
+    kl.acquire("cache/b/k");
     kl.release("cache/b/k");
   }
 
-  TEST_CASE("second acquirer waits and returns false") {
-    KeyLock kl;
-    std::atomic<bool> owner_done{false};
-    std::atomic<bool> waiter_result{true};
+  TEST_CASE("second acquirer blocks until release") {
+    keylock_t kl;
+    std::atomic<bool> waiter_ran{false};
 
-    bool owner = kl.acquire("cache/b/k");
-    REQUIRE(owner);
+    kl.acquire("cache/b/k");
 
     std::thread waiter([&] {
-      bool r = kl.acquire("cache/b/k");
-      waiter_result.store(r);
+      kl.acquire("cache/b/k");
+      waiter_ran.store(true);
+      kl.release("cache/b/k");
     });
 
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    CHECK_FALSE(owner_done.load());
+    CHECK_FALSE(waiter_ran.load());
 
     kl.release("cache/b/k");
     waiter.join();
-
-    CHECK_FALSE(waiter_result.load());
+    CHECK(waiter_ran.load());
   }
 
-  TEST_CASE("multiple waiters all wake on release") {
-    KeyLock kl;
+  TEST_CASE("multiple waiters all proceed after release") {
+    keylock_t kl;
     constexpr int N = 4;
 
-    bool owner = kl.acquire("cache/b/k");
-    REQUIRE(owner);
+    kl.acquire("cache/b/k");
 
-    std::atomic<int> waiter_count{0};
+    std::atomic<int> done_count{0};
     std::vector<std::thread> threads;
     for (int i = 0; i < N; i++) {
       threads.emplace_back([&] {
-        bool r = kl.acquire("cache/b/k");
-        CHECK_FALSE(r);
-        waiter_count.fetch_add(1);
+        kl.acquire("cache/b/k");
+        done_count.fetch_add(1);
+        kl.release("cache/b/k");
       });
     }
 
@@ -150,44 +146,41 @@ TEST_SUITE("KeyLock") {
 
     for (auto &t : threads)
       t.join();
-    CHECK(waiter_count.load() == N);
+    CHECK(done_count.load() == N);
   }
 
   TEST_CASE("different keys do not interfere") {
-    KeyLock kl;
-    bool o1 = kl.acquire("cache/b/k1");
-    bool o2 = kl.acquire("cache/b/k2");
-    CHECK(o1);
-    CHECK(o2);
+    keylock_t kl;
+    kl.acquire("cache/b/k1");
+    kl.acquire("cache/b/k2");
     kl.release("cache/b/k1");
     kl.release("cache/b/k2");
   }
 
   TEST_CASE("try_acquire succeeds when idle") {
-    KeyLock kl;
+    keylock_t kl;
     CHECK(kl.try_acquire("cache/b/k"));
     kl.release("cache/b/k");
   }
 
-  TEST_CASE("try_acquire fails immediately when in-flight") {
-    KeyLock kl;
+  TEST_CASE("try_acquire fails immediately when locked") {
+    keylock_t kl;
     REQUIRE(kl.try_acquire("cache/b/k"));
     CHECK_FALSE(kl.try_acquire("cache/b/k"));
     kl.release("cache/b/k");
   }
 
   TEST_CASE("try_acquire succeeds again after release") {
-    KeyLock kl;
+    keylock_t kl;
     REQUIRE(kl.try_acquire("cache/b/k"));
     kl.release("cache/b/k");
     CHECK(kl.try_acquire("cache/b/k"));
     kl.release("cache/b/k");
   }
 
-  TEST_CASE("try_acquire does not block waiting acquire") {
-    KeyLock kl;
-    bool owner = kl.acquire("cache/b/k");
-    REQUIRE(owner);
+  TEST_CASE("try_acquire does not block") {
+    keylock_t kl;
+    kl.acquire("cache/b/k");
 
     std::atomic<bool> done{false};
     std::thread t([&] {

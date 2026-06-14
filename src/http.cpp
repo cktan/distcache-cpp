@@ -7,6 +7,8 @@
 #include <ctime>
 #include <functional>
 #include <httplib.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 HttpServer::HttpServer(Node &n) : node_(n) {}
 
@@ -25,6 +27,15 @@ static bool split_path(const std::string &path, std::string &bucket,
   bucket = path.substr(1, second - 1);
   key = path.substr(second + 1);
   return !bucket.empty() && !key.empty();
+}
+
+static bool read_fd(fd_t &fd, std::string &data) {
+  struct stat st;
+  if (fstat(fd.fd, &st) < 0)
+    return false;
+  data.resize(st.st_size);
+  ssize_t n = ::read(fd.fd, data.data(), st.st_size);
+  return n == (ssize_t)st.st_size;
 }
 
 static void send_raw(httplib::Response &res, std::string body) {
@@ -127,15 +138,21 @@ static void handle_get(Node &node, const httplib::Request &req,
   node.stats.misses++;
   node.feed.put("cache.miss", relpath.c_str());
 
-  bool is_owner = node.keylock.acquire(relpath);
-  if (!is_owner) {
+  node.keylock.acquire(relpath);
+
+  // Another thread may have fetched while we waited. Open under lock so the
+  // fd keeps the inode alive, then release before reading content.
+  fd_t fd;
+  if (node.cache.read(relpath, fd).ok()) {
+    node.keylock.release(relpath);
     std::string data;
-    if (node.cache.read(relpath, data).ok()) {
-      node.lru.touch(relpath);
-      send_raw(res, wire_data(data.data(), data.size()));
+    if (!read_fd(fd, data)) {
+      send_raw(res, wire_err("fetch failed"));
       return;
     }
-    send_raw(res, wire_err("fetch failed"));
+    node.lru.touch(relpath);
+    node.stats.served++;
+    send_raw(res, wire_data(data.data(), data.size()));
     return;
   }
 

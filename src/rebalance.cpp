@@ -161,15 +161,12 @@ void Rebalancer::pull_one(const std::string &src_addr,
   if (node_.cache.exists(relpath))
     return;
 
-  bool is_owner = node_.keylock.acquire(relpath);
+  node_.keylock.acquire(relpath);
 
   if (node_.cache.exists(relpath)) {
-    if (is_owner)
-      node_.keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
-  if (!is_owner)
-    return;
 
   std::string host;
   int port;

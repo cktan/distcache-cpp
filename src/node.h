@@ -17,7 +17,7 @@ struct Node {
   cache_t cache;
   Stats stats;
   std::atomic<std::shared_ptr<Ring>> ring{std::make_shared<Ring>()};
-  KeyLock keylock;
+  keylock_t keylock;
   feed_t feed;
   feed_t jobq;
   LRU lru;

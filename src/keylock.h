@@ -5,28 +5,28 @@
 #include <string>
 #include <unordered_map>
 
-// Per-key serialization: first caller downloads, subsequent callers wait.
-class KeyLock {
+// Per-key serialization: first caller fetches, subsequent callers wait.
+// Implements classic exclusive-lock semantics.
+class keylock_t {
 public:
-  // Acquire the lock for relpath.
-  // Returns true if the caller is the owner (must call release when done).
-  // Returns false if the caller was a waiter (file should now be present).
-  bool acquire(const std::string &relpath);
+  // Block until the lock for relpath is acquired.
+  // Caller must call release() when done.
+  void acquire(const std::string &relpath);
 
-  // Non-blocking acquire. Returns true (lock granted) if the key is not
-  // currently in-flight. Returns false immediately if busy.
+  // Non-blocking acquire. Returns true (lock granted) if not currently locked.
+  // Returns false immediately if busy.
   // Caller must call release() iff true is returned.
   bool try_acquire(const std::string &relpath);
 
-  // Release the lock; wake all waiters.
+  // Release the lock; wake one waiter.
   void release(const std::string &relpath);
 
 private:
   struct Entry {
     std::mutex mtx;
     std::condition_variable cv;
-    bool in_flight = false;
-    int waiters = 0;
+    bool locked = false;
+    int refs = 0;
   };
 
   std::mutex map_mtx_;

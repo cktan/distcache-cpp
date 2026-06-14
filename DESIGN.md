@@ -176,6 +176,15 @@ segments, and trailing slashes.
    are on the same filesystem.
 4. `tmp/` is wiped at every startup — no orphan scan needed.
 
+### Direct/Streaming writes
+
+For endpoints that receive data incrementally (such as HTTP
+`PUT` and inter-node rebalance pulls), data is streamed
+directly to the final cache path using `cache_t::write(relpath,`
+`fd)` with `O_CREAT|O_EXCL`. If the write fails or the connection
+is aborted mid-stream, the node deletes the incomplete file using
+`cache_t::drop(relpath)`.
+
 ---
 
 ## SWIM membership and failure detection
@@ -234,6 +243,12 @@ cpp-httplib thread-per-request server. Routes:
 Route handlers are static free functions that take `Node&`
 as their first argument. `HttpServer::start()` registers
 them via lambdas that capture `node_` by reference.
+
+The `PUT` handler utilizes cpp-httplib's `ContentReader`
+streaming interface to write incoming body chunks
+directly to the destination cache file descriptor as they
+arrive, avoiding buffering the entire request payload
+in memory.
 
 ### GET handler — four cases
 
@@ -372,9 +387,11 @@ The receiving node (new owner) calls `Rebalancer::pull_one`:
 1. Fast check: skip if `cache_exists`.
 2. Acquire `KeyLock` (prevents duplicate pulls).
 3. Re-check `cache_exists` after acquire.
-4. `GET http://src/bucket/key?local=1&delete=1`.
-5. Parse wire envelope (`DATA:N\n<bytes>FIN:0\n`).
-6. `cache_write` + LRU insert + eviction check.
+4. `GET http://src/bucket/key?local=1&delete=1` using a
+   streaming GET client receiver.
+5. Parse the `DATA:N\n` envelope header on the fly.
+6. Write payload chunks directly into the cache
+   file descriptor (deleting file on failure).
 7. Release `KeyLock`.
 
 `?delete=1` tells the source to delete its copy after

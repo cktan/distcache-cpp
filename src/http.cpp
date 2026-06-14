@@ -111,12 +111,15 @@ static void handle_get(Node &node, const httplib::Request &req,
     }
   }
 
+  // If cache-hit ...
   if (node.cache.exists(relpath)) {
     fd_t fd;
     if (!node.cache.read(relpath, fd).ok()) {
       send_raw(res, wire_err("read error"));
       return;
     }
+    // TODO: this should stream the data.
+    // call meta_data(), stream some, meta_data(), stream some, ..., meta_fin().
     std::string data;
     if (!read_fd(fd, data)) {
       send_raw(res, wire_err("read error"));

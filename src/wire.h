@@ -2,6 +2,18 @@
 #include <cstddef>
 #include <string>
 
+static inline std::string meta_data(int n) {
+  return "DATA:" + std::to_string(n) + "\n";
+}
+
+static inline std::string meta_info(int n) {
+  return "INFO:" + std::to_string(n) + "\n";
+}
+
+static inline std::string meta_fin() {
+  return "FIN:0\n";
+}
+
 // Encode a DATA frame: "DATA:<n>\n<bytes>FIN:0\n"
 std::string wire_data(const char *buf, size_t n);
 

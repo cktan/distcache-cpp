@@ -9,9 +9,9 @@ class relpath_t {
   std::string val_;
 
 public:
-  relpath_t() = default;
   relpath_t(std::string val) : val_(std::move(val)) {
     assert(val_.starts_with("cache/") || val_.starts_with("tmp/"));
+    assert(!val_.starts_with("cache/tmp/"));
   }
 
   const std::string &str() const { return val_; }

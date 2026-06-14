@@ -182,7 +182,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
   std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
   struct StreamState {
     std::string header_buf;
-    enum Phase { HEADER, DATA } phase = HEADER;
+    enum Phase { HEADER, DATA, SKIP } phase = HEADER;
     size_t seg_remaining = 0;
     bool fd_opened = false;
     bool is_fin = false;
@@ -221,6 +221,21 @@ void Rebalancer::pull_one(const std::string &src_addr,
             state.fd_opened = true;
           }
           state.phase = StreamState::DATA;
+        } else if (hv.compare(0, 6, "ERROR:") == 0) {
+          state.ok = false;
+          try {
+            state.seg_remaining = std::stoull(std::string(hv.substr(6)));
+          } catch (...) {
+            state.seg_remaining = 0;
+          }
+          state.phase = StreamState::SKIP;
+        } else if (hv.compare(0, 5, "INFO:") == 0) {
+          try {
+            state.seg_remaining = std::stoull(std::string(hv.substr(5)));
+          } catch (...) {
+            state.seg_remaining = 0;
+          }
+          state.phase = StreamState::SKIP;
         } else if (hv.compare(0, 5, "FIN:0") == 0) {
           state.is_fin = true;
           return true;
@@ -229,7 +244,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
           return false;
         }
         state.header_buf.clear();
-      } else {
+      } else if (state.phase == StreamState::DATA) {
         size_t avail = data_length - offset;
         size_t to_write = std::min(avail, state.seg_remaining);
         size_t written = 0;
@@ -244,6 +259,12 @@ void Rebalancer::pull_one(const std::string &src_addr,
         }
         state.seg_remaining -= to_write;
         offset += to_write;
+        if (state.seg_remaining == 0)
+          state.phase = StreamState::HEADER;
+      } else {
+        size_t to_skip = std::min(data_length - offset, state.seg_remaining);
+        state.seg_remaining -= to_skip;
+        offset += to_skip;
         if (state.seg_remaining == 0)
           state.phase = StreamState::HEADER;
       }

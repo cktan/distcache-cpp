@@ -119,7 +119,7 @@ static void handle_get(Node &node, const httplib::Request &req,
     }
     if (delete_after) {
       node.cache.drop(relpath);
-      node.lru.remove(relpath);
+      node.lru.drop(relpath);
     } else {
       node.lru.touch(relpath);
     }
@@ -176,7 +176,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   }
 
   node.feed.put("s3copy.ok", relpath.c_str());
-  node.lru.insert(relpath, time(nullptr), rp_id);
+  node.lru.put(relpath, time(nullptr), rp_id);
   node.jobq.put("evict");
 
   std::string data;
@@ -280,7 +280,7 @@ static void handle_put(Node &node, const httplib::Request &req,
     send_raw(res, wire_err("write failed"));
     return;
   }
-  node.lru.insert(relpath, time(nullptr), rp_id);
+  node.lru.put(relpath, time(nullptr), rp_id);
   node.jobq.put("evict");
   send_raw(res, wire_fin());
 }
@@ -299,7 +299,7 @@ static void handle_delete(Node &node, const httplib::Request &req,
   }
   const std::string &relpath = *relpath_opt;
   node.cache.drop(relpath);
-  node.lru.remove(relpath);
+  node.lru.drop(relpath);
   send_raw(res, wire_fin());
 }
 

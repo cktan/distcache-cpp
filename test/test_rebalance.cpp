@@ -13,9 +13,9 @@
 TEST_CASE("lru scan returns inserted entries") {
   Node node;
   LRU lru(node);
-  lru.insert("cache/b/k1", 1000, 1);
-  lru.insert("cache/b/k2", 2000, 2);
-  lru.insert("cache/b/k3", 3000, 3);
+  lru.put("cache/b/k1", 1000, 1);
+  lru.put("cache/b/k2", 2000, 2);
+  lru.put("cache/b/k3", 3000, 3);
 
   std::vector<std::tuple<std::string, time_t, uint32_t>> got;
   lru.scan([&](const std::string &rp, time_t mt, uint32_t id) {
@@ -28,9 +28,9 @@ TEST_CASE("lru scan returns inserted entries") {
 TEST_CASE("lru scan sees remove") {
   Node node;
   LRU lru(node);
-  lru.insert("cache/b/k1", 1000, 1);
-  lru.insert("cache/b/k2", 2000, 2);
-  lru.remove("cache/b/k1");
+  lru.put("cache/b/k1", 1000, 1);
+  lru.put("cache/b/k2", 2000, 2);
+  lru.drop("cache/b/k1");
 
   int count = 0;
   lru.scan([&](const std::string &, time_t, uint32_t) { count++; });
@@ -40,7 +40,7 @@ TEST_CASE("lru scan sees remove") {
 TEST_CASE("lru get_mtime") {
   Node node;
   LRU lru(node);
-  lru.insert("cache/b/k1", 12345, 1);
+  lru.put("cache/b/k1", 12345, 1);
   CHECK(lru.get_mtime("cache/b/k1") == 12345);
   CHECK(lru.get_mtime("cache/b/missing") == 0);
 }
@@ -48,7 +48,7 @@ TEST_CASE("lru get_mtime") {
 TEST_CASE("lru get_mtime updates after touch") {
   Node node;
   LRU lru(node);
-  lru.insert("cache/b/k1", 1000, 1);
+  lru.put("cache/b/k1", 1000, 1);
   lru.touch("cache/b/k1");
   CHECK(lru.get_mtime("cache/b/k1") > 1000);
 }
@@ -94,7 +94,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
     std::string rp = "cache/bucket/key" + std::to_string(i);
     uint32_t rp_id = Ring::compute_relpath_id(rp);
     std::string owner = ring->successor(rp_id);
-    node.lru.insert(rp, now - i * 3600, rp_id);
+    node.lru.put(rp, now - i * 3600, rp_id);
     if (owner == node_b)
       b_relpaths.push_back(rp);
   }
@@ -126,7 +126,7 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
     uint32_t rp_id = Ring::compute_relpath_id(rp);
     if (ring->successor(rp_id) == node_b) {
       old_rp = rp;
-      node.lru.insert(rp, now - 6 * 86400, rp_id);
+      node.lru.put(rp, now - 6 * 86400, rp_id);
       break;
     }
   }
@@ -151,7 +151,7 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
   for (int i = 0; i < 200; i++) {
     std::string rp = "cache/big/key" + std::to_string(i);
     uint32_t rp_id = Ring::compute_relpath_id(rp);
-    node.lru.insert(rp, now - i, rp_id);
+    node.lru.put(rp, now - i, rp_id);
   }
 
   auto result = node.rebalancer.scan_for_peer(node_b);

@@ -11,13 +11,12 @@ static constexpr int HIGH_THRESHOLD = 90;
 
 LRU::LRU(Node &n) : node_(n) {}
 
-void LRU::insert(const std::string &relpath, time_t mtime,
-                 uint32_t relpath_id) {
+void LRU::put(const std::string &relpath, time_t mtime, uint32_t relpath_id) {
   std::lock_guard<std::mutex> lk(map_mtx_);
   map_.insert_or_assign(relpath, LRUEntry{mtime, relpath_id});
 }
 
-void LRU::remove(const std::string &relpath) {
+void LRU::drop(const std::string &relpath) {
   std::lock_guard<std::mutex> lk(map_mtx_);
   map_.erase(relpath);
 }
@@ -29,9 +28,8 @@ void LRU::touch(const std::string &relpath) {
     it->second.mtime = time(nullptr);
 }
 
-void LRU::scan_insert(
-    const std::vector<std::pair<std::string, time_t>> &batch,
-    const std::function<uint32_t(const std::string &)> &id_fn) {
+void LRU::batch_put(const std::vector<std::pair<std::string, time_t>> &batch,
+                    const std::function<uint32_t(const std::string &)> &id_fn) {
   std::lock_guard<std::mutex> lk(map_mtx_);
   for (const auto &[relpath, mtime] : batch)
     map_[relpath] = {mtime, id_fn(relpath)};

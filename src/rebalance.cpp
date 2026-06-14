@@ -209,9 +209,24 @@ void Rebalancer::pull_one(const std::string &src_addr,
     return;
   }
 
-  bool ok = cache_write(node_.cache.abspath(relpath),
-                        std::string_view{body.data() + data_off, data_len},
-                        node_.config.homedir);
+  fd_t fd;
+  bool ok = node_.cache.write(relpath, fd).ok();
+  if (ok) {
+    std::string_view data{body.data() + data_off, data_len};
+    size_t written = 0;
+    while (written < data.size()) {
+      ssize_t n = ::write(fd.fd, data.data() + written, data.size() - written);
+      if (n < 0) {
+        ok = false;
+        break;
+      }
+      written += n;
+    }
+    fd.close();
+    if (!ok) {
+      node_.cache.drop(relpath);
+    }
+  }
   node_.keylock.release(relpath);
 
   if (ok) {

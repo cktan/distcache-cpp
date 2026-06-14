@@ -19,43 +19,6 @@ bool cache_mkdirs(const std::string &abspath) {
   return !ec;
 }
 
-bool cache_write(const std::string &abspath, std::string_view data,
-                 const std::string &homedir) {
-  std::string tmp = tmp_path(homedir);
-
-  // 0600: cache files are private to the distcache process.
-  int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-  if (fd < 0)
-    return false;
-
-  bool ok = true;
-  size_t written = 0;
-  while (written < data.size()) {
-    ssize_t n = write(fd, data.data() + written, data.size() - written);
-    if (n < 0) {
-      ok = false;
-      break;
-    }
-    written += n;
-  }
-  close(fd);
-
-  if (!ok) {
-    unlink(tmp.c_str());
-    return false;
-  }
-
-  if (!cache_mkdirs(abspath)) {
-    unlink(tmp.c_str());
-    return false;
-  }
-  if (rename(tmp.c_str(), abspath.c_str()) < 0) {
-    unlink(tmp.c_str());
-    return false;
-  }
-  return true;
-}
-
 bool cache_read(const std::string &abspath, std::string &data) {
   FILE *f = fopen(abspath.c_str(), "rb");
   if (!f)
@@ -147,7 +110,11 @@ rc_t cache_t::read(const std::string &relpath, fd_t &out) {
 }
 
 rc_t cache_t::write(const std::string &relpath, fd_t &out) {
-  int fd = ::open(abspath(relpath).c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+  std::string abs = abspath(relpath);
+  if (!cache_mkdirs(abs)) {
+    return rc_t::err(rc_errcode_t::io, "mkdirs failed");
+  }
+  int fd = ::open(abs.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);

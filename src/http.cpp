@@ -166,11 +166,8 @@ static void handle_get(Node &node, const httplib::Request &req,
   rc_t rc = s3copy_fetch(bucket, key, tmp_abs);
   if (rc.ok()) {
     rc = node.cache.move(tmp_rel, relpath);
-    if (!rc.ok())
-      remove(tmp_abs.c_str());
-  } else {
-    remove(tmp_abs.c_str());
   }
+  remove(tmp_abs.c_str()); // TODO: queue this to g_jobq
   node.keylock.release(relpath);
 
   if (!rc.ok()) {
@@ -268,7 +265,8 @@ static void handle_hint_pull(Node &node, const httplib::Request &req,
 }
 
 static void handle_put(Node &node, const httplib::Request &req,
-                       httplib::Response &res) {
+                       httplib::Response &res,
+                       const httplib::ContentReader &content_reader) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err("invalid path"));
@@ -281,8 +279,29 @@ static void handle_put(Node &node, const httplib::Request &req,
   }
   const std::string &relpath = *relpath_opt;
 
-  if (!cache_write(node.cache.abspath(relpath), req.body,
-                   node.config.homedir)) {
+  fd_t fd;
+  if (!node.cache.write(relpath, fd).ok()) {
+    send_raw(res, wire_err("write failed"));
+    return;
+  }
+
+  bool ok = true;
+  bool read_success = content_reader([&](const char *data, size_t data_length) {
+    size_t written = 0;
+    while (written < data_length) {
+      ssize_t n = ::write(fd.fd, data + written, data_length - written);
+      if (n < 0) {
+        ok = false;
+        return false;
+      }
+      written += n;
+    }
+    return true;
+  });
+  fd.close();
+
+  if (!ok || !read_success) {
+    node.cache.drop(relpath);
     send_raw(res, wire_err("write failed"));
     return;
   }
@@ -334,8 +353,9 @@ void HttpServer::start(const std::string &host, int port) {
              handle_get(node_, req, res);
            });
   svr->Put(R"(/[^/]+/.+)",
-           [this](const httplib::Request &req, httplib::Response &res) {
-             handle_put(node_, req, res);
+           [this](const httplib::Request &req, httplib::Response &res,
+                  const httplib::ContentReader &content_reader) {
+             handle_put(node_, req, res, content_reader);
            });
   svr->Delete(R"(/[^/]+/.+)",
               [this](const httplib::Request &req, httplib::Response &res) {

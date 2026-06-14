@@ -10,13 +10,7 @@
 bool cache_exists(const std::string &abspath);
 
 // Read entire file content into data. Returns false on error.
-bool cache_read(const std::string &abspath, std::string &data);
-
-// Atomically write data to abspath via tmp/ + rename.
-// Creates parent directories as needed.
-// Requires abspath and homedir to be on the same filesystem (for rename).
-bool cache_write(const std::string &abspath, std::string_view data,
-                 const std::string &homedir);
+// bool cache_read(const std::string &abspath, std::string &data);
 
 // Delete abspath. Returns true if deleted or already absent.
 bool cache_del(const std::string &abspath);

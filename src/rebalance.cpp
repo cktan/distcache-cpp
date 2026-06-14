@@ -209,10 +209,9 @@ void Rebalancer::pull_one(const std::string &src_addr,
     return;
   }
 
-  bool ok =
-      node_.cache
-          .write(relpath, std::string_view{body.data() + data_off, data_len})
-          .ok();
+  bool ok = cache_write(node_.cache.abspath(relpath),
+                        std::string_view{body.data() + data_off, data_len},
+                        node_.config.homedir);
   node_.keylock.release(relpath);
 
   if (ok) {

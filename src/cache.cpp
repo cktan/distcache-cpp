@@ -138,23 +138,11 @@ bool cache_t::exists(const std::string &relpath) const {
   return access(abspath(relpath).c_str(), R_OK) == 0;
 }
 
-rc_t cache_t::read(const std::string &relpath, std::string &data) {
-  if (!cache_read(abspath(relpath), data))
-    return errno_to_rc(strerror(errno));
-  return {};
-}
-
 rc_t cache_t::read(const std::string &relpath, fd_t &out) {
   int fd = ::open(abspath(relpath).c_str(), O_RDONLY);
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
-  return {};
-}
-
-rc_t cache_t::write(const std::string &relpath, std::string_view data) {
-  if (!cache_write(abspath(relpath), data, homedir_))
-    return errno_to_rc(strerror(errno));
   return {};
 }
 

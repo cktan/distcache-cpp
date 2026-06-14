@@ -58,15 +58,9 @@ public:
   // True if relpath exists and is readable.
   bool exists(const std::string &relpath) const;
 
-  // Read entire file into data. Returns not_found or io on error.
-  rc_t read(const std::string &relpath, std::string &data);
-
   // Open relpath O_RDONLY and return fd. Caller may release the keylock
   // before reading; inode survives unlink while fd is open.
   rc_t read(const std::string &relpath, fd_t &fd);
-
-  // Atomically write data via tmp+rename; creates parent dirs.
-  rc_t write(const std::string &relpath, std::string_view data);
 
   // Create relpath with O_CREAT|O_EXCL and return writable fd.
   // Used when the caller streams content directly (e.g. rebalance pull).

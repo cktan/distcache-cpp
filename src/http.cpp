@@ -112,8 +112,13 @@ static void handle_get(Node &node, const httplib::Request &req,
   }
 
   if (node.cache.exists(relpath)) {
+    fd_t fd;
+    if (!node.cache.read(relpath, fd).ok()) {
+      send_raw(res, wire_err("read error"));
+      return;
+    }
     std::string data;
-    if (!node.cache.read(relpath, data).ok()) {
+    if (!read_fd(fd, data)) {
       send_raw(res, wire_err("read error"));
       return;
     }
@@ -179,8 +184,9 @@ static void handle_get(Node &node, const httplib::Request &req,
   node.lru.put(relpath, time(nullptr));
   node.jobq.put("evict");
 
+  fd_t fd2;
   std::string data;
-  if (!node.cache.read(relpath, data).ok()) {
+  if (!node.cache.read(relpath, fd2).ok() || !read_fd(fd2, data)) {
     node.stats.errors++;
     send_raw(res, wire_err("read after fetch failed"));
     return;
@@ -275,7 +281,8 @@ static void handle_put(Node &node, const httplib::Request &req,
   }
   const std::string &relpath = *relpath_opt;
 
-  if (!node.cache.write(relpath, req.body).ok()) {
+  if (!cache_write(node.cache.abspath(relpath), req.body,
+                   node.config.homedir)) {
     send_raw(res, wire_err("write failed"));
     return;
   }

@@ -12,17 +12,17 @@ static constexpr int HIGH_THRESHOLD = 90;
 LRU::LRU(Node &n) : node_(n) {}
 
 void LRU::put(const std::string &relpath, time_t mtime, uint32_t relpath_id) {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.insert_or_assign(relpath, LRUEntry{mtime, relpath_id});
 }
 
 void LRU::drop(const std::string &relpath) {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.erase(relpath);
 }
 
 void LRU::touch(const std::string &relpath) {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   auto it = map_.find(relpath);
   if (it != map_.end())
     it->second.mtime = time(nullptr);
@@ -30,13 +30,13 @@ void LRU::touch(const std::string &relpath) {
 
 void LRU::batch_put(const std::vector<std::pair<std::string, time_t>> &batch,
                     const std::function<uint32_t(const std::string &)> &id_fn) {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   for (const auto &[relpath, mtime] : batch)
     map_[relpath] = {mtime, id_fn(relpath)};
 }
 
 size_t LRU::size() {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   return map_.size();
 }
 
@@ -46,6 +46,8 @@ int LRU::disk_usepct() {
     return 0;
   if (st.f_blocks == 0)
     return 0;
+  // f_bavail: blocks available to unprivileged processes (excludes root
+  // reserve).
   return static_cast<int>(100 * (st.f_blocks - st.f_bavail) / st.f_blocks);
 }
 
@@ -66,6 +68,7 @@ void LRU::rebuild_cold_list_locked() {
   while (!cold_list_.empty())
     cold_list_.pop();
 
+  // Only include entries old enough to be safe to evict (age guard).
   time_t cutoff = time(nullptr) - EVICT_MIN_AGE_S;
   for (const auto &[relpath, entry] : map_) {
     if (entry.mtime <= cutoff)
@@ -74,7 +77,7 @@ void LRU::rebuild_cold_list_locked() {
 }
 
 bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
-  std::unique_lock<std::mutex> lk(map_mtx_);
+  std::unique_lock<std::mutex> map_lock(map_mtx_);
 
   if (cold_list_.empty())
     rebuild_cold_list_locked();
@@ -85,28 +88,34 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
     auto [mtime, relpath] = cold_list_.top();
     cold_list_.pop();
 
+    // Validate: entry may have been removed or touched since cold_list_ was
+    // built.
     auto it = map_.find(relpath);
     if (it == map_.end())
       continue;
     if (it->second.mtime != mtime)
       continue;
     if (mtime > cutoff)
-      break;
+      break; // heap is ordered; everything remaining is also too fresh
 
-    lk.unlock();
+    // Try to grab the keylock without blocking — skip entries currently being
+    // fetched rather than stall the eviction loop behind an S3 download.
+    map_lock.unlock();
     if (!node_.keylock.try_acquire(relpath)) {
-      lk.lock();
+      map_lock.lock();
       continue;
     }
 
-    lk.lock();
+    // Re-validate after reacquiring map_mtx_: the entry may have been touched
+    // or removed while we held the keylock but not the map lock.
+    map_lock.lock();
     it = map_.find(relpath);
     if (it == map_.end() || it->second.mtime != mtime) {
       node_.keylock.release(relpath);
       continue;
     }
     map_.erase(it);
-    lk.unlock();
+    map_lock.unlock();
     del_cb(relpath);
     node_.keylock.release(relpath);
     return true;
@@ -116,13 +125,13 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
 
 void LRU::scan(
     const std::function<void(const std::string &, time_t, uint32_t)> &cb) {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   for (const auto &[relpath, entry] : map_)
     cb(relpath, entry.mtime, entry.relpath_id);
 }
 
 time_t LRU::get_mtime(const std::string &relpath) {
-  std::lock_guard<std::mutex> lk(map_mtx_);
+  std::lock_guard<std::mutex> map_lock(map_mtx_);
   auto it = map_.find(relpath);
   return it != map_.end() ? it->second.mtime : 0;
 }
@@ -133,11 +142,14 @@ void LRU::maybe_evict(const std::function<void(const std::string &)> &del_cb) {
     return;
 
   if (pct >= HIGH_THRESHOLD) {
+    // Aggressively evict two entries when disk is nearly full.
     evict_one(del_cb);
     evict_one(del_cb);
     return;
   }
 
+  // In the 70–89% band, evict probabilistically so that a cluster of nodes
+  // under similar pressure doesn't all evict at once.
   if ((rand() % 100) < pct)
     evict_one(del_cb);
 }

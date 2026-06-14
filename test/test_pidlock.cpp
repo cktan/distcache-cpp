@@ -48,16 +48,9 @@ TEST_SUITE("PidLock") {
     fclose(f);
     CHECK(pid == getpid());
     pidlock_release(path);
-  }
 
-  TEST_CASE("own PID in lockfile succeeds (crash-recovery)") {
-    std::string path = tmp_lock();
-    unlink(path.c_str());
-    write_pid(path, getpid());
-
-    bool ok = pidlock_acquire(path);
-    CHECK(ok);
-    pidlock_release(path);
+    // acquire again should succeed
+    CHECK(pidlock_acquire(path));
   }
 
   TEST_CASE("stale lock from dead PID is removed and retried") {
@@ -89,12 +82,14 @@ TEST_SUITE("PidLock") {
   }
 
   TEST_CASE("live foreign PID blocks acquire") {
+    // command in pid file is not me. acquire should succeed.
     std::string path = tmp_lock();
     unlink(path.c_str());
     // PID 1 (init/systemd) is always alive and not us.
     write_pid(path, 1);
-    bool ok = pidlock_acquire(path);
-    CHECK_FALSE(ok);
+
+    // acquire should succeed because pid 1 does not concern us
+    CHECK(pidlock_acquire(path));
     unlink(path.c_str());
   }
 

@@ -3,16 +3,16 @@
 #include <format>
 #include <set>
 #include <unordered_set>
-Ring::Ring(std::vector<RingEntry> entries) : entries_(std::move(entries)) {}
+ring_t::ring_t(std::vector<RingEntry> entries) : entries_(std::move(entries)) {}
 
-size_t Ring::node_count() const {
+size_t ring_t::node_count() const {
   std::unordered_set<std::string> seen;
   for (const auto &e : entries_)
     seen.insert(e.node);
   return seen.size();
 }
 
-size_t Ring::bisect_left(uint32_t target) const {
+size_t ring_t::bisect_left(uint32_t target) const {
   size_t lo = 0, hi = entries_.size();
   while (lo < hi) {
     size_t mid = lo + (hi - lo) / 2;
@@ -24,7 +24,7 @@ size_t Ring::bisect_left(uint32_t target) const {
   return lo;
 }
 
-std::string Ring::successor(uint32_t target_id) const {
+std::string ring_t::successor(uint32_t target_id) const {
   if (entries_.empty())
     return "";
   size_t idx = bisect_left(target_id);
@@ -33,8 +33,8 @@ std::string Ring::successor(uint32_t target_id) const {
   return entries_[idx].node;
 }
 
-std::string Ring::next_after(const std::vector<std::string> &excluded,
-                             uint32_t target_id) const {
+std::string ring_t::next_after(const std::vector<std::string> &excluded,
+                               uint32_t target_id) const {
   if (entries_.empty())
     return "";
   if (excluded.empty())
@@ -54,8 +54,8 @@ std::string Ring::next_after(const std::vector<std::string> &excluded,
   return "";
 }
 
-std::vector<uint32_t> Ring::compute_ids(std::string_view node_name,
-                                        uint32_t first_id) {
+std::vector<uint32_t> ring_t::compute_ids(std::string_view node_name,
+                                          uint32_t first_id) {
   std::vector<uint32_t> ids;
   ids.reserve(10);
   uint32_t prev = 0;
@@ -74,10 +74,12 @@ std::vector<uint32_t> Ring::compute_ids(std::string_view node_name,
   return ids;
 }
 
-uint32_t Ring::compute_id(const std::string &str) { return ring_hash(0, str); }
+uint32_t ring_t::compute_id(const std::string &str) {
+  return ring_hash(0, str);
+}
 
-Ring Ring::build(
-    const std::map<std::string, std::vector<uint32_t>> &membership) {
+ring_t
+ring_t::build(const std::map<std::string, std::vector<uint32_t>> &membership) {
   // id -> min node name (smaller name wins on collision)
   std::map<uint32_t, std::string> id_map;
 
@@ -94,5 +96,5 @@ Ring Ring::build(
   for (const auto &[id, node] : id_map)
     entries.push_back({id, node});
 
-  return Ring(std::move(entries));
+  return ring_t(std::move(entries));
 }

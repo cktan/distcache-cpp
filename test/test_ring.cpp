@@ -15,7 +15,7 @@ TEST_CASE("FNV hash matches Elixir reference vectors") {
 }
 
 TEST_CASE("compute_ids: first 4 IDs match Elixir") {
-  auto ids = Ring::compute_ids("127.0.0.1:4001");
+  auto ids = ring_t::compute_ids("127.0.0.1:4001");
   REQUIRE(ids.size() == 10);
   CHECK(ids[0] == 3190356085U);
   CHECK(ids[1] == 3608826095U);
@@ -24,22 +24,22 @@ TEST_CASE("compute_ids: first 4 IDs match Elixir") {
 }
 
 TEST_CASE("compute_id matches Elixir") {
-  CHECK(Ring::compute_id("cache/my-bucket/photo.jpg") == 2752153653U);
+  CHECK(ring_t::compute_id("cache/my-bucket/photo.jpg") == 2752153653U);
 }
 
 TEST_CASE("ring successor: single node always returns that node") {
   std::map<std::string, std::vector<uint32_t>> m;
-  m["only"] = Ring::compute_ids("only");
-  Ring r = Ring::build(m);
+  m["only"] = ring_t::compute_ids("only");
+  ring_t r = ring_t::build(m);
   for (uint32_t t : {0U, 1000U, 0x7FFFFFFFU, 0xFFFFFFFFU})
     CHECK(r.successor(t) == "only");
 }
 
 TEST_CASE("ring successor: two nodes split keyspace") {
   std::map<std::string, std::vector<uint32_t>> m;
-  m["A"] = Ring::compute_ids("A");
-  m["B"] = Ring::compute_ids("B");
-  Ring r = Ring::build(m);
+  m["A"] = ring_t::compute_ids("A");
+  m["B"] = ring_t::compute_ids("B");
+  ring_t r = ring_t::build(m);
   REQUIRE(r.size() == 20);
 
   // Every target must route to A or B.
@@ -54,7 +54,7 @@ TEST_CASE("ring successor: wrap-around at max id") {
   std::map<std::string, std::vector<uint32_t>> m;
   m["X"] = {100, 300, 600};
   m["Y"] = {200, 500, 900};
-  Ring r = Ring::build(m);
+  ring_t r = ring_t::build(m);
 
   // target > 900 (max) must wrap to the successor of 0 → entry with id=100 →
   // "X"
@@ -71,7 +71,7 @@ TEST_CASE("ring next_after: skips excluded nodes") {
   m["X"] = {100};
   m["Y"] = {200};
   m["Z"] = {300};
-  Ring r = Ring::build(m);
+  ring_t r = ring_t::build(m);
 
   // Successor of 0 normally = X (id=100). Excluding X → Y (id=200).
   CHECK(r.next_after({"X"}, 0) == "Y");
@@ -85,7 +85,7 @@ TEST_CASE("ring build: collision resolved by smaller name") {
   std::map<std::string, std::vector<uint32_t>> m;
   m["alpha"] = {500}; // same id as "beta"
   m["beta"] = {500};
-  Ring r = Ring::build(m);
+  ring_t r = ring_t::build(m);
   // Only one entry at id=500; smaller name "alpha" wins.
   REQUIRE(r.size() == 1);
   CHECK(r.successor(500) == "alpha");
@@ -93,8 +93,8 @@ TEST_CASE("ring build: collision resolved by smaller name") {
 
 TEST_CASE("first_id override changes id[0] but not chain formula") {
   // With first_id=999, id[0]=999, id[1]=ring_hash(999, "node:999"), etc.
-  auto ids_default = Ring::compute_ids("node");
-  auto ids_custom = Ring::compute_ids("node", 999);
+  auto ids_default = ring_t::compute_ids("node");
+  auto ids_custom = ring_t::compute_ids("node", 999);
   CHECK(ids_custom[0] == 999U);
   CHECK(ids_custom[0] != ids_default[0]);
   // id[1] must differ between the two chains (different prev).

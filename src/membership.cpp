@@ -40,13 +40,13 @@ void Membership::rebuild_ring() {
 
   std::map<std::string, std::vector<uint32_t>> membership;
 
-  membership[self_addr_] = Ring::compute_ids(self_addr_, first_id_);
+  membership[self_addr_] = ring_t::compute_ids(self_addr_, first_id_);
 
   if (buf && n > 0) {
     const char *p = buf;
     for (int i = 0; i < n; i++) {
       auto [addr, fid] = parse_peer(std::string(p));
-      membership[addr] = Ring::compute_ids(addr, fid);
+      membership[addr] = ring_t::compute_ids(addr, fid);
       p += strlen(p) + 1;
     }
   }
@@ -56,11 +56,11 @@ void Membership::rebuild_ring() {
     std::lock_guard<std::mutex> lk(injected_mtx_);
     for (const auto &[addr, fid] : injected_) {
       if (membership.find(addr) == membership.end())
-        membership[addr] = Ring::compute_ids(addr, fid);
+        membership[addr] = ring_t::compute_ids(addr, fid);
     }
   }
 
-  auto new_ring = std::make_shared<Ring>(Ring::build(membership));
+  auto new_ring = std::make_shared<ring_t>(ring_t::build(membership));
   node_.ring.store(new_ring);
 
   fprintf(stderr, "ring rebuilt: %zu entries, %zu nodes\n", new_ring->size(),

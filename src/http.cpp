@@ -83,7 +83,7 @@ static void handle_get(Node &node, const httplib::Request &req,
     return;
   }
   const std::string &relpath = *relpath_opt;
-  uint32_t rp_id = Ring::compute_id(relpath);
+  uint32_t rp_id = ring_t::compute_id(relpath);
 
   bool local_only = req.has_param("local");
   bool delete_after = req.has_param("delete");

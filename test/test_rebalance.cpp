@@ -55,16 +55,16 @@ TEST_CASE("lru get_mtime updates after touch") {
 TEST_CASE("inject_node adds node to ring") {
   Node node;
   std::map<std::string, std::vector<uint32_t>> m;
-  m["127.0.0.1:4001"] = Ring::compute_ids("127.0.0.1:4001", 0);
-  node.ring.store(std::make_shared<Ring>(Ring::build(m)));
+  m["127.0.0.1:4001"] = ring_t::compute_ids("127.0.0.1:4001", 0);
+  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
 
   auto ring_before = node.ring.load();
   CHECK(ring_before->size() == 10);
 
   std::map<std::string, std::vector<uint32_t>> m2;
-  m2["127.0.0.1:4001"] = Ring::compute_ids("127.0.0.1:4001", 0);
-  m2["127.0.0.1:4002"] = Ring::compute_ids("127.0.0.1:4002", 0);
-  node.ring.store(std::make_shared<Ring>(Ring::build(m2)));
+  m2["127.0.0.1:4001"] = ring_t::compute_ids("127.0.0.1:4001", 0);
+  m2["127.0.0.1:4002"] = ring_t::compute_ids("127.0.0.1:4002", 0);
+  node.ring.store(std::make_shared<ring_t>(ring_t::build(m2)));
 
   auto ring_after = node.ring.load();
   CHECK(ring_after->size() == 20);
@@ -78,9 +78,9 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   std::string node_a = "127.0.0.1:4001";
   std::string node_b = "127.0.0.1:4002";
   std::map<std::string, std::vector<uint32_t>> m;
-  m[node_a] = Ring::compute_ids(node_a, 0);
-  m[node_b] = Ring::compute_ids(node_b, 0);
-  node.ring.store(std::make_shared<Ring>(Ring::build(m)));
+  m[node_a] = ring_t::compute_ids(node_a, 0);
+  m[node_b] = ring_t::compute_ids(node_b, 0);
+  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
 
   auto ring = node.ring.load();
 
@@ -88,7 +88,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   std::vector<std::string> b_relpaths;
   for (int i = 0; i < 20; i++) {
     std::string rp = "cache/bucket/key" + std::to_string(i);
-    uint32_t rp_id = Ring::compute_id(rp);
+    uint32_t rp_id = ring_t::compute_id(rp);
     std::string owner = ring->successor(rp_id);
     node.lru.put(rp, now - i * 3600);
     if (owner == node_b)
@@ -98,7 +98,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   auto result = node.rebalancer.scan_for_peer(node_b);
 
   for (const auto &[rp, mt] : result) {
-    uint32_t rp_id = Ring::compute_id(rp);
+    uint32_t rp_id = ring_t::compute_id(rp);
     CHECK(ring->successor(rp_id) == node_b);
   }
   CHECK(result.size() == b_relpaths.size());
@@ -109,9 +109,9 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
   std::string node_a = "127.0.0.1:5001";
   std::string node_b = "127.0.0.1:5002";
   std::map<std::string, std::vector<uint32_t>> m;
-  m[node_a] = Ring::compute_ids(node_a, 0);
-  m[node_b] = Ring::compute_ids(node_b, 0);
-  node.ring.store(std::make_shared<Ring>(Ring::build(m)));
+  m[node_a] = ring_t::compute_ids(node_a, 0);
+  m[node_b] = ring_t::compute_ids(node_b, 0);
+  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
 
   auto ring = node.ring.load();
   time_t now = time(nullptr);
@@ -119,7 +119,7 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
   std::string old_rp;
   for (int i = 0; i < 100; i++) {
     std::string rp = "cache/old/key" + std::to_string(i);
-    uint32_t rp_id = Ring::compute_id(rp);
+    uint32_t rp_id = ring_t::compute_id(rp);
     if (ring->successor(rp_id) == node_b) {
       old_rp = rp;
       node.lru.put(rp, now - 6 * 86400);
@@ -139,9 +139,9 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
   std::string node_a = "127.0.0.1:6001";
   std::string node_b = "127.0.0.1:6002";
   std::map<std::string, std::vector<uint32_t>> m;
-  m[node_a] = Ring::compute_ids(node_a, 0);
-  m[node_b] = Ring::compute_ids(node_b, 0);
-  node.ring.store(std::make_shared<Ring>(Ring::build(m)));
+  m[node_a] = ring_t::compute_ids(node_a, 0);
+  m[node_b] = ring_t::compute_ids(node_b, 0);
+  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
 
   time_t now = time(nullptr);
   for (int i = 0; i < 200; i++) {

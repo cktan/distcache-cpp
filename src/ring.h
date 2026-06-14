@@ -44,10 +44,10 @@ struct RingEntry {
   std::string node;
 };
 
-class Ring {
+class ring_t {
 public:
-  Ring() = default;
-  explicit Ring(std::vector<RingEntry> entries);
+  ring_t() = default;
+  explicit ring_t(std::vector<RingEntry> entries);
 
   // Chord successor of target_id. Returns "" if ring is empty.
   std::string successor(uint32_t target_id) const;
@@ -62,7 +62,7 @@ public:
 
   // Build ring from membership map {node -> [ids]}.
   // Collision resolution: lexicographically smaller node name wins.
-  static Ring
+  static ring_t
   build(const std::map<std::string, std::vector<uint32_t>> &membership);
 
   // Compute 10 ring IDs for node_name.

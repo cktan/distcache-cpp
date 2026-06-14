@@ -16,7 +16,7 @@ struct Node {
   Config config;
   cache_t cache;
   Stats stats;
-  std::atomic<std::shared_ptr<Ring>> ring{std::make_shared<Ring>()};
+  std::atomic<std::shared_ptr<ring_t>> ring{std::make_shared<ring_t>()};
   keylock_t keylock;
   feed_t feed;
   feed_t jobq;
@@ -26,7 +26,7 @@ struct Node {
   HttpServer http;
 
   Node()
-      : lru(config.homedir, keylock, Ring::compute_id), membership(*this),
+      : lru(config.homedir, keylock, ring_t::compute_id), membership(*this),
         rebalancer(*this), http(*this) {}
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;

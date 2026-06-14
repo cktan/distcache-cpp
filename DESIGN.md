@@ -98,12 +98,12 @@ dest_node  = first ring point with id >= relpath_id (wraps)
 ```
 
 The ring is stored as a sorted `std::vector<RingEntry>`
-inside a `shared_ptr<Ring>`. It lives in `node.ring` as
-`std::atomic<std::shared_ptr<Ring>>` — lock-free read on
+inside a `shared_ptr<ring_t>`. It lives in `node.ring` as
+`std::atomic<std::shared_ptr<ring_t>>` — lock-free read on
 the hot path, atomic-swap on membership change.
 
 Successor lookup: O(log N) binary search (`bisect_left`).
-`Ring::next_after()` is O(log N + K) where K is the number
+`ring_t::next_after()` is O(log N + K) where K is the number
 of excluded nodes to skip.
 
 ---
@@ -119,7 +119,7 @@ isolation.
 struct Node {
     Config   config;    // host, port, addr, homedir, first_id
     Stats    stats;     // atomic hit/miss/error counters
-    atomic<shared_ptr<Ring>> ring;
+    atomic<shared_ptr<ring_t>> ring;
     KeyLock  keylock;   // per-key S3 fetch serialization
     Feed     feed;      // SWIM + telemetry feed
     Feed     jobq;      // async job queue
@@ -218,7 +218,7 @@ and a `put(n, ...)` method.
 **Ring rebuild:** `Membership::rebuild_ring()` calls
 `swim_peers()`, merges alive peers with self and with any
 injected-but-not-yet-converged nodes (`injected_` map), and
-atomic-stores a new `shared_ptr<Ring>` into `node_.ring`.
+atomic-stores a new `shared_ptr<ring_t>` into `node_.ring`.
 
 **Pre-convergence injection:** `inject_node(addr, first_id)`
 adds a node to the `injected_` map and triggers an immediate

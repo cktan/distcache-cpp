@@ -2,6 +2,7 @@
 #include "doctest.h"
 #include "keylock.h"
 #include "lru.h"
+#include "relpath.h"
 #include <atomic>
 #include <chrono>
 #include <string>
@@ -17,19 +18,19 @@ TEST_SUITE("LRU") {
     keylock_t keylock;
     lru_t lru(TEST_HOMEDIR, keylock, no_id);
     CHECK(lru.size() == 0);
-    lru.put("cache/b/k1", time(nullptr) - 400);
-    lru.put("cache/b/k2", time(nullptr) - 400);
+    lru.put(relpath_t{"cache/b/k1"}, time(nullptr) - 400);
+    lru.put(relpath_t{"cache/b/k2"}, time(nullptr) - 400);
     CHECK(lru.size() == 2);
   }
 
   TEST_CASE("remove shrinks map") {
     keylock_t keylock;
     lru_t lru(TEST_HOMEDIR, keylock, no_id);
-    lru.put("cache/b/k1", time(nullptr) - 400);
-    lru.put("cache/b/k2", time(nullptr) - 400);
-    lru.drop("cache/b/k1");
+    lru.put(relpath_t{"cache/b/k1"}, time(nullptr) - 400);
+    lru.put(relpath_t{"cache/b/k2"}, time(nullptr) - 400);
+    lru.drop(relpath_t{"cache/b/k1"});
     CHECK(lru.size() == 1);
-    lru.drop("cache/b/NONEXISTENT");
+    lru.drop(relpath_t{"cache/b/NONEXISTENT"});
     CHECK(lru.size() == 1);
   }
 
@@ -37,8 +38,8 @@ TEST_SUITE("LRU") {
     keylock_t keylock;
     lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
-    lru.put("cache/b/old", now - 600);
-    lru.put("cache/b/new", now - 100);
+    lru.put(relpath_t{"cache/b/old"}, now - 600);
+    lru.put(relpath_t{"cache/b/new"}, now - 100);
 
     std::vector<std::string> evicted;
     bool did =
@@ -54,7 +55,7 @@ TEST_SUITE("LRU") {
     keylock_t keylock;
     lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
-    lru.put("cache/b/fresh", now - 60);
+    lru.put(relpath_t{"cache/b/fresh"}, now - 60);
 
     std::vector<std::string> evicted;
     bool did =
@@ -69,9 +70,9 @@ TEST_SUITE("LRU") {
     keylock_t keylock;
     lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
-    lru.put("cache/b/a", now - 700);
-    lru.put("cache/b/b", now - 800);
-    lru.put("cache/b/c", now - 600);
+    lru.put(relpath_t{"cache/b/a"}, now - 700);
+    lru.put(relpath_t{"cache/b/b"}, now - 800);
+    lru.put(relpath_t{"cache/b/c"}, now - 600);
 
     std::vector<std::string> evicted;
     auto cb = [&](const std::string &p) { evicted.push_back(p); };

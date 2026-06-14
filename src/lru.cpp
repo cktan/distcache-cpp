@@ -11,19 +11,19 @@ lru_t::lru_t(const std::string &homedir, keylock_t &keylock,
              std::function<uint32_t(const std::string &)> id_fn)
     : homedir_(homedir), keylock_(keylock), id_fn_(std::move(id_fn)) {}
 
-void lru_t::put(const std::string &relpath, time_t mtime) {
+void lru_t::put(const relpath_t &relpath, time_t mtime) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
-  map_.insert_or_assign(relpath, LRUEntry{mtime, id_fn_(relpath)});
+  map_.insert_or_assign(relpath.str(), LRUEntry{mtime, id_fn_(relpath.str())});
 }
 
-void lru_t::drop(const std::string &relpath) {
+void lru_t::drop(const relpath_t &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
-  map_.erase(relpath);
+  map_.erase(relpath.str());
 }
 
-void lru_t::touch(const std::string &relpath) {
+void lru_t::touch(const relpath_t &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
-  auto it = map_.find(relpath);
+  auto it = map_.find(relpath.str());
   if (it != map_.end())
     it->second.mtime = time(nullptr);
 }
@@ -138,9 +138,9 @@ void lru_t::scan(
     cb(relpath, entry.mtime, entry.relpath_id);
 }
 
-time_t lru_t::get_mtime(const std::string &relpath) {
+time_t lru_t::get_mtime(const relpath_t &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
-  auto it = map_.find(relpath);
+  auto it = map_.find(relpath.str());
   return it != map_.end() ? it->second.mtime : 0;
 }
 

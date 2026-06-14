@@ -82,7 +82,7 @@ rc_t cache_t::read(const relpath_t &relpath, fd_t &out) {
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
-  lru_.touch(relpath.str());
+  lru_.touch(relpath);
   return {};
 }
 
@@ -94,7 +94,7 @@ rc_t cache_t::write(const relpath_t &relpath, fd_t &out) {
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
-  lru_.put(relpath.str(), time(nullptr));
+  lru_.put(relpath, time(nullptr));
   return {};
 }
 
@@ -105,7 +105,7 @@ rc_t cache_t::move(const relpath_t &src_relpath,
     return rc;
   if (rename(abspath(src_relpath).c_str(), abspath(dest_relpath).c_str()) < 0)
     return errno_to_rc(strerror(errno));
-  lru_.put(dest_relpath.str(), time(nullptr));
+  lru_.put(dest_relpath, time(nullptr));
   return {};
 }
 
@@ -113,7 +113,7 @@ rc_t cache_t::move(const relpath_t &src_relpath,
 rc_t cache_t::drop(const relpath_t &relpath) {
   if (unlink(abspath(relpath).c_str()) < 0 && errno != ENOENT)
     return errno_to_rc(strerror(errno));
-  lru_.drop(relpath.str());
+  lru_.drop(relpath);
   return {};
 }
 
@@ -156,7 +156,7 @@ void cache_t::scan(
 }
 
 time_t cache_t::get_mtime(const std::string &relpath) {
-  return lru_.get_mtime(relpath);
+  return lru_.get_mtime(relpath_t{relpath});
 }
 
 size_t cache_t::size() { return lru_.size(); }

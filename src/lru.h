@@ -1,5 +1,6 @@
 #pragma once
 #include "keylock.h"
+#include "relpath.h"
 #include <cstdint>
 #include <ctime>
 #include <functional>
@@ -41,13 +42,13 @@ public:
         std::function<uint32_t(const std::string &)> id_fn);
 
   // Add or update an entry. relpath_id is computed via id_fn.
-  void put(const std::string &relpath, time_t mtime);
+  void put(const relpath_t &relpath, time_t mtime);
 
   // Delete an entry.
-  void drop(const std::string &relpath);
+  void drop(const relpath_t &relpath);
 
   // Refresh mtime to now, recording a cache hit.
-  void touch(const std::string &relpath);
+  void touch(const relpath_t &relpath);
 
   // Bulk insert from the startup cache scan. relpath_id computed via id_fn.
   void batch_put(const std::vector<std::pair<std::string, time_t>> &batch);
@@ -66,7 +67,7 @@ public:
                                      uint32_t relpath_id)> &cb);
 
   // O(1) mtime lookup. Returns 0 if relpath is not tracked.
-  time_t get_mtime(const std::string &relpath);
+  time_t get_mtime(const relpath_t &relpath);
 
   // #files in the LRU.
   size_t size();

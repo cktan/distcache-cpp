@@ -2,24 +2,12 @@
 #include "keylock.h"
 #include "lru.h"
 #include "rc.h"
+#include "relpath.h"
 #include "ring.h"
-#include <cassert>
 #include <functional>
 #include <string>
 #include <string_view>
 #include <vector>
-
-class relpath_t {
-  std::string val_;
-
-public:
-  relpath_t(std::string val) : val_(std::move(val)) {
-    assert(val_.starts_with("cache/") || val_.starts_with("tmp/"));
-    assert(!val_.starts_with("cache/tmp/"));
-  }
-
-  const std::string &str() const { return val_; }
-};
 
 // ── cache_t — OO wrapper around the file cache ───────────────────────────────
 //

@@ -8,17 +8,6 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-bool cache_exists(const std::string &abspath) {
-  return access(abspath.c_str(), R_OK) == 0;
-}
-
-bool cache_mkdirs(const std::string &abspath) {
-  std::error_code ec;
-  std::filesystem::create_directories(
-      std::filesystem::path(abspath).parent_path(), ec);
-  return !ec;
-}
-
 bool cache_read(const std::string &abspath, std::string &data) {
   FILE *f = fopen(abspath.c_str(), "rb");
   if (!f)
@@ -40,13 +29,6 @@ bool cache_read(const std::string &abspath, std::string &data) {
 
 bool cache_del(const std::string &abspath) {
   return unlink(abspath.c_str()) == 0 || errno == ENOENT;
-}
-
-std::string tmp_path(const std::string &homedir) {
-  uint64_t n = unique_get();
-  char buf[64];
-  snprintf(buf, sizeof(buf), "%llu-%d.tmp", (unsigned long long)n, getpid());
-  return homedir + "/tmp/" + buf;
 }
 
 static void walk(const std::string &dir, const std::string &relbase,
@@ -78,11 +60,6 @@ static void walk(const std::string &dir, const std::string &relbase,
   closedir(d);
 }
 
-void scan_cache(const std::string &homedir,
-                const std::function<void(const std::string &, time_t)> &cb) {
-  walk(homedir + "/cache", "cache", cb);
-}
-
 static rc_t errno_to_rc(const std::string &msg) {
   if (errno == ENOENT)
     return rc_t::err(rc_errcode_t::not_found, msg);
@@ -110,11 +87,11 @@ rc_t cache_t::read(const std::string &relpath, fd_t &out) {
 }
 
 rc_t cache_t::write(const std::string &relpath, fd_t &out) {
-  std::string abs = abspath(relpath);
-  if (!cache_mkdirs(abs)) {
-    return rc_t::err(rc_errcode_t::io, "mkdirs failed");
+  rc_t rc = mkdirs(relpath);
+  if (!rc.ok()) {
+    return rc;
   }
-  int fd = ::open(abs.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+  int fd = ::open(abspath(relpath).c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
@@ -123,10 +100,10 @@ rc_t cache_t::write(const std::string &relpath, fd_t &out) {
 
 rc_t cache_t::move(const std::string &src_relpath,
                    const std::string &dest_relpath) {
-  std::string dest_abs = abspath(dest_relpath);
-  if (!cache_mkdirs(dest_abs))
-    return rc_t::err(rc_errcode_t::io, "mkdirs failed");
-  if (rename(abspath(src_relpath).c_str(), dest_abs.c_str()) < 0)
+  rc_t rc = mkdirs(dest_relpath);
+  if (!rc.ok())
+    return rc;
+  if (rename(abspath(src_relpath).c_str(), abspath(dest_relpath).c_str()) < 0)
     return errno_to_rc(strerror(errno));
   return {};
 }
@@ -137,14 +114,24 @@ rc_t cache_t::drop(const std::string &relpath) {
   return {};
 }
 
-std::string cache_t::tmp_path() { return ::tmp_path(homedir_); }
+std::string cache_t::tmp_path() {
+  uint64_t n = unique_get();
+  char buf[64];
+  snprintf(buf, sizeof(buf), "%llu-%d.tmp", (unsigned long long)n, getpid());
+  return homedir_ + "/tmp/" + buf;
+}
 
 rc_t cache_t::mkdirs(const std::string &relpath) {
-  if (!cache_mkdirs(abspath(relpath)))
+  std::error_code ec;
+  std::filesystem::create_directories(
+      std::filesystem::path(abspath(relpath)).parent_path(), ec);
+  if (ec) {
     return rc_t::err(rc_errcode_t::io, "mkdirs failed");
+  }
   return {};
 }
 
-void cache_t::scan(const std::function<void(const std::string &, time_t)> &cb) {
-  scan_cache(homedir_, cb);
+void cache_t::scan_cache(
+    const std::function<void(const std::string &, time_t)> &cb) {
+  walk(homedir_ + "/cache", "cache", cb);
 }

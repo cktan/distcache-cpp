@@ -130,7 +130,7 @@ int main(int argc, char **argv) {
     std::vector<std::pair<std::string, time_t>> batch;
     batch.reserve(BATCH);
 
-    node.cache.scan([&](const std::string &relpath, time_t mtime) {
+    node.cache.scan_cache([&](const std::string &relpath, time_t mtime) {
       batch.push_back({relpath, mtime});
       if (batch.size() >= BATCH) {
         node.lru.batch_put(batch);

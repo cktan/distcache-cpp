@@ -6,27 +6,11 @@
 
 // ── Low-level helpers (operate on absolute paths) ────────────────────────────
 
-// Returns true if abspath exists and is readable.
-bool cache_exists(const std::string &abspath);
-
 // Read entire file content into data. Returns false on error.
 // bool cache_read(const std::string &abspath, std::string &data);
 
 // Delete abspath. Returns true if deleted or already absent.
 bool cache_del(const std::string &abspath);
-
-// Generate a unique tmp path: <homedir>/tmp/<counter>-<pid>.tmp.
-// tmp/ is wiped at startup, so no orphan cleanup is needed.
-std::string tmp_path(const std::string &homedir);
-
-// Create parent directories of abspath (mkdir -p on dirname).
-bool cache_mkdirs(const std::string &abspath);
-
-// Walk cache/ subtree calling cb(relpath, mtime) for each file.
-// Used by the startup scan thread to populate LRU in batches.
-void scan_cache(
-    const std::string &homedir,
-    const std::function<void(const std::string &relpath, time_t mtime)> &cb);
 
 // ── cache_t — OO wrapper around the file cache ───────────────────────────────
 //
@@ -77,5 +61,5 @@ public:
   rc_t mkdirs(const std::string &relpath);
 
   // Walk cache/ subtree, calling cb(relpath, mtime) for each file.
-  void scan(const std::function<void(const std::string &, time_t)> &cb);
+  void scan_cache(const std::function<void(const std::string &, time_t)> &cb);
 };

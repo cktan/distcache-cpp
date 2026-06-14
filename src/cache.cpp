@@ -43,7 +43,7 @@ bool cache_del(const std::string &abspath) {
 }
 
 std::string tmp_path(const std::string &homedir) {
-  uint64_t n = next_unique();
+  uint64_t n = unique_get();
   char buf[64];
   snprintf(buf, sizeof(buf), "%llu-%d.tmp", (unsigned long long)n, getpid());
   return homedir + "/tmp/" + buf;

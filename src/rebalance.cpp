@@ -152,19 +152,22 @@ Rebalancer::scan_for_peer(const std::string &peer_addr) {
 }
 
 struct StreamState {
-  std::string header_buf;
+  std::string header_buf;              // partial frame header accumulated across chunks
   enum Phase { HEADER, DATA, SKIP } phase = HEADER;
-  size_t seg_remaining = 0;
-  bool fd_opened = false;
-  bool is_fin = false;
-  bool ok = true;
+  size_t seg_remaining = 0;           // payload bytes left in current frame
+  bool fd_opened = false;             // true once cache.write() created the output file
+  bool is_fin = false;                // true once FIN frame seen
+  bool ok = true;                     // false if any ERROR frame or write failure
 };
 
+// Parse one network chunk. fd is opened lazily on the first DATA frame so
+// that an ERROR+FIN response never creates a file at the cache path.
 static bool recv_file(const char *data, size_t data_length, StreamState &state,
                       fd_t &fd, const std::string &relpath, cache_t &cache) {
   size_t offset = 0;
   while (offset < data_length) {
     if (state.phase == StreamState::HEADER) {
+      // Accumulate bytes until we find the '\n' that ends the frame header.
       const char *p =
           (const char *)memchr(data + offset, '\n', data_length - offset);
       if (!p) {
@@ -190,6 +193,7 @@ static bool recv_file(const char *data, size_t data_length, StreamState &state,
           }
           state.fd_opened = true;
         }
+	// next phase after HEADER phase is StreamState::DATA
         state.phase = StreamState::DATA;
       } else if (hv.compare(0, 6, "ERROR:") == 0) {
         state.ok = false;
@@ -198,6 +202,7 @@ static bool recv_file(const char *data, size_t data_length, StreamState &state,
         } catch (...) {
           state.seg_remaining = 0;
         }
+	// next phase after encountering ERROR is StreamState::SKIP
         state.phase = StreamState::SKIP;
       } else if (hv.compare(0, 5, "INFO:") == 0) {
         try {
@@ -215,6 +220,7 @@ static bool recv_file(const char *data, size_t data_length, StreamState &state,
       }
       state.header_buf.clear();
     } else if (state.phase == StreamState::DATA) {
+      // Write payload bytes to fd, possibly spanning multiple network chunks.
       size_t avail = data_length - offset;
       size_t to_write = std::min(avail, state.seg_remaining);
       size_t written = 0;
@@ -231,6 +237,7 @@ static bool recv_file(const char *data, size_t data_length, StreamState &state,
       if (state.seg_remaining == 0)
         state.phase = StreamState::HEADER;
     } else {
+      // SKIP: discard payload bytes for INFO or ERROR frames.
       size_t to_skip = std::min(data_length - offset, state.seg_remaining);
       state.seg_remaining -= to_skip;
       offset += to_skip;

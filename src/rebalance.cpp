@@ -1,13 +1,6 @@
 #include "rebalance.h"
-#include "cache.h"
-#include "config.h"
-#include "feed.h"
 #include "httplib.h"
-#include "keylock.h"
-#include "lru.h"
-#include "membership.h"
-#include "relpath.h"
-#include "ring.h"
+#include "node.h"
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
@@ -15,13 +8,8 @@
 #include <string>
 #include <vector>
 
-Feed g_jobq;
-Rebalancer g_rebalancer;
+Rebalancer::Rebalancer(Node &n) : node_(n) {}
 
-// ── Helpers
-// ───────────────────────────────────────────────────────────────────
-
-// Parse "cache/bucket/key" → {bucket, key}. Returns false on failure.
 static bool relpath_to_bk(const std::string &relpath, std::string &bucket,
                           std::string &key) {
   if (relpath.compare(0, 6, "cache/") != 0)
@@ -34,7 +22,6 @@ static bool relpath_to_bk(const std::string &relpath, std::string &bucket,
   return !bucket.empty() && !key.empty();
 }
 
-// Split "host:port" for httplib. Returns false on failure.
 static bool split_addr(const std::string &addr, std::string &host, int &port) {
   size_t colon = addr.rfind(':');
   if (colon == std::string::npos)
@@ -48,16 +35,12 @@ static bool split_addr(const std::string &addr, std::string &host, int &port) {
   return port > 0 && port <= 65535;
 }
 
-// ── Rebalancer::start / stop
-// ──────────────────────────────────────────────────
-
 void Rebalancer::start() {
-  g_jobq.start([](std::vector<std::string> rec) {
+  node_.jobq.start([this](std::vector<std::string> rec) {
     if (rec.empty())
       return;
     const std::string &type = rec[0];
 
-    // hint_pull: notify dest that we hold a file it should pull.
     if (type == "hint_pull" && rec.size() >= 4) {
       const std::string &dest = rec[1];
       const std::string &relpath = rec[2];
@@ -68,7 +51,7 @@ void Rebalancer::start() {
       if (!split_addr(dest, host, port))
         return;
 
-      std::string body = "{\"src\":\"" + g_config.addr +
+      std::string body = "{\"src\":\"" + node_.config.addr +
                          "\""
                          ",\"relpath\":\"" +
                          relpath +
@@ -83,13 +66,11 @@ void Rebalancer::start() {
       return;
     }
 
-    // do_pull: pull relpath from src_addr into local cache.
     if (type == "do_pull" && rec.size() >= 4) {
-      g_rebalancer.pull_one(rec[1], rec[2], rec[3]);
+      pull_one(rec[1], rec[2], rec[3]);
       return;
     }
 
-    // claim_scan: inject claiming node and enqueue hint_pull jobs for its keys.
     if (type == "claim_scan" && rec.size() >= 3) {
       const std::string &addr = rec[1];
       const std::string &first_id_s = rec[2];
@@ -98,30 +79,28 @@ void Rebalancer::start() {
         first_id = (uint32_t)std::stoul(first_id_s);
       } catch (...) {
       }
-      g_membership.inject_node(addr, first_id);
-      auto entries = g_rebalancer.scan_for_peer(addr);
+      node_.membership.inject_node(addr, first_id);
+      auto entries = scan_for_peer(addr);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
-        g_jobq.put("hint_pull", addr.c_str(), relpath.c_str(), mt_str.c_str());
+        node_.jobq.put("hint_pull", addr.c_str(), relpath.c_str(),
+                       mt_str.c_str());
       }
       return;
     }
 
-    // evict: check disk pressure and evict if needed.
     if (type == "evict") {
-      g_lru.maybe_evict([](const std::string &p) { cache_del(p); });
+      node_.lru.maybe_evict(
+          [this](const std::string &p) { node_.cache.drop(p); });
       return;
     }
   });
 }
 
-void Rebalancer::stop() { g_jobq.stop(); }
-
-// ── Rebalancer::claim_sweep
-// ───────────────────────────────────────────────────
+void Rebalancer::stop() { node_.jobq.stop(); }
 
 void Rebalancer::claim_sweep(const std::string &self_addr, uint32_t first_id) {
-  auto peers = g_membership.alive_peers();
+  auto peers = node_.membership.alive_peers();
   if (peers.empty())
     return;
 
@@ -143,19 +122,15 @@ void Rebalancer::claim_sweep(const std::string &self_addr, uint32_t first_id) {
   }
 }
 
-// ── Rebalancer::scan_for_peer
-// ─────────────────────────────────────────────────
-
 std::vector<std::pair<std::string, time_t>>
 Rebalancer::scan_for_peer(const std::string &peer_addr) {
-  auto ring = g_ring.load();
+  auto ring = node_.ring.load();
   time_t cutoff = time(nullptr) - 5 * 86400;
 
-  // Min-heap of {mtime, relpath} — keeps the 50 hottest (most recent).
   using Entry = std::pair<time_t, std::string>;
   std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap;
 
-  g_lru.scan([&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
+  node_.lru.scan([&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
     if (mtime < cutoff)
       return;
     if (ring->successor(rp_id) != peer_addr)
@@ -174,9 +149,6 @@ Rebalancer::scan_for_peer(const std::string &peer_addr) {
   return result;
 }
 
-// ── Rebalancer::pull_one
-// ──────────────────────────────────────────────────────
-
 void Rebalancer::pull_one(const std::string &src_addr,
                           const std::string &relpath,
                           const std::string &mtime_str) {
@@ -184,30 +156,25 @@ void Rebalancer::pull_one(const std::string &src_addr,
   if (!relpath_to_bk(relpath, bucket, key))
     return;
 
-  std::string abspath = to_abs(g_config.homedir, relpath);
   uint32_t rp_id = Ring::compute_relpath_id(relpath);
 
-  // Fast path: already cached.
-  if (cache_exists(abspath))
+  if (node_.cache.exists(relpath))
     return;
 
-  bool is_owner = g_keylock.acquire(relpath);
+  bool is_owner = node_.keylock.acquire(relpath);
 
-  // Re-check after acquire — another thread may have fetched while we waited.
-  if (cache_exists(abspath)) {
+  if (node_.cache.exists(relpath)) {
     if (is_owner)
-      g_keylock.release(relpath);
+      node_.keylock.release(relpath);
     return;
   }
-  if (!is_owner) {
-    // Waiter woke but file still absent (owner's fetch may have failed).
+  if (!is_owner)
     return;
-  }
 
   std::string host;
   int port;
   if (!split_addr(src_addr, host, port)) {
-    g_keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
 
@@ -219,37 +186,37 @@ void Rebalancer::pull_one(const std::string &src_addr,
   auto resp = cli.Get(path.c_str());
 
   if (!resp || resp->status != 200) {
-    g_keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
 
-  // Parse wire envelope: DATA:N\n<bytes>FIN:0\n
   const std::string &body = resp->body;
   if (body.compare(0, 5, "DATA:") != 0) {
-    g_keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
   size_t nl = body.find('\n');
   if (nl == std::string::npos) {
-    g_keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
   size_t data_len;
   try {
     data_len = std::stoull(body.substr(5, nl - 5));
   } catch (...) {
-    g_keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
 
   size_t data_off = nl + 1;
   if (data_off + data_len > body.size()) {
-    g_keylock.release(relpath);
+    node_.keylock.release(relpath);
     return;
   }
 
-  bool ok = cache_write(abspath, body.data() + data_off, data_len);
-  g_keylock.release(relpath);
+  bool ok = static_cast<bool>(node_.cache.write(
+      relpath, std::string_view{body.data() + data_off, data_len}));
+  node_.keylock.release(relpath);
 
   if (ok) {
     time_t mt = 0;
@@ -259,8 +226,8 @@ void Rebalancer::pull_one(const std::string &src_addr,
     }
     if (mt == 0)
       mt = time(nullptr);
-    g_lru.insert(relpath, mt, rp_id);
-    g_jobq.put("evict");
-    g_feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
+    node_.lru.insert(relpath, mt, rp_id);
+    node_.jobq.put("evict");
+    node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
   }
 }

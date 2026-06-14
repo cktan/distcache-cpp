@@ -33,7 +33,7 @@ static bool parse_url(const std::string &url, std::string &host, int &port,
 }
 
 bool s3copy_fetch(const std::string &bucket, const std::string &key,
-                  const std::string &dest_abspath) {
+                  const std::string &dest_relpath, cache_t &cache) {
   const char *env_url = getenv("S3COPY_URL");
   std::string url = env_url ? env_url : "http://localhost:7777";
 
@@ -56,9 +56,10 @@ bool s3copy_fetch(const std::string &bucket, const std::string &key,
     return out;
   };
 
-  std::string tmp = tmp_path();
+  std::string tmp_rel = cache.tmp_path();
+  std::string tmp_abs = cache.abspath(tmp_rel);
   std::string body = "{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" +
-                     escape(key) + "\",\"dest\":\"" + escape(tmp) + "\"}";
+                     escape(key) + "\",\"dest\":\"" + escape(tmp_abs) + "\"}";
 
   httplib::Client cli(host, port);
   cli.set_connection_timeout(5);
@@ -66,12 +67,11 @@ bool s3copy_fetch(const std::string &bucket, const std::string &key,
 
   auto res = cli.Post(base_path + "/copy", body, "application/json");
   if (!res || res->status != 200) {
-    remove(tmp.c_str());
+    remove(tmp_abs.c_str());
     return false;
   }
-  if (!cache_mkdirs(dest_abspath) ||
-      rename(tmp.c_str(), dest_abspath.c_str()) != 0) {
-    remove(tmp.c_str());
+  if (!cache.move(tmp_rel, dest_relpath)) {
+    remove(tmp_abs.c_str());
     return false;
   }
   return true;

@@ -52,4 +52,3 @@ private:
 // g_ring.store()) and read lock-free by all other threads (via
 // g_ring.load()). std::atomic<shared_ptr> provides acquire/release
 // semantics on load/store, so readers always see a consistent Ring.
-extern std::atomic<std::shared_ptr<Ring>> g_ring;

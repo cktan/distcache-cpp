@@ -1,7 +1,7 @@
 CXX ?= c++
 
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -pthread \
-            -I/usr/local/include -I../ext
+            -I$(HOME)/.local/include
 
 ifdef DEBUG
     CXXFLAGS += -O0 -g -fsanitize=address,undefined
@@ -11,7 +11,7 @@ else
     SAN       :=
 endif
 
-LDFLAGS := $(SAN) -L/usr/local/lib -lswimc17 -pthread
+LDFLAGS := $(SAN) -L$(HOME)/.local/lib -lswimc17 -pthread
 
 EXEC    := distcache
 LIB     := libdistcache.a

@@ -1,3 +1,9 @@
+## C++ Coding Style
+
+- use snake_case for names
+- class names end with '_t'
+
+
 
 ## Guidelines
 

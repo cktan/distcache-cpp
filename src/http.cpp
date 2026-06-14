@@ -1,28 +1,20 @@
 #include "http.h"
-#include "cache.h"
-#include "config.h"
-#include "feed.h"
-#include "httplib.h"
-#include "keylock.h"
-#include "lru.h"
-#include "membership.h"
-#include "rebalance.h"
+#include "node.h"
 #include "relpath.h"
-#include "ring.h"
 #include "s3copy.h"
-#include "stats.h"
 #include "wire.h"
 #include <algorithm>
 #include <ctime>
 #include <functional>
+#include <httplib.h>
 
-HttpServer g_http;
+HttpServer::HttpServer(Node &n) : node_(n) {}
 
 static time_t g_start_time = 0;
+static httplib::Server *g_svr = nullptr;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-// Split "/bucket/key/with/slashes" into {bucket, key}.
 static bool split_path(const std::string &path, std::string &bucket,
                        std::string &key) {
   if (path.empty() || path[0] != '/')
@@ -41,8 +33,6 @@ static void send_raw(httplib::Response &res, std::string body) {
   res.body = std::move(body);
 }
 
-// Minimal JSON string extraction: find "key":"value" → value. Returns "" if
-// absent.
 static std::string json_str(const std::string &body, const std::string &key) {
   std::string needle = "\"" + key + "\":\"";
   size_t pos = body.find(needle);
@@ -53,8 +43,6 @@ static std::string json_str(const std::string &body, const std::string &key) {
   return end == std::string::npos ? "" : body.substr(pos, end - pos);
 }
 
-// Minimal JSON integer extraction: find "key":N → N as string. Returns "" if
-// absent.
 static std::string json_int(const std::string &body, const std::string &key) {
   std::string needle = "\"" + key + "\":";
   size_t pos = body.find(needle);
@@ -68,10 +56,10 @@ static std::string json_int(const std::string &body, const std::string &key) {
   return body.substr(pos, end - pos);
 }
 
-// ── GET handler
-// ───────────────────────────────────────────────────────────────
+// ── Handlers ─────────────────────────────────────────────────────────────────
 
-static void handle_get(const httplib::Request &req, httplib::Response &res) {
+static void handle_get(Node &node, const httplib::Request &req,
+                       httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err("invalid path"));
@@ -85,111 +73,99 @@ static void handle_get(const httplib::Request &req, httplib::Response &res) {
   }
   const std::string &relpath = *relpath_opt;
   uint32_t rp_id = Ring::compute_relpath_id(relpath);
-  std::string abspath = to_abs(g_config.homedir, relpath);
 
   bool local_only = req.has_param("local");
   bool delete_after = req.has_param("delete");
 
-  // Ring lookup — skip redirect if ?local=1.
   if (!local_only) {
-    auto ring = g_ring.load();
+    auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
-    if (!dest.empty() && dest != g_config.addr) {
-      g_membership.hint_alive(dest);
-      g_feed.put("cache.redirect", relpath.c_str(), "dest", dest.c_str());
-      // On-hit hint: if we hold the file locally, tell dest to pull it.
-      if (cache_exists(abspath)) {
-        auto peers = g_membership.alive_peers();
+    if (!dest.empty() && dest != node.config.addr) {
+      node.membership.hint_alive(dest);
+      node.feed.put("cache.redirect", relpath.c_str(), "dest", dest.c_str());
+      if (node.cache.exists(relpath)) {
+        auto peers = node.membership.alive_peers();
         bool dest_alive =
             std::find(peers.begin(), peers.end(), dest) != peers.end();
         if (dest_alive) {
-          time_t mt = g_lru.get_mtime(relpath);
+          time_t mt = node.lru.get_mtime(relpath);
           std::string mt_str = std::to_string(mt ? mt : time(nullptr));
-          g_jobq.put("hint_pull", dest.c_str(), relpath.c_str(),
-                     mt_str.c_str());
+          node.jobq.put("hint_pull", dest.c_str(), relpath.c_str(),
+                        mt_str.c_str());
         }
       }
-      g_stats.redirects++;
+      node.stats.redirects++;
       send_raw(res, wire_redirect(dest));
       return;
     }
   }
 
-  // Serve from local cache.
-  if (cache_exists(abspath)) {
+  if (node.cache.exists(relpath)) {
     std::string data;
-    if (!cache_read(abspath, data)) {
+    if (!node.cache.read(relpath, data)) {
       send_raw(res, wire_err("read error"));
       return;
     }
     if (delete_after) {
-      cache_del(abspath);
-      g_lru.remove(relpath);
+      node.cache.drop(relpath);
+      node.lru.remove(relpath);
     } else {
-      g_lru.touch(relpath);
+      node.lru.touch(relpath);
     }
-    g_feed.put("cache.hit", relpath.c_str());
-    g_stats.hits++;
-    g_stats.served++;
+    node.feed.put("cache.hit", relpath.c_str());
+    node.stats.hits++;
+    node.stats.served++;
     send_raw(res, wire_data(data.data(), data.size()));
     return;
   }
 
-  // Local-only miss: return ERR_NOT_CACHED (used by inter-node pull).
   if (local_only) {
     send_raw(res, wire_err("ERR_NOT_CACHED"));
     return;
   }
 
-  // Cache miss on owned key: fetch from S3 via sidecar.
-  g_stats.misses++;
-  g_feed.put("cache.miss", relpath.c_str());
+  node.stats.misses++;
+  node.feed.put("cache.miss", relpath.c_str());
 
-  bool is_owner = g_keylock.acquire(relpath);
+  bool is_owner = node.keylock.acquire(relpath);
   if (!is_owner) {
-    // Another thread fetched while we waited; re-check cache.
-    if (cache_exists(abspath)) {
-      std::string data;
-      if (cache_read(abspath, data)) {
-        g_lru.touch(relpath);
-        send_raw(res, wire_data(data.data(), data.size()));
-        return;
-      }
+    std::string data;
+    if (node.cache.read(relpath, data)) {
+      node.lru.touch(relpath);
+      send_raw(res, wire_data(data.data(), data.size()));
+      return;
     }
     send_raw(res, wire_err("fetch failed"));
     return;
   }
 
-  // We are the owner: drive the S3 fetch.
-  bool ok = s3copy_fetch(bucket, key, abspath);
-  g_keylock.release(relpath);
+  bool ok = s3copy_fetch(bucket, key, relpath, node.cache);
+  node.keylock.release(relpath);
 
   if (!ok) {
-    g_stats.errors++;
-    g_feed.put("s3copy.err", relpath.c_str(), "fetch failed");
+    node.stats.errors++;
+    node.feed.put("s3copy.err", relpath.c_str(), "fetch failed");
     send_raw(res, wire_err("s3copy failed"));
     return;
   }
 
-  g_feed.put("s3copy.ok", relpath.c_str());
-  g_lru.insert(relpath, time(nullptr), rp_id);
-  g_jobq.put("evict");
+  node.feed.put("s3copy.ok", relpath.c_str());
+  node.lru.insert(relpath, time(nullptr), rp_id);
+  node.jobq.put("evict");
 
   std::string data;
-  if (!cache_read(abspath, data)) {
-    g_stats.errors++;
+  if (!node.cache.read(relpath, data)) {
+    node.stats.errors++;
     send_raw(res, wire_err("read after fetch failed"));
     return;
   }
-  g_stats.served++;
+  node.stats.served++;
   send_raw(res, wire_data(data.data(), data.size()));
 }
 
-// ── GET /_health
-// ─────────────────────────────────────────────────────────────
-
-static void handle_health(const httplib::Request &, httplib::Response &res) {
-  auto peers = g_membership.alive_peers();
+static void handle_health(Node &node, const httplib::Request &,
+                          httplib::Response &res) {
+  auto peers = node.membership.alive_peers();
   std::string peers_json = "[";
   for (size_t i = 0; i < peers.size(); ++i) {
     peers_json +=
@@ -209,26 +185,26 @@ static void handle_health(const httplib::Request &, httplib::Response &res) {
   std::string upfor = std::to_string(d) + "d " + std::to_string(h) + "h " +
                       std::to_string(m) + "m";
 
-  auto ring = g_ring.load();
+  auto ring = node.ring.load();
   size_t nodes = ring->node_count();
 
   char used_gib_buf[32];
-  snprintf(used_gib_buf, sizeof(used_gib_buf), "%.2f", LRU::disk_used_gib());
+  snprintf(used_gib_buf, sizeof(used_gib_buf), "%.2f",
+           node.lru.disk_used_gib());
 
   res.status = 200;
   res.set_header("Content-Type", "application/json");
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      g_config.addr, upsince, upfor, nodes, g_lru.size(), LRU::disk_usepct(),
-      used_gib_buf, LRU::disk_error() ? "true" : "false", g_stats.hits.load(),
-      g_stats.misses.load(), g_stats.served.load(), g_stats.redirects.load(),
-      g_stats.errors.load(), g_stats.hint_pull.load(), peers_json);
+      node.config.addr, upsince, upfor, nodes, node.lru.size(),
+      node.lru.disk_usepct(), used_gib_buf,
+      node.lru.disk_error() ? "true" : "false", node.stats.hits.load(),
+      node.stats.misses.load(), node.stats.served.load(),
+      node.stats.redirects.load(), node.stats.errors.load(),
+      node.stats.hint_pull.load(), peers_json);
 }
 
-// ── POST /_claim_keyspace
-// ─────────────────────────────────────────────────────
-
-static void handle_claim_keyspace(const httplib::Request &req,
+static void handle_claim_keyspace(Node &node, const httplib::Request &req,
                                   httplib::Response &res) {
   std::string addr = json_str(req.body, "addr");
   std::string first_id_s = json_int(req.body, "first_id");
@@ -238,16 +214,12 @@ static void handle_claim_keyspace(const httplib::Request &req,
     return;
   }
 
-  // Offload inject + scan + enqueue to g_jobq worker.
   const char *fid = first_id_s.empty() ? "0" : first_id_s.c_str();
-  g_jobq.put("claim_scan", addr.c_str(), fid);
+  node.jobq.put("claim_scan", addr.c_str(), fid);
   send_raw(res, wire_fin());
 }
 
-// ── POST /_hint_pull
-// ──────────────────────────────────────────────────────────
-
-static void handle_hint_pull(const httplib::Request &req,
+static void handle_hint_pull(Node &node, const httplib::Request &req,
                              httplib::Response &res) {
   std::string src = json_str(req.body, "src");
   std::string relpath = json_str(req.body, "relpath");
@@ -258,16 +230,13 @@ static void handle_hint_pull(const httplib::Request &req,
     return;
   }
 
-  // Offload pull to g_jobq worker; return immediately.
-  g_stats.hint_pull++;
-  g_jobq.put("do_pull", src.c_str(), relpath.c_str(), mtime.c_str());
+  node.stats.hint_pull++;
+  node.jobq.put("do_pull", src.c_str(), relpath.c_str(), mtime.c_str());
   send_raw(res, wire_fin());
 }
 
-// ── PUT handler
-// ───────────────────────────────────────────────────────────────
-
-static void handle_put(const httplib::Request &req, httplib::Response &res) {
+static void handle_put(Node &node, const httplib::Request &req,
+                       httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err("invalid path"));
@@ -279,22 +248,19 @@ static void handle_put(const httplib::Request &req, httplib::Response &res) {
     return;
   }
   const std::string &relpath = *relpath_opt;
-  std::string abspath = to_abs(g_config.homedir, relpath);
   uint32_t rp_id = Ring::compute_relpath_id(relpath);
 
-  if (!cache_write(abspath, req.body.data(), req.body.size())) {
+  if (!node.cache.write(relpath, req.body)) {
     send_raw(res, wire_err("write failed"));
     return;
   }
-  g_lru.insert(relpath, time(nullptr), rp_id);
-  g_jobq.put("evict");
+  node.lru.insert(relpath, time(nullptr), rp_id);
+  node.jobq.put("evict");
   send_raw(res, wire_fin());
 }
 
-// ── DELETE handler
-// ────────────────────────────────────────────────────────────
-
-static void handle_delete(const httplib::Request &req, httplib::Response &res) {
+static void handle_delete(Node &node, const httplib::Request &req,
+                          httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err("invalid path"));
@@ -306,27 +272,43 @@ static void handle_delete(const httplib::Request &req, httplib::Response &res) {
     return;
   }
   const std::string &relpath = *relpath_opt;
-  cache_del(to_abs(g_config.homedir, relpath));
-  g_lru.remove(relpath);
+  node.cache.drop(relpath);
+  node.lru.remove(relpath);
   send_raw(res, wire_fin());
 }
 
 // ── Server lifecycle
 // ──────────────────────────────────────────────────────────
 
-static httplib::Server *g_svr = nullptr;
-
 void HttpServer::start(const std::string &host, int port) {
   g_start_time = time(nullptr);
   auto *svr = new httplib::Server();
   g_svr = svr;
 
-  svr->Get("/_health", handle_health);
-  svr->Post("/_claim_keyspace", handle_claim_keyspace);
-  svr->Post("/_hint_pull", handle_hint_pull);
-  svr->Get(R"(/[^/]+/.+)", handle_get);
-  svr->Put(R"(/[^/]+/.+)", handle_put);
-  svr->Delete(R"(/[^/]+/.+)", handle_delete);
+  svr->Get("/_health",
+           [this](const httplib::Request &req, httplib::Response &res) {
+             handle_health(node_, req, res);
+           });
+  svr->Post("/_claim_keyspace",
+            [this](const httplib::Request &req, httplib::Response &res) {
+              handle_claim_keyspace(node_, req, res);
+            });
+  svr->Post("/_hint_pull",
+            [this](const httplib::Request &req, httplib::Response &res) {
+              handle_hint_pull(node_, req, res);
+            });
+  svr->Get(R"(/[^/]+/.+)",
+           [this](const httplib::Request &req, httplib::Response &res) {
+             handle_get(node_, req, res);
+           });
+  svr->Put(R"(/[^/]+/.+)",
+           [this](const httplib::Request &req, httplib::Response &res) {
+             handle_put(node_, req, res);
+           });
+  svr->Delete(R"(/[^/]+/.+)",
+              [this](const httplib::Request &req, httplib::Response &res) {
+                handle_delete(node_, req, res);
+              });
 
   svr->listen(host, port);
 }

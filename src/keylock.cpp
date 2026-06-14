@@ -1,7 +1,5 @@
 #include "keylock.h"
 
-KeyLock g_keylock;
-
 bool KeyLock::acquire(const std::string &relpath) {
   std::shared_ptr<Entry> e;
   {

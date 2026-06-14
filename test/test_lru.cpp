@@ -1,21 +1,20 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
-#include "config.h"
 #include "doctest.h"
 #include "keylock.h"
-#include "lru.h"
+#include "node.h"
 #include <atomic>
 #include <chrono>
 #include <string>
 #include <thread>
 #include <vector>
 
-// Set a dummy homedir so to_abs doesn't crash.
 static const std::string TEST_HOMEDIR = "/tmp/dc_lru_test";
 
 TEST_SUITE("LRU") {
   TEST_CASE("insert and size") {
-    g_config.homedir = TEST_HOMEDIR;
-    LRU lru;
+    Node node;
+    node.config.homedir = TEST_HOMEDIR;
+    LRU lru(node);
     CHECK(lru.size() == 0);
     lru.insert("cache/b/k1", time(nullptr) - 400, 1);
     lru.insert("cache/b/k2", time(nullptr) - 400, 2);
@@ -23,7 +22,8 @@ TEST_SUITE("LRU") {
   }
 
   TEST_CASE("remove shrinks map") {
-    LRU lru;
+    Node node;
+    LRU lru(node);
     lru.insert("cache/b/k1", time(nullptr) - 400, 1);
     lru.insert("cache/b/k2", time(nullptr) - 400, 2);
     lru.remove("cache/b/k1");
@@ -33,12 +33,11 @@ TEST_SUITE("LRU") {
   }
 
   TEST_CASE("evict_one picks oldest eligible entry") {
-    g_config.homedir = TEST_HOMEDIR;
-    LRU lru;
+    Node node;
+    node.config.homedir = TEST_HOMEDIR;
+    LRU lru(node);
     time_t now = time(nullptr);
-    // older entry
     lru.insert("cache/b/old", now - 600, 1);
-    // newer entry (within 5-min window — should NOT be evicted)
     lru.insert("cache/b/new", now - 100, 2);
 
     std::vector<std::string> evicted;
@@ -47,17 +46,16 @@ TEST_SUITE("LRU") {
 
     CHECK(did);
     REQUIRE(evicted.size() == 1);
-    // The evicted absolute path should contain "old"
     CHECK(evicted[0].find("old") != std::string::npos);
-    // "new" must still be in the map
     CHECK(lru.size() == 1);
   }
 
   TEST_CASE("evict_one skips entries younger than 5 min") {
-    g_config.homedir = TEST_HOMEDIR;
-    LRU lru;
+    Node node;
+    node.config.homedir = TEST_HOMEDIR;
+    LRU lru(node);
     time_t now = time(nullptr);
-    lru.insert("cache/b/fresh", now - 60, 1); // 1 min old
+    lru.insert("cache/b/fresh", now - 60, 1);
 
     std::vector<std::string> evicted;
     bool did =
@@ -69,14 +67,14 @@ TEST_SUITE("LRU") {
   }
 
   TEST_CASE("cold_list rebuilt when exhausted") {
-    g_config.homedir = TEST_HOMEDIR;
-    LRU lru;
+    Node node;
+    node.config.homedir = TEST_HOMEDIR;
+    LRU lru(node);
     time_t now = time(nullptr);
     lru.insert("cache/b/a", now - 700, 1);
     lru.insert("cache/b/b", now - 800, 2);
     lru.insert("cache/b/c", now - 600, 3);
 
-    // Evict all three one-by-one; cold_list should rebuild between calls.
     std::vector<std::string> evicted;
     auto cb = [&](const std::string &p) { evicted.push_back(p); };
 
@@ -88,7 +86,8 @@ TEST_SUITE("LRU") {
   }
 
   TEST_CASE("scan_insert batch populates map") {
-    LRU lru;
+    Node node;
+    LRU lru(node);
     time_t now = time(nullptr);
     std::vector<std::pair<std::string, time_t>> batch = {
         {"cache/b/x", now - 400},
@@ -110,7 +109,7 @@ TEST_SUITE("KeyLock") {
   TEST_CASE("second acquirer waits and returns false") {
     KeyLock kl;
     std::atomic<bool> owner_done{false};
-    std::atomic<bool> waiter_result{true}; // init true; expect false
+    std::atomic<bool> waiter_result{true};
 
     bool owner = kl.acquire("cache/b/k");
     REQUIRE(owner);
@@ -120,14 +119,13 @@ TEST_SUITE("KeyLock") {
       waiter_result.store(r);
     });
 
-    // Give waiter time to block.
     std::this_thread::sleep_for(std::chrono::milliseconds(50));
     CHECK_FALSE(owner_done.load());
 
     kl.release("cache/b/k");
     waiter.join();
 
-    CHECK_FALSE(waiter_result.load()); // waiter got false (not owner)
+    CHECK_FALSE(waiter_result.load());
   }
 
   TEST_CASE("multiple waiters all wake on release") {
@@ -174,7 +172,6 @@ TEST_SUITE("KeyLock") {
   TEST_CASE("try_acquire fails immediately when in-flight") {
     KeyLock kl;
     REQUIRE(kl.try_acquire("cache/b/k"));
-    // key is now in-flight; second try must not block and must fail
     CHECK_FALSE(kl.try_acquire("cache/b/k"));
     kl.release("cache/b/k");
   }
@@ -189,7 +186,6 @@ TEST_SUITE("KeyLock") {
 
   TEST_CASE("try_acquire does not block waiting acquire") {
     KeyLock kl;
-    // acquire holds the key; a concurrent try_acquire must return false quickly
     bool owner = kl.acquire("cache/b/k");
     REQUIRE(owner);
 
@@ -200,7 +196,7 @@ TEST_SUITE("KeyLock") {
       done.store(true);
     });
     t.join();
-    CHECK(done.load()); // returned without waiting for release
+    CHECK(done.load());
     kl.release("cache/b/k");
   }
 }

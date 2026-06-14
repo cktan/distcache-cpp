@@ -3,8 +3,6 @@
 #include <format>
 #include <set>
 #include <unordered_set>
-std::atomic<std::shared_ptr<Ring>> g_ring{std::make_shared<Ring>()};
-
 Ring::Ring(std::vector<RingEntry> entries) : entries_(std::move(entries)) {}
 
 size_t Ring::node_count() const {

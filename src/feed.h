@@ -35,6 +35,3 @@ private:
   std::thread thread_;
   bool running_ = false;
 };
-
-// Global feed shared by SWIM and app telemetry.
-extern Feed g_feed;

@@ -1,6 +1,5 @@
 #include "cache.h"
-#include "config.h"
-#include <atomic>
+#include "unique.h"
 #include <cstdio>
 #include <cstring>
 #include <dirent.h>
@@ -8,8 +7,6 @@
 #include <filesystem>
 #include <sys/stat.h>
 #include <unistd.h>
-
-static std::atomic<uint32_t> g_tmp_counter{0};
 
 bool cache_exists(const std::string &abspath) {
   return access(abspath.c_str(), R_OK) == 0;
@@ -22,17 +19,19 @@ bool cache_mkdirs(const std::string &abspath) {
   return !ec;
 }
 
-bool cache_write(const std::string &abspath, const char *data, size_t len) {
-  std::string tmp = tmp_path();
+bool cache_write(const std::string &abspath, std::string_view data,
+                 const std::string &homedir) {
+  std::string tmp = tmp_path(homedir);
 
-  int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
+  // 0600: cache files are private to the distcache process.
+  int fd = open(tmp.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (fd < 0)
     return false;
 
   bool ok = true;
   size_t written = 0;
-  while (written < len) {
-    ssize_t n = write(fd, data + written, len - written);
+  while (written < data.size()) {
+    ssize_t n = write(fd, data.data() + written, data.size() - written);
     if (n < 0) {
       ok = false;
       break;
@@ -80,14 +79,13 @@ bool cache_del(const std::string &abspath) {
   return unlink(abspath.c_str()) == 0 || errno == ENOENT;
 }
 
-std::string tmp_path() {
-  uint32_t n = g_tmp_counter.fetch_add(1, std::memory_order_relaxed);
+std::string tmp_path(const std::string &homedir) {
+  uint64_t n = next_unique();
   char buf[64];
-  snprintf(buf, sizeof(buf), "%u-%d.tmp", n, getpid());
-  return g_config.homedir + "/tmp/" + buf;
+  snprintf(buf, sizeof(buf), "%llu-%d.tmp", (unsigned long long)n, getpid());
+  return homedir + "/tmp/" + buf;
 }
 
-// Walk a directory tree calling cb for each regular file.
 static void walk(const std::string &dir, const std::string &relbase,
                  const std::function<void(const std::string &, time_t)> &cb) {
   DIR *d = opendir(dir.c_str());
@@ -96,6 +94,7 @@ static void walk(const std::string &dir, const std::string &relbase,
 
   struct dirent *ent;
   while ((ent = readdir(d)) != nullptr) {
+    // Skip . / .. and any hidden files; cache paths never start with '.'.
     if (ent->d_name[0] == '.')
       continue;
 
@@ -116,7 +115,81 @@ static void walk(const std::string &dir, const std::string &relbase,
   closedir(d);
 }
 
-void scan_cache(const std::function<void(const std::string &, time_t)> &cb) {
-  std::string cache_dir = g_config.homedir + "/cache";
-  walk(cache_dir, "cache", cb);
+void scan_cache(const std::string &homedir,
+                const std::function<void(const std::string &, time_t)> &cb) {
+  walk(homedir + "/cache", "cache", cb);
+}
+
+static rc_t errno_to_rc(const std::string &msg) {
+  if (errno == ENOENT)
+    return rc_t::err(cache_err::not_found, msg);
+  if (errno == EACCES || errno == EPERM)
+    return rc_t::err(cache_err::permission, msg);
+  return rc_t::err(cache_err::io, msg);
+}
+
+cache_t::cache_t(const std::string &homedir) : homedir_(homedir) {}
+
+std::string cache_t::abspath(const std::string &relpath) const {
+  return homedir_ + "/" + relpath;
+}
+
+bool cache_t::exists(const std::string &relpath) const {
+  return access(abspath(relpath).c_str(), R_OK) == 0;
+}
+
+rc_t cache_t::read(const std::string &relpath, std::string &data) {
+  if (!cache_read(abspath(relpath), data))
+    return errno_to_rc(strerror(errno));
+  return rc_t::ok();
+}
+
+rc_t cache_t::read(const std::string &relpath, fd_t &out) {
+  int fd = ::open(abspath(relpath).c_str(), O_RDONLY);
+  if (fd < 0)
+    return errno_to_rc(strerror(errno));
+  out = fd_t(fd);
+  return rc_t::ok();
+}
+
+rc_t cache_t::write(const std::string &relpath, std::string_view data) {
+  if (!cache_write(abspath(relpath), data, homedir_))
+    return errno_to_rc(strerror(errno));
+  return rc_t::ok();
+}
+
+rc_t cache_t::write(const std::string &relpath, fd_t &out) {
+  int fd = ::open(abspath(relpath).c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0)
+    return errno_to_rc(strerror(errno));
+  out = fd_t(fd);
+  return rc_t::ok();
+}
+
+rc_t cache_t::move(const std::string &src_relpath,
+                   const std::string &dest_relpath) {
+  std::string dest_abs = abspath(dest_relpath);
+  if (!cache_mkdirs(dest_abs))
+    return rc_t::err(cache_err::io, "mkdirs failed");
+  if (rename(abspath(src_relpath).c_str(), dest_abs.c_str()) < 0)
+    return errno_to_rc(strerror(errno));
+  return rc_t::ok();
+}
+
+rc_t cache_t::drop(const std::string &relpath) {
+  if (unlink(abspath(relpath).c_str()) < 0 && errno != ENOENT)
+    return errno_to_rc(strerror(errno));
+  return rc_t::ok();
+}
+
+std::string cache_t::tmp_path() { return ::tmp_path(homedir_); }
+
+rc_t cache_t::mkdirs(const std::string &relpath) {
+  if (!cache_mkdirs(abspath(relpath)))
+    return rc_t::err(cache_err::io, "mkdirs failed");
+  return rc_t::ok();
+}
+
+void cache_t::scan(const std::function<void(const std::string &, time_t)> &cb) {
+  scan_cache(homedir_, cb);
 }

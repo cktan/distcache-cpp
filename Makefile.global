@@ -1,0 +1,24 @@
+.DEFAULT_GOAL := all
+
+DOCTEST_H := $(HOME)/.local/include/doctest.h
+
+$(DOCTEST_H):
+	@echo copying doctest.h to ~/.local/include
+	cd /tmp && git clone https://github.com/doctest/doctest.git
+	mkdir -p $(dir $@)
+	cp /tmp/doctest/doctest/doctest.h $@
+
+HTTPLIB_H := $(HOME)/.local/include/httplib.h
+
+$(HTTPLIB_H):
+	@echo copying httplib.h to ~/.local/include
+	cd /tmp && git clone https://github.com/yhirose/cpp-httplib.git
+	mkdir -p $(dir $@)
+	cp /tmp/cpp-httplib/httplib.h $@
+
+SWIM_H   := $(HOME)/.local/include/swim.h
+SWIMC_A  := $(HOME)/.local/lib/libswimc17.a
+
+$(SWIM_H) $(SWIMC_A):
+	@echo building and installing swimc17
+	(cd $(HOME)/p/swimc17 && DEBUG=0 make clean install prefix=$(HOME)/.local)

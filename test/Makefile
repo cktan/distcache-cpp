@@ -1,7 +1,9 @@
+include ../Makefile.global
+
 CXX ?= c++
 
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -pthread \
-            -I/usr/local/include -I../ext -I../src
+            -I$(HOME)/.local/include -I../src
 
 ifdef DEBUG
     CXXFLAGS += -O0 -g -fsanitize=address,undefined
@@ -11,12 +13,12 @@ else
     SAN       :=
 endif
 
-LDFLAGS  := $(SAN) -L/usr/local/lib -lswimc17 -pthread
+LDFLAGS  := $(SAN) -L$(HOME)/.local/lib -lswimc17 -pthread
 LIB      := ../src/libdistcache.a
 
 TESTBINS := $(patsubst %.cpp,%,$(wildcard test_*.cpp))
 
-all: $(TESTBINS)
+all: $(DOCTEST_H) $(TESTBINS)
 
 $(TESTBINS): %: %.cpp $(LIB)
 	$(CXX) $(CXXFLAGS) -o $@ $< $(LIB) $(LDFLAGS)

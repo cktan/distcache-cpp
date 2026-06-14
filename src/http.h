@@ -1,13 +1,14 @@
 #pragma once
 #include <string>
 
+struct Node;
+
 class HttpServer {
 public:
-  // Start listening on host:port. Blocks until stop() is called.
+  explicit HttpServer(Node &n);
   void start(const std::string &host, int port);
-
-  // Signal the server to stop.
   void stop();
-};
 
-extern HttpServer g_http;
+private:
+  Node &node_;
+};

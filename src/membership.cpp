@@ -1,7 +1,5 @@
 #include "membership.h"
-#include "feed.h"
-#include "rebalance.h"
-#include "ring.h"
+#include "node.h"
 #include <cassert>
 #include <chrono>
 #include <cstdio>
@@ -11,9 +9,7 @@
 #include <thread>
 #include <unistd.h>
 
-Membership g_membership;
-
-// ── Parse "host:port" or "host:port/cookie" ─────────────────────────────────
+Membership::Membership(Node &n) : node_(n) {}
 
 std::pair<std::string, uint32_t> Membership::parse_peer(const std::string &s) {
   size_t slash = s.find('/');
@@ -33,8 +29,6 @@ std::pair<std::string, uint32_t> Membership::parse_peer(const std::string &s) {
   return {addr, static_cast<uint32_t>(val)};
 }
 
-// ── Rebuild ring from current swim_peers() + injected nodes ─────────────────
-
 void Membership::rebuild_ring() {
   if (!inst_)
     return;
@@ -46,10 +40,8 @@ void Membership::rebuild_ring() {
 
   std::map<std::string, std::vector<uint32_t>> membership;
 
-  // Add self.
   membership[self_addr_] = Ring::compute_ids(self_addr_, first_id_);
 
-  // Add alive peers.
   if (buf && n > 0) {
     const char *p = buf;
     for (int i = 0; i < n; i++) {
@@ -60,7 +52,6 @@ void Membership::rebuild_ring() {
   }
   free(buf);
 
-  // Merge injected nodes (pre-SWIM convergence).
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
     for (const auto &[addr, fid] : injected_) {
@@ -70,7 +61,7 @@ void Membership::rebuild_ring() {
   }
 
   auto new_ring = std::make_shared<Ring>(Ring::build(membership));
-  g_ring.store(new_ring);
+  node_.ring.store(new_ring);
 
   fprintf(stderr, "ring rebuilt: %zu entries, %zu nodes\n", new_ring->size(),
           membership.size());
@@ -84,29 +75,24 @@ void Membership::inject_node(const std::string &addr, uint32_t first_id) {
   rebuild_ring();
 }
 
-// ── Lifecycle ────────────────────────────────────────────────────────────────
-
 bool Membership::start(const std::string &host, uint16_t port,
                        uint32_t first_id,
                        const std::vector<std::string> &seeds) {
   self_addr_ = host + ":" + std::to_string(port);
   first_id_ = first_id;
 
-  // Encode first_id in cookie so peers can inject us at correct ring position.
   std::string cookie = first_id ? std::to_string(first_id) : "";
 
-  // Build NULL-terminated seeds array.
   std::vector<const char *> seed_ptrs;
   for (const auto &s : seeds)
     seed_ptrs.push_back(s.c_str());
   seed_ptrs.push_back(nullptr);
 
   swim_start_opts_t opts = swim_opts_for(2, 3000);
-  opts.seed_retry_interval_ms =
-      1000;                // retry seeds every 1s on simultaneous startup
-  opts.name = "distcache"; // cluster-wide HMAC key; must match on all nodes
+  opts.seed_retry_interval_ms = 1000;
+  opts.name = "distcache";
   opts.seeds = seed_ptrs.data();
-  opts.feed = g_feed.raw();
+  opts.feed = node_.feed.raw();
 
   inst_ = swim_start(host.c_str(), port, cookie.c_str(), &opts);
   if (!inst_) {
@@ -114,11 +100,9 @@ bool Membership::start(const std::string &host, uint16_t port,
     return false;
   }
 
-  // Seed the ring with self only; peers arrive via feed events.
   rebuild_ring();
 
-  // Start feed consumer. Handles SWIM + app telemetry events.
-  g_feed.start([this](std::vector<std::string> rec) {
+  node_.feed.start([this](std::vector<std::string> rec) {
     if (rec.empty())
       return;
 
@@ -129,7 +113,6 @@ bool Membership::start(const std::string &host, uint16_t port,
       const std::string &peer = rec[2];
       auto [addr, _fid] = parse_peer(peer);
       if (verb == "down") {
-        // Remove injected entry; SWIM now tracks liveness.
         std::lock_guard<std::mutex> lk(injected_mtx_);
         injected_.erase(addr);
       }
@@ -145,7 +128,6 @@ bool Membership::start(const std::string &host, uint16_t port,
       return;
     }
 
-    // App telemetry: format as "ts key=val ..." and log.
     std::string line = timestamp();
     for (const auto &field : rec) {
       line += " ";
@@ -154,11 +136,9 @@ bool Membership::start(const std::string &host, uint16_t port,
     fprintf(stderr, "%s\n", line.c_str());
   });
 
-  // Claim sweep: after random 5-20s, POST /_claim_keyspace to all alive peers.
-  // DC_CLAIM_DELAY_MS overrides the max delay (for tests).
   std::string my_addr = self_addr_;
   uint32_t my_first = first_id_;
-  std::thread([my_addr, my_first]() {
+  std::thread([this, my_addr, my_first]() {
     srand(static_cast<unsigned>(time(nullptr)) ^
           static_cast<unsigned>(getpid()));
     int max_ms = 20000;
@@ -168,9 +148,9 @@ bool Membership::start(const std::string &host, uint16_t port,
       if (v > 0)
         max_ms = v;
     }
-    int delay_ms = 1000 + (rand() % max_ms); // at least 1s so SWIM settles
+    int delay_ms = 1000 + (rand() % max_ms);
     std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    g_rebalancer.claim_sweep(my_addr, my_first);
+    node_.rebalancer.claim_sweep(my_addr, my_first);
   }).detach();
 
   return true;

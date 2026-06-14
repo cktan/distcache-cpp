@@ -1,5 +1,7 @@
 .NOTPARALLEL:
 
+include Makefile.global
+
 DIRS       := src test
 BUILDDIRS  := $(DIRS:%=build-%)
 CLEANDIRS  := $(DIRS:%=clean-%)
@@ -7,6 +9,8 @@ TESTDIRS   := $(DIRS:%=test-%)
 FORMATDIRS := $(DIRS:%=format-%)
 
 all: $(BUILDDIRS)
+
+$(BUILDDIRS): $(HTTPLIB_H) $(SWIM_H) $(SWIMC_A)
 
 $(BUILDDIRS):
 	$(MAKE) -C $(@:build-%=%)

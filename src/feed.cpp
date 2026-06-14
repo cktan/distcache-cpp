@@ -2,8 +2,6 @@
 #include <cstdio>
 #include <ctime>
 
-Feed g_feed;
-
 Feed::Feed() { feed_ = swim_feed_create(); }
 
 Feed::~Feed() {

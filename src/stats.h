@@ -10,5 +10,3 @@ struct Stats {
   std::atomic<uint64_t> errors{0};
   std::atomic<uint64_t> hint_pull{0};
 };
-
-extern Stats g_stats;

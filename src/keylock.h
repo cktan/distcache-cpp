@@ -32,5 +32,3 @@ private:
   std::mutex map_mtx_;
   std::unordered_map<std::string, std::shared_ptr<Entry>> map_;
 };
-
-extern KeyLock g_keylock;

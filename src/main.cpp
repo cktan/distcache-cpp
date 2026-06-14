@@ -1,13 +1,5 @@
-#include "cache.h"
-#include "config.h"
-#include "feed.h"
-#include "http.h"
-#include "lru.h"
-#include "membership.h"
+#include "node.h"
 #include "pidlock.h"
-#include "rebalance.h"
-#include "relpath.h"
-#include "ring.h"
 #include <cerrno>
 #include <csignal>
 #include <cstdio>
@@ -20,15 +12,11 @@
 
 #define DISTCACHE_VERSION "0.1.0"
 
-Config g_config;
-
-// ── Signal handler
-// ────────────────────────────────────────────────────────────
-
-static void on_signal(int) { g_http.stop(); }
-
-// ── Directory helpers
-// ─────────────────────────────────────────────────────────
+static HttpServer *g_http_signal = nullptr;
+static void on_signal(int) {
+  if (g_http_signal)
+    g_http_signal->stop();
+}
 
 static bool mkdir_p(const std::string &path) {
   if (mkdir(path.c_str(), 0755) == 0 || errno == EEXIST)
@@ -40,9 +28,6 @@ static bool wipe_dir(const std::string &path) {
   std::filesystem::remove_all(path);
   return mkdir_p(path);
 }
-
-// ── Flag parsing
-// ──────────────────────────────────────────────────────────────
 
 static void usage(const char *prog) {
   fprintf(
@@ -65,9 +50,6 @@ static bool parse_addr(const std::string &s, std::string &host,
   port = static_cast<uint16_t>(p);
   return !host.empty();
 }
-
-// ── Main
-// ──────────────────────────────────────────────────────────────────────
 
 int main(int argc, char **argv) {
   std::string homedir;
@@ -112,14 +94,14 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // ── Populate global config ────────────────────────────────────────────────
-  g_config.host = host;
-  g_config.port = port;
-  g_config.addr = addr_str;
-  g_config.homedir = homedir;
-  g_config.first_id = first_id;
+  Node node;
+  node.config.host = host;
+  node.config.port = port;
+  node.config.addr = addr_str;
+  node.config.homedir = homedir;
+  node.config.first_id = first_id;
+  node.cache = cache_t(homedir);
 
-  // ── Create directory structure ────────────────────────────────────────────
   if (!mkdir_p(homedir) || !mkdir_p(homedir + "/log") ||
       !mkdir_p(homedir + "/cache") || !wipe_dir(homedir + "/tmp")) {
     fprintf(stderr, "failed to create homedir structure: %s\n",
@@ -127,57 +109,51 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // ── PID lock ──────────────────────────────────────────────────────────────
   std::string lockpath = homedir + "/dist_cache.lock";
   if (!pidlock_acquire(lockpath)) {
     fprintf(stderr, "another instance holds %s\n", lockpath.c_str());
     return 1;
   }
 
-  // ── Signal handlers ───────────────────────────────────────────────────────
+  g_http_signal = &node.http;
   signal(SIGTERM, on_signal);
   signal(SIGINT, on_signal);
 
-  // ── Rebalancer (g_jobq worker) ────────────────────────────────────────────
-  g_rebalancer.start();
+  node.rebalancer.start();
 
-  // ── SWIM membership + feed ────────────────────────────────────────────────
-  if (!g_membership.start(host, port, first_id, seeds)) {
-    g_rebalancer.stop();
+  if (!node.membership.start(host, port, first_id, seeds)) {
+    node.rebalancer.stop();
     pidlock_release(lockpath);
     return 1;
   }
 
-  // ── Background cache scan ─────────────────────────────────────────────────
-  std::thread scan_thread([] {
+  std::thread scan_thread([&node]() {
     constexpr size_t BATCH = 1024;
     std::vector<std::pair<std::string, time_t>> batch;
     batch.reserve(BATCH);
 
-    scan_cache([&](const std::string &relpath, time_t mtime) {
+    node.cache.scan([&](const std::string &relpath, time_t mtime) {
       batch.push_back({relpath, mtime});
       if (batch.size() >= BATCH) {
-        g_lru.scan_insert(batch, Ring::compute_relpath_id);
+        node.lru.scan_insert(batch, Ring::compute_relpath_id);
         batch.clear();
       }
     });
     if (!batch.empty())
-      g_lru.scan_insert(batch, Ring::compute_relpath_id);
+      node.lru.scan_insert(batch, Ring::compute_relpath_id);
 
-    fprintf(stderr, "startup scan complete: %zu entries\n", g_lru.size());
+    fprintf(stderr, "startup scan complete: %zu entries\n", node.lru.size());
   });
   scan_thread.detach();
 
-  // ── HTTP server (blocks until SIGTERM) ────────────────────────────────────
   fprintf(stderr, "distcache %s starting on %s:%d homedir=%s\n",
           DISTCACHE_VERSION, host.c_str(), port, homedir.c_str());
 
-  g_http.start(host, port);
+  node.http.start(host, port);
 
-  // ── Shutdown sequence ─────────────────────────────────────────────────────
-  g_feed.stop(); // join consumer thread before SWIM teardown
-  g_membership.leave();
-  g_rebalancer.stop();
+  node.feed.stop();
+  node.membership.leave();
+  node.rebalancer.stop();
   pidlock_release(lockpath);
 
   fprintf(stderr, "distcache stopped\n");

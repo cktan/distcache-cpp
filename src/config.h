@@ -9,5 +9,3 @@ struct Config {
   std::string homedir;
   uint32_t first_id = 0;
 };
-
-extern Config g_config;

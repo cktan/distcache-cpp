@@ -51,8 +51,8 @@ public:
   // Unlink relpath. ENOENT is not an error (idempotent).
   rc_t drop(const std::string &relpath);
 
-  // Generate a unique tmp path under <homedir>/tmp/.
-  std::string tmp_path();
+  // Generate a unique tmp relpath under tmp/.
+  std::string tmp_relpath();
 
   // Join homedir + "/" + relpath.
   std::string abspath(const std::string &relpath) const;

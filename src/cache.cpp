@@ -114,11 +114,11 @@ rc_t cache_t::drop(const std::string &relpath) {
   return {};
 }
 
-std::string cache_t::tmp_path() {
+std::string cache_t::tmp_relpath() {
   uint64_t n = unique_get();
   char buf[64];
   snprintf(buf, sizeof(buf), "%llu-%d.tmp", (unsigned long long)n, getpid());
-  return homedir_ + "/tmp/" + buf;
+  return "tmp/" + std::string(buf);
 }
 
 rc_t cache_t::mkdirs(const std::string &relpath) {

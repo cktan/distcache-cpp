@@ -161,7 +161,7 @@ static void handle_get(Node &node, const httplib::Request &req,
     return;
   }
 
-  std::string tmp_rel = node.cache.tmp_path();
+  std::string tmp_rel = node.cache.tmp_relpath();
   std::string tmp_abs = node.cache.abspath(tmp_rel);
   rc_t rc = s3copy_fetch(bucket, key, tmp_abs);
   if (rc.ok()) {

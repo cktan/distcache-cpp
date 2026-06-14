@@ -2,16 +2,16 @@
 #include <cstdio>
 #include <ctime>
 
-Feed::Feed() { feed_ = swim_feed_create(); }
+feed_t::feed_t() { feed_ = swim_feed_create(); }
 
-Feed::~Feed() {
+feed_t::~feed_t() {
   if (running_)
     stop();
   if (feed_)
     swim_feed_destroy(feed_);
 }
 
-void Feed::start(FeedCallback callback) {
+void feed_t::start(feed_callback_t callback) {
   running_ = true;
   thread_ = std::thread([this, cb = std::move(callback)]() {
     char buf[SWIM_FEED_MAX_RECORD_SIZE];
@@ -41,7 +41,7 @@ void Feed::start(FeedCallback callback) {
   });
 }
 
-void Feed::stop() {
+void feed_t::stop() {
   running_ = false;
   swim_feed_wakeall(feed_);
   if (thread_.joinable())

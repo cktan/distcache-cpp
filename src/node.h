@@ -18,8 +18,8 @@ struct Node {
   Stats stats;
   std::atomic<std::shared_ptr<Ring>> ring{std::make_shared<Ring>()};
   KeyLock keylock;
-  Feed feed;
-  Feed jobq;
+  feed_t feed;
+  feed_t jobq;
   LRU lru;
   Membership membership;
   Rebalancer rebalancer;

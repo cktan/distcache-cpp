@@ -9,15 +9,15 @@
 
 // Wraps swim_feed_t with a background consumer thread.
 // Records arrive as vector<string>; the first string is the event type.
-using FeedCallback = std::function<void(std::vector<std::string>)>;
+using feed_callback_t = std::function<void(std::vector<std::string>)>;
 
-class Feed {
+class feed_t {
 public:
-  Feed();
-  ~Feed();
+  feed_t();
+  ~feed_t();
 
   // Start the consumer thread. callback is called for each record.
-  void start(FeedCallback callback);
+  void start(feed_callback_t callback);
 
   // Signal shutdown and join consumer thread.
   void stop();

@@ -156,8 +156,6 @@ void Rebalancer::pull_one(const std::string &src_addr,
   if (!relpath_to_bk(relpath, bucket, key))
     return;
 
-  uint32_t rp_id = Ring::compute_relpath_id(relpath);
-
   if (node_.cache.exists(relpath))
     return;
 
@@ -225,7 +223,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
     }
     if (mt == 0)
       mt = time(nullptr);
-    node_.lru.put(relpath, mt, rp_id);
+    node_.lru.put(relpath, mt);
     node_.jobq.put("evict");
     node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
   }

@@ -133,12 +133,12 @@ int main(int argc, char **argv) {
     node.cache.scan([&](const std::string &relpath, time_t mtime) {
       batch.push_back({relpath, mtime});
       if (batch.size() >= BATCH) {
-        node.lru.batch_put(batch, Ring::compute_relpath_id);
+        node.lru.batch_put(batch);
         batch.clear();
       }
     });
     if (!batch.empty())
-      node.lru.batch_put(batch, Ring::compute_relpath_id);
+      node.lru.batch_put(batch);
 
     fprintf(stderr, "startup scan complete: %zu entries\n", node.lru.size());
   });

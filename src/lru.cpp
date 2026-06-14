@@ -1,6 +1,4 @@
 #include "lru.h"
-#include "cache.h"
-#include "node.h"
 #include <cstdlib>
 #include <ctime>
 #include <sys/statvfs.h>
@@ -9,11 +7,13 @@ static constexpr int EVICT_MIN_AGE_S = 300;
 static constexpr int LOW_THRESHOLD = 70;
 static constexpr int HIGH_THRESHOLD = 90;
 
-LRU::LRU(Node &n) : node_(n) {}
+LRU::LRU(const std::string &homedir, keylock_t &keylock,
+         std::function<uint32_t(const std::string &)> id_fn)
+    : homedir_(homedir), keylock_(keylock), id_fn_(std::move(id_fn)) {}
 
-void LRU::put(const std::string &relpath, time_t mtime, uint32_t relpath_id) {
+void LRU::put(const std::string &relpath, time_t mtime) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
-  map_.insert_or_assign(relpath, LRUEntry{mtime, relpath_id});
+  map_.insert_or_assign(relpath, LRUEntry{mtime, id_fn_(relpath)});
 }
 
 void LRU::drop(const std::string &relpath) {
@@ -28,11 +28,10 @@ void LRU::touch(const std::string &relpath) {
     it->second.mtime = time(nullptr);
 }
 
-void LRU::batch_put(const std::vector<std::pair<std::string, time_t>> &batch,
-                    const std::function<uint32_t(const std::string &)> &id_fn) {
+void LRU::batch_put(const std::vector<std::pair<std::string, time_t>> &batch) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   for (const auto &[relpath, mtime] : batch)
-    map_[relpath] = {mtime, id_fn(relpath)};
+    map_[relpath] = {mtime, id_fn_(relpath)};
 }
 
 size_t LRU::size() {
@@ -42,7 +41,7 @@ size_t LRU::size() {
 
 int LRU::disk_usepct() {
   struct statvfs st;
-  if (statvfs(node_.config.homedir.c_str(), &st) < 0)
+  if (statvfs(homedir_.c_str(), &st) < 0)
     return 0;
   if (st.f_blocks == 0)
     return 0;
@@ -53,7 +52,7 @@ int LRU::disk_usepct() {
 
 double LRU::disk_used_gib() {
   struct statvfs st;
-  if (statvfs(node_.config.homedir.c_str(), &st) < 0)
+  if (statvfs(homedir_.c_str(), &st) < 0)
     return 0.0;
   return static_cast<double>(st.f_blocks - st.f_bavail) * st.f_frsize /
          (1024.0 * 1024.0 * 1024.0);
@@ -61,7 +60,7 @@ double LRU::disk_used_gib() {
 
 bool LRU::disk_error() {
   struct statvfs st;
-  return statvfs(node_.config.homedir.c_str(), &st) < 0;
+  return statvfs(homedir_.c_str(), &st) < 0;
 }
 
 void LRU::rebuild_cold_list_locked() {
@@ -101,7 +100,7 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
     // Try to grab the keylock without blocking — skip entries currently being
     // fetched rather than stall the eviction loop behind an S3 download.
     map_lock.unlock();
-    if (!node_.keylock.try_acquire(relpath)) {
+    if (!keylock_.try_acquire(relpath)) {
       map_lock.lock();
       continue;
     }
@@ -111,13 +110,13 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
     map_lock.lock();
     it = map_.find(relpath);
     if (it == map_.end() || it->second.mtime != mtime) {
-      node_.keylock.release(relpath);
+      keylock_.release(relpath);
       continue;
     }
     map_.erase(it);
     map_lock.unlock();
     del_cb(relpath);
-    node_.keylock.release(relpath);
+    keylock_.release(relpath);
     return true;
   }
   return false;

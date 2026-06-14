@@ -35,7 +35,7 @@ static bool try_acquire(const std::string &path) {
     int n = snprintf(buf, sizeof(buf), "%d\n", getpid());
     (void)write(fd, buf, n);
     close(fd);
-    return true;  // success
+    return true; // success
   }
 
   if (errno != EEXIST)
@@ -76,6 +76,5 @@ bool pidlock_acquire(const std::string &path) {
   }
   return try_acquire(path);
 }
-    
 
 void pidlock_release(const std::string &path) { unlink(path.c_str()); }

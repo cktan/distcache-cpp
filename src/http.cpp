@@ -176,7 +176,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   }
 
   node.feed.put("s3copy.ok", relpath.c_str());
-  node.lru.put(relpath, time(nullptr), rp_id);
+  node.lru.put(relpath, time(nullptr));
   node.jobq.put("evict");
 
   std::string data;
@@ -274,13 +274,12 @@ static void handle_put(Node &node, const httplib::Request &req,
     return;
   }
   const std::string &relpath = *relpath_opt;
-  uint32_t rp_id = Ring::compute_relpath_id(relpath);
 
   if (!node.cache.write(relpath, req.body).ok()) {
     send_raw(res, wire_err("write failed"));
     return;
   }
-  node.lru.put(relpath, time(nullptr), rp_id);
+  node.lru.put(relpath, time(nullptr));
   node.jobq.put("evict");
   send_raw(res, wire_fin());
 }

@@ -1,4 +1,5 @@
 #pragma once
+#include "keylock.h"
 #include <cstdint>
 #include <ctime>
 #include <functional>
@@ -7,8 +8,6 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
-
-struct Node;
 
 // Metadata stored per cached file.
 struct LRUEntry {
@@ -35,20 +34,23 @@ struct LRUEntry {
 // via statvfs() on every insert — no background polling thread.
 class LRU {
 public:
-  explicit LRU(Node &n);
+  // homedir: filesystem root for statvfs() disk-pressure checks.
+  // keylock: coordinates eviction with in-flight S3 fetches.
+  // id_fn: computes the ring relpath_id for a given relpath.
+  LRU(const std::string &homedir, keylock_t &keylock,
+      std::function<uint32_t(const std::string &)> id_fn);
 
-  // Add or update an entry. Replaces mtime and relpath_id if relpath exists.
-  void put(const std::string &relpath, time_t mtime, uint32_t relpath_id);
+  // Add or update an entry. relpath_id is computed via id_fn.
+  void put(const std::string &relpath, time_t mtime);
 
+  // Delete an entry.
   void drop(const std::string &relpath);
 
   // Refresh mtime to now, recording a cache hit.
   void touch(const std::string &relpath);
 
-  // Bulk insert from the startup cache scan. id_fn computes the relpath_id
-  // for each entry.
-  void batch_put(const std::vector<std::pair<std::string, time_t>> &batch,
-                 const std::function<uint32_t(const std::string &)> &id_fn);
+  // Bulk insert from the startup cache scan. relpath_id computed via id_fn.
+  void batch_put(const std::vector<std::pair<std::string, time_t>> &batch);
 
   // Evict the coldest eligible entry (mtime older than 5 minutes).
   // del_cb is called with the relpath after the entry is removed from the map
@@ -66,15 +68,18 @@ public:
   // O(1) mtime lookup. Returns 0 if relpath is not tracked.
   time_t get_mtime(const std::string &relpath);
 
+  // #files in the LRU.
   size_t size();
 
-  // statvfs() wrappers on node_.config.homedir.
+  // statvfs() wrappers on homedir_.
   int disk_usepct();
   double disk_used_gib();
   bool disk_error();
 
 private:
-  Node &node_;
+  const std::string &homedir_;
+  keylock_t &keylock_;
+  std::function<uint32_t(const std::string &)> id_fn_;
 
   // Guards map_ and cold_list_. All public methods acquire this before
   // touching either structure.

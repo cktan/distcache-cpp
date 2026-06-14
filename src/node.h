@@ -25,7 +25,9 @@ struct Node {
   Rebalancer rebalancer;
   HttpServer http;
 
-  Node() : lru(*this), membership(*this), rebalancer(*this), http(*this) {}
+  Node()
+      : lru(config.homedir, keylock, Ring::compute_relpath_id),
+        membership(*this), rebalancer(*this), http(*this) {}
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
 };

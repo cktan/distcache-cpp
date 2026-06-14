@@ -1,5 +1,4 @@
 #include "s3copy.h"
-#include "cache.h"
 #include "httplib.h"
 #include <cstdio>
 #include <cstdlib>
@@ -32,8 +31,8 @@ static bool parse_url(const std::string &url, std::string &host, int &port,
   return !host.empty() && port > 0;
 }
 
-bool s3copy_fetch(const std::string &bucket, const std::string &key,
-                  const std::string &dest_relpath, cache_t &cache) {
+rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
+                  const std::string &dest_abspath) {
   const char *env_url = getenv("S3COPY_URL");
   std::string url = env_url ? env_url : "http://localhost:7777";
 
@@ -45,7 +44,6 @@ bool s3copy_fetch(const std::string &bucket, const std::string &key,
     base_path = "";
   }
 
-  // Build JSON body manually — no JSON library dependency.
   auto escape = [](const std::string &s) {
     std::string out;
     for (char c : s) {
@@ -56,23 +54,23 @@ bool s3copy_fetch(const std::string &bucket, const std::string &key,
     return out;
   };
 
-  std::string tmp_rel = cache.tmp_path();
-  std::string tmp_abs = cache.abspath(tmp_rel);
   std::string body = "{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" +
-                     escape(key) + "\",\"dest\":\"" + escape(tmp_abs) + "\"}";
+                     escape(key) + "\",\"dest\":\"" + escape(dest_abspath) +
+                     "\"}";
 
   httplib::Client cli(host, port);
   cli.set_connection_timeout(5);
   cli.set_read_timeout(60);
 
   auto res = cli.Post(base_path + "/copy", body, "application/json");
-  if (!res || res->status != 200) {
-    remove(tmp_abs.c_str());
-    return false;
-  }
-  if (!cache.move(tmp_rel, dest_relpath)) {
-    remove(tmp_abs.c_str());
-    return false;
-  }
-  return true;
+  if (!res)
+    return rc_t::err(rc_errcode_t::s3_error, "connection failed");
+  if (res->status == 404)
+    return rc_t::err(rc_errcode_t::s3_not_found, "not found");
+  if (res->status == 403 || res->status == 401)
+    return rc_t::err(rc_errcode_t::s3_forbidden, "forbidden");
+  if (res->status != 200)
+    return rc_t::err(rc_errcode_t::s3_error,
+                     "HTTP " + std::to_string(res->status));
+  return rc_t::ok();
 }

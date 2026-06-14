@@ -2,34 +2,31 @@
 #include <string>
 #include <unistd.h>
 
-enum class cache_err { not_found, permission, io };
+enum class rc_errcode_t {
+  not_found,
+  permission,
+  io,
+  s3_not_found,
+  s3_forbidden,
+  s3_error,
+};
 
 class rc_t {
   bool ok_;
-  cache_err errcode_;
+  rc_errcode_t errcode_;
   std::string errmsg_;
-  rc_t(bool ok, cache_err code, std::string msg)
+  rc_t(bool ok, rc_errcode_t code, std::string msg)
       : ok_(ok), errcode_(code), errmsg_(std::move(msg)) {}
 
 public:
-  static rc_t ok() { return rc_t(true, cache_err::io, {}); }
-  static rc_t err(cache_err code, std::string msg) {
+  static rc_t ok() { return rc_t(true, rc_errcode_t::io, {}); }
+  static rc_t err(rc_errcode_t code, std::string msg) {
     return rc_t(false, code, std::move(msg));
   }
   explicit operator bool() const { return ok_; }
-  cache_err errcode() const { return errcode_; }
+  rc_errcode_t errcode() const { return errcode_; }
   const std::string &errmsg() const { return errmsg_; }
-  const char *errstr() const {
-    switch (errcode_) {
-    case cache_err::not_found:
-      return "not_found";
-    case cache_err::permission:
-      return "permission";
-    case cache_err::io:
-      return "io";
-    }
-    return "io";
-  }
+  const char *errstr() const;
 };
 
 struct fd_t {

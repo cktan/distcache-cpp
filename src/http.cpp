@@ -139,12 +139,21 @@ static void handle_get(Node &node, const httplib::Request &req,
     return;
   }
 
-  bool ok = s3copy_fetch(bucket, key, relpath, node.cache);
+  std::string tmp_rel = node.cache.tmp_path();
+  std::string tmp_abs = node.cache.abspath(tmp_rel);
+  rc_t rc = s3copy_fetch(bucket, key, tmp_abs);
+  if (rc) {
+    rc = node.cache.move(tmp_rel, relpath);
+    if (!rc)
+      remove(tmp_abs.c_str());
+  } else {
+    remove(tmp_abs.c_str());
+  }
   node.keylock.release(relpath);
 
-  if (!ok) {
+  if (!rc) {
     node.stats.errors++;
-    node.feed.put("s3copy.err", relpath.c_str(), "fetch failed");
+    node.feed.put("s3copy.err", relpath.c_str(), rc.errstr());
     send_raw(res, wire_err("s3copy failed"));
     return;
   }

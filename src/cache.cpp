@@ -122,10 +122,10 @@ void scan_cache(const std::string &homedir,
 
 static rc_t errno_to_rc(const std::string &msg) {
   if (errno == ENOENT)
-    return rc_t::err(cache_err::not_found, msg);
+    return rc_t::err(rc_errcode_t::not_found, msg);
   if (errno == EACCES || errno == EPERM)
-    return rc_t::err(cache_err::permission, msg);
-  return rc_t::err(cache_err::io, msg);
+    return rc_t::err(rc_errcode_t::permission, msg);
+  return rc_t::err(rc_errcode_t::io, msg);
 }
 
 cache_t::cache_t(const std::string &homedir) : homedir_(homedir) {}
@@ -170,7 +170,7 @@ rc_t cache_t::move(const std::string &src_relpath,
                    const std::string &dest_relpath) {
   std::string dest_abs = abspath(dest_relpath);
   if (!cache_mkdirs(dest_abs))
-    return rc_t::err(cache_err::io, "mkdirs failed");
+    return rc_t::err(rc_errcode_t::io, "mkdirs failed");
   if (rename(abspath(src_relpath).c_str(), dest_abs.c_str()) < 0)
     return errno_to_rc(strerror(errno));
   return rc_t::ok();
@@ -186,7 +186,7 @@ std::string cache_t::tmp_path() { return ::tmp_path(homedir_); }
 
 rc_t cache_t::mkdirs(const std::string &relpath) {
   if (!cache_mkdirs(abspath(relpath)))
-    return rc_t::err(cache_err::io, "mkdirs failed");
+    return rc_t::err(rc_errcode_t::io, "mkdirs failed");
   return rc_t::ok();
 }
 

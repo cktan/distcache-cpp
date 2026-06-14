@@ -178,54 +178,76 @@ void Rebalancer::pull_one(const std::string &src_addr,
   cli.set_read_timeout(30);
 
   std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
-  auto resp = cli.Get(path.c_str());
+  struct StreamState {
+    std::string header_buf;
+    bool header_parsed = false;
+    bool is_data = false;
+    size_t data_len = 0;
+    size_t bytes_written = 0;
+    fd_t fd;
+    bool ok = true;
+  };
+  StreamState state;
 
-  if (!resp || resp->status != 200) {
-    node_.keylock.release(relpath);
-    return;
-  }
-
-  const std::string &body = resp->body;
-  if (body.compare(0, 5, "DATA:") != 0) {
-    node_.keylock.release(relpath);
-    return;
-  }
-  size_t nl = body.find('\n');
-  if (nl == std::string::npos) {
-    node_.keylock.release(relpath);
-    return;
-  }
-  size_t data_len;
-  try {
-    data_len = std::stoull(body.substr(5, nl - 5));
-  } catch (...) {
-    node_.keylock.release(relpath);
-    return;
-  }
-
-  size_t data_off = nl + 1;
-  if (data_off + data_len > body.size()) {
-    node_.keylock.release(relpath);
-    return;
-  }
-
-  fd_t fd;
-  bool ok = node_.cache.write(relpath, fd).ok();
-  if (ok) {
-    std::string_view data{body.data() + data_off, data_len};
-    size_t written = 0;
-    while (written < data.size()) {
-      ssize_t n = ::write(fd.fd, data.data() + written, data.size() - written);
-      if (n < 0) {
-        ok = false;
-        break;
+  auto resp = cli.Get(path.c_str(), [&](const char *data, size_t data_length) {
+    size_t offset = 0;
+    if (!state.header_parsed) {
+      size_t prev_size = state.header_buf.size();
+      state.header_buf.append(data, data_length);
+      size_t nl = state.header_buf.find('\n');
+      if (nl == std::string::npos) {
+        return true;
       }
-      written += n;
+      state.header_parsed = true;
+      offset = nl + 1 - prev_size;
+
+      std::string_view header{state.header_buf.data(), nl};
+      if (header.compare(0, 5, "DATA:") != 0) {
+        state.is_data = false;
+        return false;
+      }
+      state.is_data = true;
+      try {
+        state.data_len = std::stoull(std::string(header.substr(5)));
+      } catch (...) {
+        state.ok = false;
+        return false;
+      }
+
+      if (!node_.cache.write(relpath, state.fd).ok()) {
+        state.ok = false;
+        return false;
+      }
     }
-    fd.close();
-    if (!ok) {
-      node_.cache.drop(relpath);
+
+    if (state.is_data && state.ok) {
+      if (offset < data_length) {
+        size_t to_write = std::min(data_length - offset,
+                                   state.data_len - state.bytes_written);
+        if (to_write > 0) {
+          size_t written = 0;
+          while (written < to_write) {
+            ssize_t n = ::write(state.fd.fd, data + offset + written,
+                                to_write - written);
+            if (n < 0) {
+              state.ok = false;
+              return false;
+            }
+            written += n;
+          }
+          state.bytes_written += to_write;
+        }
+      }
     }
+    return true;
+  });
+
+  bool ok = resp && resp->status == 200 && state.is_data && state.ok &&
+            state.bytes_written == state.data_len;
+
+  state.fd.close();
+  if (!ok) {
+    node_.cache.drop(relpath);
   }
   node_.keylock.release(relpath);
 

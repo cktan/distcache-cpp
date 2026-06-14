@@ -84,18 +84,22 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
   time_t cutoff = time(nullptr) - EVICT_MIN_AGE_S;
 
   while (!cold_list_.empty()) {
+    // Pop one entry of the cold_list.
     auto [mtime, relpath] = cold_list_.top();
     cold_list_.pop();
 
     // Validate: entry may have been removed or touched since cold_list_ was
     // built.
     auto it = map_.find(relpath);
-    if (it == map_.end())
-      continue;
-    if (it->second.mtime != mtime)
-      continue;
-    if (mtime > cutoff)
+    if (it == map_.end()) {
+      continue; // not found -- ignore this entry.
+    }
+    if (it->second.mtime > mtime) {
+      continue; // entry is no longer cold -- ignore this entry.
+    }
+    if (mtime > cutoff) {
       break; // heap is ordered; everything remaining is also too fresh
+    }
 
     // Try to grab the keylock without blocking — skip entries currently being
     // fetched rather than stall the eviction loop behind an S3 download.
@@ -105,16 +109,20 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
       continue;
     }
 
+    // Now holding keylock on relpath.
+
     // Re-validate after reacquiring map_mtx_: the entry may have been touched
     // or removed while we held the keylock but not the map lock.
     map_lock.lock();
     it = map_.find(relpath);
-    if (it == map_.end() || it->second.mtime != mtime) {
+    if (it == map_.end() || it->second.mtime > mtime) {
       keylock_.release(relpath);
       continue;
     }
     map_.erase(it);
     map_lock.unlock();
+
+    // delete and then release lock.
     del_cb(relpath);
     keylock_.release(relpath);
     return true;

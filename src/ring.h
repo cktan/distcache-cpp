@@ -1,4 +1,36 @@
 #pragma once
+// ── Chord Consistent Hashing Ring ───────────────────────────────────────────
+//
+// Ring represents a distributed hash ring (Chord consistent hashing) used to
+// route cache keys to responsible nodes.
+//
+// Keyspace:
+//   The ring occupies a 32-bit integer keyspace: [0, 2^32).
+//
+// Node Placement (Virtual Nodes):
+//   To ensure even distribution, each physical node is assigned 10 virtual
+//   node IDs on the ring. These IDs are computed deterministically from the
+//   node's "host:port" identity using chaining FNV-1a-64 hashes.
+//   An optional first_id parameter can override the first virtual ID for
+//   surgical placement of nodes.
+//
+// Routing / Successor Lookup:
+//   Every cache key (represented by its relpath) is mapped to a 32-bit ID
+//   (relpath_id) using the FNV-1a-64 hash function.
+//   The node responsible for a key is the first node on the ring whose
+//   virtual ID is greater than or equal to the key's relpath_id. If no such
+//   virtual ID exists, the lookup wraps around to the first node on the ring.
+//
+// Collision Resolution:
+//   If two physical nodes share the same virtual ID, the node with the
+//   lexicographically smaller name wins.
+//
+// Thread Safety & Concurrency:
+//   The Ring object is immutable once constructed. Membership changes trigger
+//   a new Ring rebuild, which is atomically stored into a
+//   std::atomic<std::shared_ptr<Ring>> wrapper. This allows lock-free reads
+//   on the hot path (successors lookup) and atomic-swap updates.
+
 #include <atomic>
 #include <cstdint>
 #include <map>

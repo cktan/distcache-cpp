@@ -69,6 +69,26 @@ static std::string json_int(const std::string &body, const std::string &key) {
   return body.substr(pos, end - pos);
 }
 
+static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
+  char buf[4096];
+  ssize_t n = ::read(fd.fd, buf, sizeof(buf));
+  if (n > 0) {
+    std::string hdr = meta_data((int)n);
+    if (!sink.write(hdr.data(), hdr.size()))
+      return false;
+    return sink.write(buf, (size_t)n);
+  }
+  if (n < 0) {
+    std::string err = wire_err(strerror(errno));
+    sink.write(err.data(), err.size());
+  }
+  std::string fin = wire_fin();
+  sink.write(fin.data(), fin.size());
+  sink.done();
+  done = true;
+  return true;
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 static void handle_get(Node &node, const httplib::Request &req,
@@ -130,7 +150,6 @@ static void handle_get(Node &node, const httplib::Request &req,
     struct StreamState {
       fd_t fd;
       bool done = false;
-      char buf[4096];
     };
     auto st = std::make_shared<StreamState>();
     st->fd = std::move(fd);
@@ -141,25 +160,7 @@ static void handle_get(Node &node, const httplib::Request &req,
         [st](size_t, httplib::DataSink &sink) mutable -> bool {
           if (st->done)
             return true;
-          ssize_t n = ::read(st->fd.fd, st->buf, sizeof(st->buf));
-          if (n > 0) {
-            std::string hdr = meta_data((int)n);
-            if (!sink.write(hdr.data(), hdr.size()))
-              return false;
-            return sink.write(st->buf, (size_t)n);
-          }
-          if (n < 0) {
-            std::string err = wire_err(strerror(errno));
-            sink.write(err.data(), err.size());
-            sink.done();
-            st->done = true;
-            return true;
-          }
-          std::string fin = wire_fin();
-          sink.write(fin.data(), fin.size());
-          sink.done();
-          st->done = true;
-          return true;
+          return send_file(st->fd, st->done, sink);
         });
     return;
   }

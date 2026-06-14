@@ -95,8 +95,6 @@ int main(int argc, char **argv) {
   }
 
   Node node;
-  node.config.host = host;
-  node.config.port = port;
   node.config.addr = addr_str;
   node.config.homedir = homedir;
   node.config.first_id = first_id;

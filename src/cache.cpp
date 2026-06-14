@@ -141,7 +141,7 @@ bool cache_t::exists(const std::string &relpath) const {
 rc_t cache_t::read(const std::string &relpath, std::string &data) {
   if (!cache_read(abspath(relpath), data))
     return errno_to_rc(strerror(errno));
-  return rc_t::ok();
+  return {};
 }
 
 rc_t cache_t::read(const std::string &relpath, fd_t &out) {
@@ -149,13 +149,13 @@ rc_t cache_t::read(const std::string &relpath, fd_t &out) {
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
-  return rc_t::ok();
+  return {};
 }
 
 rc_t cache_t::write(const std::string &relpath, std::string_view data) {
   if (!cache_write(abspath(relpath), data, homedir_))
     return errno_to_rc(strerror(errno));
-  return rc_t::ok();
+  return {};
 }
 
 rc_t cache_t::write(const std::string &relpath, fd_t &out) {
@@ -163,7 +163,7 @@ rc_t cache_t::write(const std::string &relpath, fd_t &out) {
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
-  return rc_t::ok();
+  return {};
 }
 
 rc_t cache_t::move(const std::string &src_relpath,
@@ -173,13 +173,13 @@ rc_t cache_t::move(const std::string &src_relpath,
     return rc_t::err(rc_errcode_t::io, "mkdirs failed");
   if (rename(abspath(src_relpath).c_str(), dest_abs.c_str()) < 0)
     return errno_to_rc(strerror(errno));
-  return rc_t::ok();
+  return {};
 }
 
 rc_t cache_t::drop(const std::string &relpath) {
   if (unlink(abspath(relpath).c_str()) < 0 && errno != ENOENT)
     return errno_to_rc(strerror(errno));
-  return rc_t::ok();
+  return {};
 }
 
 std::string cache_t::tmp_path() { return ::tmp_path(homedir_); }
@@ -187,7 +187,7 @@ std::string cache_t::tmp_path() { return ::tmp_path(homedir_); }
 rc_t cache_t::mkdirs(const std::string &relpath) {
   if (!cache_mkdirs(abspath(relpath)))
     return rc_t::err(rc_errcode_t::io, "mkdirs failed");
-  return rc_t::ok();
+  return {};
 }
 
 void cache_t::scan(const std::function<void(const std::string &, time_t)> &cb) {

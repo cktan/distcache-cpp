@@ -214,8 +214,10 @@ void Rebalancer::pull_one(const std::string &src_addr,
     return;
   }
 
-  bool ok = static_cast<bool>(node_.cache.write(
-      relpath, std::string_view{body.data() + data_off, data_len}));
+  bool ok =
+      node_.cache
+          .write(relpath, std::string_view{body.data() + data_off, data_len})
+          .ok();
   node_.keylock.release(relpath);
 
   if (ok) {

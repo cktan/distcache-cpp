@@ -72,5 +72,5 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
   if (res->status != 200)
     return rc_t::err(rc_errcode_t::s3_error,
                      "HTTP " + std::to_string(res->status));
-  return rc_t::ok();
+  return {};
 }

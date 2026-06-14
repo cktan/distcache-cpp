@@ -102,7 +102,7 @@ static void handle_get(Node &node, const httplib::Request &req,
 
   if (node.cache.exists(relpath)) {
     std::string data;
-    if (!node.cache.read(relpath, data)) {
+    if (!node.cache.read(relpath, data).ok()) {
       send_raw(res, wire_err("read error"));
       return;
     }
@@ -130,7 +130,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   bool is_owner = node.keylock.acquire(relpath);
   if (!is_owner) {
     std::string data;
-    if (node.cache.read(relpath, data)) {
+    if (node.cache.read(relpath, data).ok()) {
       node.lru.touch(relpath);
       send_raw(res, wire_data(data.data(), data.size()));
       return;
@@ -142,16 +142,16 @@ static void handle_get(Node &node, const httplib::Request &req,
   std::string tmp_rel = node.cache.tmp_path();
   std::string tmp_abs = node.cache.abspath(tmp_rel);
   rc_t rc = s3copy_fetch(bucket, key, tmp_abs);
-  if (rc) {
+  if (rc.ok()) {
     rc = node.cache.move(tmp_rel, relpath);
-    if (!rc)
+    if (!rc.ok())
       remove(tmp_abs.c_str());
   } else {
     remove(tmp_abs.c_str());
   }
   node.keylock.release(relpath);
 
-  if (!rc) {
+  if (!rc.ok()) {
     node.stats.errors++;
     node.feed.put("s3copy.err", relpath.c_str(), rc.errstr());
     send_raw(res, wire_err("s3copy failed"));
@@ -163,7 +163,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   node.jobq.put("evict");
 
   std::string data;
-  if (!node.cache.read(relpath, data)) {
+  if (!node.cache.read(relpath, data).ok()) {
     node.stats.errors++;
     send_raw(res, wire_err("read after fetch failed"));
     return;
@@ -259,7 +259,7 @@ static void handle_put(Node &node, const httplib::Request &req,
   const std::string &relpath = *relpath_opt;
   uint32_t rp_id = Ring::compute_relpath_id(relpath);
 
-  if (!node.cache.write(relpath, req.body)) {
+  if (!node.cache.write(relpath, req.body).ok()) {
     send_raw(res, wire_err("write failed"));
     return;
   }

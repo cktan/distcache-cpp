@@ -19,11 +19,11 @@ class rc_t {
       : ok_(ok), errcode_(code), errmsg_(std::move(msg)) {}
 
 public:
-  static rc_t ok() { return rc_t(true, rc_errcode_t::io, {}); }
+  rc_t() : ok_(true), errcode_(rc_errcode_t::io) {}
   static rc_t err(rc_errcode_t code, std::string msg) {
     return rc_t(false, code, std::move(msg));
   }
-  explicit operator bool() const { return ok_; }
+  bool ok() const { return ok_; }
   rc_errcode_t errcode() const { return errcode_; }
   const std::string &errmsg() const { return errmsg_; }
   const char *errstr() const;

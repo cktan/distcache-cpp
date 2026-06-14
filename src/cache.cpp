@@ -70,15 +70,15 @@ static rc_t errno_to_rc(const std::string &msg) {
 
 cache_t::cache_t(const std::string &homedir) : homedir_(homedir) {}
 
-std::string cache_t::abspath(const std::string &relpath) const {
-  return homedir_ + "/" + relpath;
+std::string cache_t::abspath(const relpath_t &relpath) const {
+  return homedir_ + "/" + relpath.str();
 }
 
-bool cache_t::exists(const std::string &relpath) const {
+bool cache_t::exists(const relpath_t &relpath) const {
   return access(abspath(relpath).c_str(), R_OK) == 0;
 }
 
-rc_t cache_t::read(const std::string &relpath, fd_t &out) {
+rc_t cache_t::read(const relpath_t &relpath, fd_t &out) {
   int fd = ::open(abspath(relpath).c_str(), O_RDONLY);
   if (fd < 0)
     return errno_to_rc(strerror(errno));
@@ -86,7 +86,7 @@ rc_t cache_t::read(const std::string &relpath, fd_t &out) {
   return {};
 }
 
-rc_t cache_t::write(const std::string &relpath, fd_t &out) {
+rc_t cache_t::write(const relpath_t &relpath, fd_t &out) {
   rc_t rc = mkdirs(relpath);
   if (!rc.ok()) {
     return rc;
@@ -98,8 +98,8 @@ rc_t cache_t::write(const std::string &relpath, fd_t &out) {
   return {};
 }
 
-rc_t cache_t::move(const std::string &src_relpath,
-                   const std::string &dest_relpath) {
+rc_t cache_t::move(const relpath_t &src_relpath,
+                   const relpath_t &dest_relpath) {
   rc_t rc = mkdirs(dest_relpath);
   if (!rc.ok())
     return rc;
@@ -108,20 +108,20 @@ rc_t cache_t::move(const std::string &src_relpath,
   return {};
 }
 
-rc_t cache_t::drop(const std::string &relpath) {
+rc_t cache_t::drop(const relpath_t &relpath) {
   if (unlink(abspath(relpath).c_str()) < 0 && errno != ENOENT)
     return errno_to_rc(strerror(errno));
   return {};
 }
 
-std::string cache_t::tmp_relpath() {
+relpath_t cache_t::tmp_relpath() {
   uint64_t n = unique_get();
   char buf[64];
   snprintf(buf, sizeof(buf), "%llu-%d.tmp", (unsigned long long)n, getpid());
   return "tmp/" + std::string(buf);
 }
 
-rc_t cache_t::mkdirs(const std::string &relpath) {
+rc_t cache_t::mkdirs(const relpath_t &relpath) {
   std::error_code ec;
   std::filesystem::create_directories(
       std::filesystem::path(abspath(relpath)).parent_path(), ec);

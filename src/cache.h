@@ -10,7 +10,7 @@ class relpath_t {
 
 public:
   relpath_t() = default;
-  explicit relpath_t(std::string val) : val_(std::move(val)) {
+  relpath_t(std::string val) : val_(std::move(val)) {
     assert(val_.starts_with("cache/") || val_.starts_with("tmp/"));
   }
 
@@ -47,31 +47,31 @@ public:
   cache_t(const std::string &homedir);
 
   // True if relpath exists and is readable.
-  bool exists(const std::string &relpath) const;
+  bool exists(const relpath_t &relpath) const;
 
   // Open relpath O_RDONLY and return fd. Caller may release the keylock
   // before reading; inode survives unlink while fd is open.
-  rc_t read(const std::string &relpath, fd_t &fd);
+  rc_t read(const relpath_t &relpath, fd_t &fd);
 
-  // Create relpath with O_CREAT|O_EXCL and return writable fd.
+  // Create relpath with O_CREAT|O_EXCL|O_TRUNC and return writable fd.
   // Used when the caller streams content directly (e.g. rebalance pull).
-  rc_t write(const std::string &relpath, fd_t &fd);
+  rc_t write(const relpath_t &relpath, fd_t &fd);
 
   // Atomic rename from src_relpath to dest_relpath; creates dest parent dirs.
   // Used after s3copy_fetch writes to a tmp path.
-  rc_t move(const std::string &src_relpath, const std::string &dest_relpath);
+  rc_t move(const relpath_t &src_relpath, const relpath_t &dest_relpath);
 
   // Unlink relpath. ENOENT is not an error (idempotent).
-  rc_t drop(const std::string &relpath);
+  rc_t drop(const relpath_t &relpath);
 
   // Generate a unique tmp relpath under tmp/.
-  std::string tmp_relpath();
+  relpath_t tmp_relpath();
 
   // Join homedir + "/" + relpath.
-  std::string abspath(const std::string &relpath) const;
+  std::string abspath(const relpath_t &relpath) const;
 
   // Create parent directories of relpath.
-  rc_t mkdirs(const std::string &relpath);
+  rc_t mkdirs(const relpath_t &relpath);
 
   // Walk cache/ subtree, calling cb(relpath, mtime) for each file.
   void scan_cache(const std::function<void(const std::string &, time_t)> &cb);

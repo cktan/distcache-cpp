@@ -3,6 +3,7 @@
 #include "node.h"
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <ctime>
 #include <queue>
 #include <string>
@@ -180,10 +181,10 @@ void Rebalancer::pull_one(const std::string &src_addr,
   std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
   struct StreamState {
     std::string header_buf;
-    bool header_parsed = false;
-    bool is_data = false;
-    size_t data_len = 0;
-    size_t bytes_written = 0;
+    enum Phase { HEADER, DATA } phase = HEADER;
+    size_t seg_remaining = 0;
+    bool fd_opened = false;
+    bool is_fin = false;
     fd_t fd;
     bool ok = true;
   };
@@ -191,59 +192,65 @@ void Rebalancer::pull_one(const std::string &src_addr,
 
   auto resp = cli.Get(path.c_str(), [&](const char *data, size_t data_length) {
     size_t offset = 0;
-    if (!state.header_parsed) {
-      size_t prev_size = state.header_buf.size();
-      state.header_buf.append(data, data_length);
-      size_t nl = state.header_buf.find('\n');
-      if (nl == std::string::npos) {
-        return true;
-      }
-      state.header_parsed = true;
-      offset = nl + 1 - prev_size;
+    while (offset < data_length) {
+      if (state.phase == StreamState::HEADER) {
+        const char *p =
+            (const char *)memchr(data + offset, '\n', data_length - offset);
+        if (!p) {
+          state.header_buf.append(data + offset, data_length - offset);
+          return true;
+        }
+        size_t nl_pos = (size_t)(p - (data + offset));
+        state.header_buf.append(data + offset, nl_pos);
+        offset += nl_pos + 1;
 
-      std::string_view header{state.header_buf.data(), nl};
-      if (header.compare(0, 5, "DATA:") != 0) {
-        state.is_data = false;
-        return false;
-      }
-      state.is_data = true;
-      try {
-        state.data_len = std::stoull(std::string(header.substr(5)));
-      } catch (...) {
-        state.ok = false;
-        return false;
-      }
-
-      if (!node_.cache.write(relpath, state.fd).ok()) {
-        state.ok = false;
-        return false;
-      }
-    }
-
-    if (state.is_data && state.ok) {
-      if (offset < data_length) {
-        size_t to_write = std::min(data_length - offset,
-                                   state.data_len - state.bytes_written);
-        if (to_write > 0) {
-          size_t written = 0;
-          while (written < to_write) {
-            ssize_t n = ::write(state.fd.fd, data + offset + written,
-                                to_write - written);
-            if (n < 0) {
+        std::string_view hv{state.header_buf};
+        if (hv.compare(0, 5, "DATA:") == 0) {
+          try {
+            state.seg_remaining = std::stoull(std::string(hv.substr(5)));
+          } catch (...) {
+            state.ok = false;
+            return false;
+          }
+          if (!state.fd_opened) {
+            if (!node_.cache.write(relpath, state.fd).ok()) {
               state.ok = false;
               return false;
             }
-            written += n;
+            state.fd_opened = true;
           }
-          state.bytes_written += to_write;
+          state.phase = StreamState::DATA;
+        } else if (hv.compare(0, 5, "FIN:0") == 0) {
+          state.is_fin = true;
+          return true;
+        } else {
+          state.ok = false;
+          return false;
         }
+        state.header_buf.clear();
+      } else {
+        size_t avail = data_length - offset;
+        size_t to_write = std::min(avail, state.seg_remaining);
+        size_t written = 0;
+        while (written < to_write) {
+          ssize_t n =
+              ::write(state.fd.fd, data + offset + written, to_write - written);
+          if (n < 0) {
+            state.ok = false;
+            return false;
+          }
+          written += (size_t)n;
+        }
+        state.seg_remaining -= to_write;
+        offset += to_write;
+        if (state.seg_remaining == 0)
+          state.phase = StreamState::HEADER;
       }
     }
     return true;
   });
 
-  bool ok = resp && resp->status == 200 && state.is_data && state.ok &&
-            state.bytes_written == state.data_len;
+  bool ok = resp && resp->status == 200 && state.ok && state.is_fin;
 
   state.fd.close();
   if (!ok) {

@@ -4,6 +4,8 @@
 #include "s3copy.h"
 #include "wire.h"
 #include <algorithm>
+#include <cerrno>
+#include <cstring>
 #include <ctime>
 #include <functional>
 #include <httplib.h>
@@ -118,13 +120,6 @@ static void handle_get(Node &node, const httplib::Request &req,
       send_raw(res, wire_err("read error"));
       return;
     }
-    // TODO: this should stream the data.
-    // call meta_data(), stream some, meta_data(), stream some, ..., meta_fin().
-    std::string data;
-    if (!read_fd(fd, data)) {
-      send_raw(res, wire_err("read error"));
-      return;
-    }
     if (delete_after) {
       node.cache.drop(relpath);
       node.lru.drop(relpath);
@@ -134,7 +129,41 @@ static void handle_get(Node &node, const httplib::Request &req,
     node.feed.put("cache.hit", relpath.c_str());
     node.stats.hits++;
     node.stats.served++;
-    send_raw(res, wire_data(data.data(), data.size()));
+
+    struct StreamState {
+      fd_t fd;
+      bool done = false;
+      char buf[4096];
+    };
+    auto st = std::make_shared<StreamState>();
+    st->fd = std::move(fd);
+
+    res.status = 200;
+    res.set_chunked_content_provider(
+        "application/octet-stream",
+        [st](size_t, httplib::DataSink &sink) mutable -> bool {
+          if (st->done)
+            return true;
+          ssize_t n = ::read(st->fd.fd, st->buf, sizeof(st->buf));
+          if (n > 0) {
+            std::string hdr = meta_data((int)n);
+            if (!sink.write(hdr.data(), hdr.size()))
+              return false;
+            return sink.write(st->buf, (size_t)n);
+          }
+          if (n < 0) {
+            std::string err = wire_err(strerror(errno));
+            sink.write(err.data(), err.size());
+            sink.done();
+            st->done = true;
+            return true;
+          }
+          std::string fin = meta_fin();
+          sink.write(fin.data(), fin.size());
+          sink.done();
+          st->done = true;
+          return true;
+        });
     return;
   }
 

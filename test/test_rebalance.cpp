@@ -88,7 +88,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   std::vector<std::string> b_relpaths;
   for (int i = 0; i < 20; i++) {
     std::string rp = "cache/bucket/key" + std::to_string(i);
-    uint32_t rp_id = Ring::compute_relpath_id(rp);
+    uint32_t rp_id = Ring::compute_id(rp);
     std::string owner = ring->successor(rp_id);
     node.lru.put(rp, now - i * 3600);
     if (owner == node_b)
@@ -98,7 +98,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   auto result = node.rebalancer.scan_for_peer(node_b);
 
   for (const auto &[rp, mt] : result) {
-    uint32_t rp_id = Ring::compute_relpath_id(rp);
+    uint32_t rp_id = Ring::compute_id(rp);
     CHECK(ring->successor(rp_id) == node_b);
   }
   CHECK(result.size() == b_relpaths.size());
@@ -119,7 +119,7 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
   std::string old_rp;
   for (int i = 0; i < 100; i++) {
     std::string rp = "cache/old/key" + std::to_string(i);
-    uint32_t rp_id = Ring::compute_relpath_id(rp);
+    uint32_t rp_id = Ring::compute_id(rp);
     if (ring->successor(rp_id) == node_b) {
       old_rp = rp;
       node.lru.put(rp, now - 6 * 86400);

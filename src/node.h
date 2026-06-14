@@ -26,8 +26,8 @@ struct Node {
   HttpServer http;
 
   Node()
-      : lru(config.homedir, keylock, Ring::compute_relpath_id),
-        membership(*this), rebalancer(*this), http(*this) {}
+      : lru(config.homedir, keylock, Ring::compute_id), membership(*this),
+        rebalancer(*this), http(*this) {}
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
 };

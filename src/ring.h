@@ -70,8 +70,8 @@ public:
   static std::vector<uint32_t> compute_ids(std::string_view node_name,
                                            uint32_t first_id = 0);
 
-  // relpath_id = ring_hash(0, relpath) — same formula as relpath_id in Elixir.
-  static uint32_t compute_relpath_id(const std::string &relpath);
+  // relpath_id = ring_hash(0, str) — same formula as relpath_id in Elixir.
+  static uint32_t compute_id(const std::string &str);
 
 private:
   std::vector<RingEntry> entries_; // sorted ascending by id

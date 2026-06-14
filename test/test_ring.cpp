@@ -23,8 +23,8 @@ TEST_CASE("compute_ids: first 4 IDs match Elixir") {
   CHECK(ids[3] == 2552795351U);
 }
 
-TEST_CASE("compute_relpath_id matches Elixir") {
-  CHECK(Ring::compute_relpath_id("cache/my-bucket/photo.jpg") == 2752153653U);
+TEST_CASE("compute_id matches Elixir") {
+  CHECK(Ring::compute_id("cache/my-bucket/photo.jpg") == 2752153653U);
 }
 
 TEST_CASE("ring successor: single node always returns that node") {

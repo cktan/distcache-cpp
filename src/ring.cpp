@@ -74,9 +74,7 @@ std::vector<uint32_t> Ring::compute_ids(std::string_view node_name,
   return ids;
 }
 
-uint32_t Ring::compute_relpath_id(const std::string &relpath) {
-  return ring_hash(0, relpath);
-}
+uint32_t Ring::compute_id(const std::string &str) { return ring_hash(0, str); }
 
 Ring Ring::build(
     const std::map<std::string, std::vector<uint32_t>> &membership) {

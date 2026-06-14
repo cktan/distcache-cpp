@@ -1,10 +1,3 @@
-src/*.d
-src/*.o
-src/*.a
-src/distcache
-test/*.d
-test/*.o
-test/test_ring
-test/test_lru
-test/test_wire
-test/test_rebalance
+*.o
+*.a
+*.d

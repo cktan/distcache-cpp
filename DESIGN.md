@@ -123,14 +123,14 @@ struct Node {
     KeyLock  keylock;   // per-key S3 fetch serialization
     Feed     feed;      // SWIM + telemetry feed
     Feed     jobq;      // async job queue
-    LRU      lru;       // mtime-keyed eviction map
+    lru_t    lru;       // mtime-keyed eviction map
     Membership  membership;
     Rebalancer  rebalancer;
     HttpServer  http;
 };
 ```
 
-**Active classes** (`LRU`, `HttpServer`, `Membership`,
+**Active classes** (`lru_t`, `HttpServer`, `Membership`,
 `Rebalancer`) take `Node&` in their constructors and store
 it as `node_`. All cross-component access happens at runtime
 through `node_.*`, not at construction time, so member
@@ -319,7 +319,7 @@ rebuilt lazily from the full map when exhausted. Entries are
 validated on pop (stale if removed or refreshed since the
 build).
 
-**Disk usage:** `LRU::disk_usepct()` calls `statvfs()` on
+**Disk usage:** `lru_t::disk_usepct()` calls `statvfs()` on
 `node_.config.homedir` on every insert. No background
 polling thread — the check is cheap and inline.
 

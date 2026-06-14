@@ -20,7 +20,7 @@ struct Node {
   keylock_t keylock;
   feed_t feed;
   feed_t jobq;
-  LRU lru;
+  lru_t lru;
   Membership membership;
   Rebalancer rebalancer;
   HttpServer http;

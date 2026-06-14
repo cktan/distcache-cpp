@@ -15,7 +15,7 @@ static auto no_id = [](const std::string &) -> uint32_t { return 0; };
 TEST_SUITE("LRU") {
   TEST_CASE("insert and size") {
     keylock_t keylock;
-    LRU lru(TEST_HOMEDIR, keylock, no_id);
+    lru_t lru(TEST_HOMEDIR, keylock, no_id);
     CHECK(lru.size() == 0);
     lru.put("cache/b/k1", time(nullptr) - 400);
     lru.put("cache/b/k2", time(nullptr) - 400);
@@ -24,7 +24,7 @@ TEST_SUITE("LRU") {
 
   TEST_CASE("remove shrinks map") {
     keylock_t keylock;
-    LRU lru(TEST_HOMEDIR, keylock, no_id);
+    lru_t lru(TEST_HOMEDIR, keylock, no_id);
     lru.put("cache/b/k1", time(nullptr) - 400);
     lru.put("cache/b/k2", time(nullptr) - 400);
     lru.drop("cache/b/k1");
@@ -35,7 +35,7 @@ TEST_SUITE("LRU") {
 
   TEST_CASE("evict_one picks oldest eligible entry") {
     keylock_t keylock;
-    LRU lru(TEST_HOMEDIR, keylock, no_id);
+    lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
     lru.put("cache/b/old", now - 600);
     lru.put("cache/b/new", now - 100);
@@ -52,7 +52,7 @@ TEST_SUITE("LRU") {
 
   TEST_CASE("evict_one skips entries younger than 5 min") {
     keylock_t keylock;
-    LRU lru(TEST_HOMEDIR, keylock, no_id);
+    lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
     lru.put("cache/b/fresh", now - 60);
 
@@ -67,7 +67,7 @@ TEST_SUITE("LRU") {
 
   TEST_CASE("cold_list rebuilt when exhausted") {
     keylock_t keylock;
-    LRU lru(TEST_HOMEDIR, keylock, no_id);
+    lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
     lru.put("cache/b/a", now - 700);
     lru.put("cache/b/b", now - 800);
@@ -85,7 +85,7 @@ TEST_SUITE("LRU") {
 
   TEST_CASE("scan_insert batch populates map") {
     keylock_t keylock;
-    LRU lru(TEST_HOMEDIR, keylock, no_id);
+    lru_t lru(TEST_HOMEDIR, keylock, no_id);
     time_t now = time(nullptr);
     std::vector<std::pair<std::string, time_t>> batch = {
         {"cache/b/x", now - 400},

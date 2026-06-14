@@ -7,39 +7,40 @@ static constexpr int EVICT_MIN_AGE_S = 300;
 static constexpr int LOW_THRESHOLD = 70;
 static constexpr int HIGH_THRESHOLD = 90;
 
-LRU::LRU(const std::string &homedir, keylock_t &keylock,
-         std::function<uint32_t(const std::string &)> id_fn)
+lru_t::lru_t(const std::string &homedir, keylock_t &keylock,
+             std::function<uint32_t(const std::string &)> id_fn)
     : homedir_(homedir), keylock_(keylock), id_fn_(std::move(id_fn)) {}
 
-void LRU::put(const std::string &relpath, time_t mtime) {
+void lru_t::put(const std::string &relpath, time_t mtime) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.insert_or_assign(relpath, LRUEntry{mtime, id_fn_(relpath)});
 }
 
-void LRU::drop(const std::string &relpath) {
+void lru_t::drop(const std::string &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.erase(relpath);
 }
 
-void LRU::touch(const std::string &relpath) {
+void lru_t::touch(const std::string &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   auto it = map_.find(relpath);
   if (it != map_.end())
     it->second.mtime = time(nullptr);
 }
 
-void LRU::batch_put(const std::vector<std::pair<std::string, time_t>> &batch) {
+void lru_t::batch_put(
+    const std::vector<std::pair<std::string, time_t>> &batch) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   for (const auto &[relpath, mtime] : batch)
     map_[relpath] = {mtime, id_fn_(relpath)};
 }
 
-size_t LRU::size() {
+size_t lru_t::size() {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   return map_.size();
 }
 
-int LRU::disk_usepct() {
+int lru_t::disk_usepct() {
   struct statvfs st;
   if (statvfs(homedir_.c_str(), &st) < 0)
     return 0;
@@ -50,7 +51,7 @@ int LRU::disk_usepct() {
   return static_cast<int>(100 * (st.f_blocks - st.f_bavail) / st.f_blocks);
 }
 
-double LRU::disk_used_gib() {
+double lru_t::disk_used_gib() {
   struct statvfs st;
   if (statvfs(homedir_.c_str(), &st) < 0)
     return 0.0;
@@ -58,12 +59,12 @@ double LRU::disk_used_gib() {
          (1024.0 * 1024.0 * 1024.0);
 }
 
-bool LRU::disk_error() {
+bool lru_t::disk_error() {
   struct statvfs st;
   return statvfs(homedir_.c_str(), &st) < 0;
 }
 
-void LRU::rebuild_cold_list_locked() {
+void lru_t::rebuild_cold_list_locked() {
   while (!cold_list_.empty())
     cold_list_.pop();
 
@@ -75,7 +76,7 @@ void LRU::rebuild_cold_list_locked() {
   }
 }
 
-bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
+bool lru_t::evict_one(const std::function<void(const std::string &)> &del_cb) {
   std::unique_lock<std::mutex> map_lock(map_mtx_);
 
   if (cold_list_.empty())
@@ -130,20 +131,21 @@ bool LRU::evict_one(const std::function<void(const std::string &)> &del_cb) {
   return false;
 }
 
-void LRU::scan(
+void lru_t::scan(
     const std::function<void(const std::string &, time_t, uint32_t)> &cb) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   for (const auto &[relpath, entry] : map_)
     cb(relpath, entry.mtime, entry.relpath_id);
 }
 
-time_t LRU::get_mtime(const std::string &relpath) {
+time_t lru_t::get_mtime(const std::string &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   auto it = map_.find(relpath);
   return it != map_.end() ? it->second.mtime : 0;
 }
 
-void LRU::maybe_evict(const std::function<void(const std::string &)> &del_cb) {
+void lru_t::maybe_evict(
+    const std::function<void(const std::string &)> &del_cb) {
   int pct = disk_usepct();
   if (pct < LOW_THRESHOLD)
     return;

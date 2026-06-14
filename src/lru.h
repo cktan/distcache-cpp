@@ -32,13 +32,13 @@ struct LRUEntry {
 //
 // All map operations are serialized under map_mtx_. Disk usage is checked
 // via statvfs() on every insert — no background polling thread.
-class LRU {
+class lru_t {
 public:
   // homedir: filesystem root for statvfs() disk-pressure checks.
   // keylock: coordinates eviction with in-flight S3 fetches.
   // id_fn: computes the ring relpath_id for a given relpath.
-  LRU(const std::string &homedir, keylock_t &keylock,
-      std::function<uint32_t(const std::string &)> id_fn);
+  lru_t(const std::string &homedir, keylock_t &keylock,
+        std::function<uint32_t(const std::string &)> id_fn);
 
   // Add or update an entry. relpath_id is computed via id_fn.
   void put(const std::string &relpath, time_t mtime);

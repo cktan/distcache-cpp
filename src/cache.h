@@ -1,8 +1,21 @@
 #pragma once
 #include "rc.h"
+#include <cassert>
 #include <functional>
 #include <string>
 #include <string_view>
+
+class relpath_t {
+  std::string val_;
+
+public:
+  relpath_t() = default;
+  explicit relpath_t(std::string val) : val_(std::move(val)) {
+    assert(val_.starts_with("cache/") || val_.starts_with("tmp/"));
+  }
+
+  const std::string &str() const { return val_; }
+};
 
 // ── Low-level helpers (operate on absolute paths) ────────────────────────────
 

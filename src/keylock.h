@@ -4,6 +4,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <vector>
 
 // Per-key serialization: first caller fetches, subsequent callers wait.
 // Implements classic exclusive-lock semantics.
@@ -31,4 +32,8 @@ private:
 
   std::mutex map_mtx_;
   std::unordered_map<std::string, std::shared_ptr<Entry>> map_;
+  std::vector<std::shared_ptr<Entry>> freelist_; // guarded by map_mtx_
+
+  // Must be called under map_mtx_.
+  std::shared_ptr<Entry> alloc_entry();
 };

@@ -91,7 +91,7 @@ void Rebalancer::start() {
     }
 
     if (type == "evict") {
-      node_.lru.maybe_evict(
+      node_.cache.maybe_evict(
           [this](const std::string &p) { node_.cache.drop(p); });
       return;
     }
@@ -131,15 +131,16 @@ Rebalancer::scan_for_peer(const std::string &peer_addr) {
   using Entry = std::pair<time_t, std::string>;
   std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap;
 
-  node_.lru.scan([&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
-    if (mtime < cutoff)
-      return;
-    if (ring->successor(rp_id) != peer_addr)
-      return;
-    heap.push({mtime, relpath});
-    if (heap.size() > 50)
-      heap.pop();
-  });
+  node_.cache.scan(
+      [&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
+        if (mtime < cutoff)
+          return;
+        if (ring->successor(rp_id) != peer_addr)
+          return;
+        heap.push({mtime, relpath});
+        if (heap.size() > 50)
+          heap.pop();
+      });
 
   std::vector<std::pair<std::string, time_t>> result;
   result.reserve(heap.size());
@@ -266,7 +267,6 @@ void Rebalancer::pull_one(const std::string &src_addr,
     }
     if (mt == 0)
       mt = time(nullptr);
-    node_.lru.put(relpath, mt);
     node_.jobq.put("evict");
     node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
   }

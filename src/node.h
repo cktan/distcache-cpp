@@ -4,7 +4,6 @@
 #include "feed.h"
 #include "http.h"
 #include "keylock.h"
-#include "lru.h"
 #include "membership.h"
 #include "rebalance.h"
 #include "ring.h"
@@ -14,20 +13,24 @@
 
 struct Node {
   Config config;
+  keylock_t keylock;
   cache_t cache;
   Stats stats;
   std::atomic<std::shared_ptr<ring_t>> ring{std::make_shared<ring_t>()};
-  keylock_t keylock;
   feed_t feed;
   feed_t jobq;
-  lru_t lru;
   Membership membership;
   Rebalancer rebalancer;
   HttpServer http;
 
-  Node()
-      : lru(config.homedir, keylock, ring_t::compute_id), membership(*this),
-        rebalancer(*this), http(*this) {}
+  Node(const std::string &homedir, const std::string &addr,
+       uint32_t first_id = 0)
+      : cache(homedir, keylock), membership(*this), rebalancer(*this),
+        http(*this) {
+    config.homedir = homedir;
+    config.addr = addr;
+    config.first_id = first_id;
+  }
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
 };

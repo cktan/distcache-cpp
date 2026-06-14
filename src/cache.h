@@ -1,9 +1,13 @@
 #pragma once
+#include "keylock.h"
+#include "lru.h"
 #include "rc.h"
+#include "ring.h"
 #include <cassert>
 #include <functional>
 #include <string>
 #include <string_view>
+#include <vector>
 
 class relpath_t {
   std::string val_;
@@ -30,30 +34,31 @@ public:
 // The fd_t read overload supports the open-before-unlock pattern: open the
 // file under keylock, release the lock, then read from the fd. The fd keeps
 // the inode alive even if the file is subsequently unlinked.
+//
+// cache_t owns the lru_t. cache_t::read/write/move/drop update the lru
+// automatically; callers do not touch the lru directly.
 
 class cache_t {
   std::string homedir_;
+  lru_t lru_;
 
 public:
-  cache_t() = default;
-  cache_t(const std::string &homedir);
+  cache_t(const std::string &homedir, keylock_t &keylock);
 
   // True if relpath exists and is readable.
   bool exists(const relpath_t &relpath) const;
 
-  // Open relpath O_RDONLY and return fd. Caller may release the keylock
-  // before reading; inode survives unlink while fd is open.
+  // Open relpath O_RDONLY, touch lru, return fd. Caller may release the
+  // keylock before reading; inode survives unlink while fd is open.
   rc_t read(const relpath_t &relpath, fd_t &fd);
 
-  // Create relpath with O_CREAT|O_EXCL|O_TRUNC and return writable fd.
-  // Used when the caller streams content directly (e.g. rebalance pull).
+  // Create relpath with O_CREAT|O_EXCL|O_TRUNC, register in lru, return fd.
   rc_t write(const relpath_t &relpath, fd_t &fd);
 
-  // Atomic rename from src_relpath to dest_relpath; creates dest parent dirs.
-  // Used after s3copy_fetch writes to a tmp path.
+  // Atomic rename src→dest; creates dest parent dirs; registers dest in lru.
   rc_t move(const relpath_t &src_relpath, const relpath_t &dest_relpath);
 
-  // Unlink relpath. ENOENT is not an error (idempotent).
+  // Unlink relpath and drop from lru. ENOENT is not an error (idempotent).
   rc_t drop(const relpath_t &relpath);
 
   // Generate a unique tmp relpath under tmp/.
@@ -67,4 +72,20 @@ public:
 
   // Walk cache/ subtree, calling cb(relpath, mtime) for each file.
   void scan_cache(const std::function<void(const std::string &, time_t)> &cb);
+
+  // ── LRU forwarding ─────────────────────────────────────────────────────────
+
+  void batch_put(const std::vector<std::pair<std::string, time_t>> &batch);
+
+  void maybe_evict(const std::function<void(const std::string &)> &del_cb);
+
+  void scan(const std::function<void(const std::string &relpath, time_t mtime,
+                                     uint32_t relpath_id)> &cb);
+
+  time_t get_mtime(const std::string &relpath);
+
+  size_t size();
+  int disk_usepct();
+  double disk_used_gib();
+  bool disk_error();
 };

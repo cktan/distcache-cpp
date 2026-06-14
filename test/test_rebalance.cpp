@@ -11,13 +11,12 @@
 // ─────────────────────────────────────────────────────
 
 TEST_CASE("lru scan returns inserted entries") {
-  Node node;
-  node.lru.put("cache/b/k1", 1000);
-  node.lru.put("cache/b/k2", 2000);
-  node.lru.put("cache/b/k3", 3000);
+  Node node("/tmp", "127.0.0.1:9999");
+  node.cache.batch_put(
+      {{"cache/b/k1", 1000}, {"cache/b/k2", 2000}, {"cache/b/k3", 3000}});
 
   std::vector<std::tuple<std::string, time_t, uint32_t>> got;
-  node.lru.scan([&](const std::string &rp, time_t mt, uint32_t id) {
+  node.cache.scan([&](const std::string &rp, time_t mt, uint32_t id) {
     got.push_back({rp, mt, id});
   });
 
@@ -25,35 +24,35 @@ TEST_CASE("lru scan returns inserted entries") {
 }
 
 TEST_CASE("lru scan sees remove") {
-  Node node;
-  node.lru.put("cache/b/k1", 1000);
-  node.lru.put("cache/b/k2", 2000);
-  node.lru.drop("cache/b/k1");
+  Node node("/tmp", "127.0.0.1:9999");
+  node.cache.batch_put({{"cache/b/k1", 1000}, {"cache/b/k2", 2000}});
+  node.cache.drop(
+      relpath_t{"cache/b/k1"}); // ENOENT ignored; lru entry still dropped
 
   int count = 0;
-  node.lru.scan([&](const std::string &, time_t, uint32_t) { count++; });
+  node.cache.scan([&](const std::string &, time_t, uint32_t) { count++; });
   CHECK(count == 1);
 }
 
 TEST_CASE("lru get_mtime") {
-  Node node;
-  node.lru.put("cache/b/k1", 12345);
-  CHECK(node.lru.get_mtime("cache/b/k1") == 12345);
-  CHECK(node.lru.get_mtime("cache/b/missing") == 0);
+  Node node("/tmp", "127.0.0.1:9999");
+  node.cache.batch_put({{"cache/b/k1", 12345}});
+  CHECK(node.cache.get_mtime("cache/b/k1") == 12345);
+  CHECK(node.cache.get_mtime("cache/b/missing") == 0);
 }
 
 TEST_CASE("lru get_mtime updates after touch") {
-  Node node;
-  node.lru.put("cache/b/k1", 1000);
-  node.lru.touch("cache/b/k1");
-  CHECK(node.lru.get_mtime("cache/b/k1") > 1000);
+  Node node("/tmp", "127.0.0.1:9999");
+  node.cache.batch_put({{"cache/b/k1", 1000}});
+  node.cache.batch_put({{"cache/b/k1", time(nullptr)}});
+  CHECK(node.cache.get_mtime("cache/b/k1") > 1000);
 }
 
 // ── inject_node updates ring
 // ──────────────────────────────────────────────────
 
 TEST_CASE("inject_node adds node to ring") {
-  Node node;
+  Node node("/tmp", "127.0.0.1:9999");
   std::map<std::string, std::vector<uint32_t>> m;
   m["127.0.0.1:4001"] = ring_t::compute_ids("127.0.0.1:4001", 0);
   node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
@@ -74,7 +73,7 @@ TEST_CASE("inject_node adds node to ring") {
 // ─────────────────────────────────────────────────────────────
 
 TEST_CASE("scan_for_peer returns keys for the given peer") {
-  Node node;
+  Node node("/tmp", "127.0.0.1:9999");
   std::string node_a = "127.0.0.1:4001";
   std::string node_b = "127.0.0.1:4002";
   std::map<std::string, std::vector<uint32_t>> m;
@@ -86,14 +85,16 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
 
   time_t now = time(nullptr);
   std::vector<std::string> b_relpaths;
+  std::vector<std::pair<std::string, time_t>> batch;
   for (int i = 0; i < 20; i++) {
     std::string rp = "cache/bucket/key" + std::to_string(i);
     uint32_t rp_id = ring_t::compute_id(rp);
     std::string owner = ring->successor(rp_id);
-    node.lru.put(rp, now - i * 3600);
+    batch.push_back({rp, now - i * 3600});
     if (owner == node_b)
       b_relpaths.push_back(rp);
   }
+  node.cache.batch_put(batch);
 
   auto result = node.rebalancer.scan_for_peer(node_b);
 
@@ -105,7 +106,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
 }
 
 TEST_CASE("scan_for_peer skips entries older than 5 days") {
-  Node node;
+  Node node("/tmp", "127.0.0.1:9999");
   std::string node_a = "127.0.0.1:5001";
   std::string node_b = "127.0.0.1:5002";
   std::map<std::string, std::vector<uint32_t>> m;
@@ -122,7 +123,7 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
     uint32_t rp_id = ring_t::compute_id(rp);
     if (ring->successor(rp_id) == node_b) {
       old_rp = rp;
-      node.lru.put(rp, now - 6 * 86400);
+      node.cache.batch_put({{rp, now - 6 * 86400}});
       break;
     }
   }
@@ -135,7 +136,7 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
 }
 
 TEST_CASE("scan_for_peer caps at 50 entries") {
-  Node node;
+  Node node("/tmp", "127.0.0.1:9999");
   std::string node_a = "127.0.0.1:6001";
   std::string node_b = "127.0.0.1:6002";
   std::map<std::string, std::vector<uint32_t>> m;
@@ -144,10 +145,12 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
   node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
 
   time_t now = time(nullptr);
+  std::vector<std::pair<std::string, time_t>> batch;
   for (int i = 0; i < 200; i++) {
     std::string rp = "cache/big/key" + std::to_string(i);
-    node.lru.put(rp, now - i);
+    batch.push_back({rp, now - i});
   }
+  node.cache.batch_put(batch);
 
   auto result = node.rebalancer.scan_for_peer(node_b);
   CHECK(result.size() <= 50);
@@ -156,8 +159,7 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
 // ── relpath_to_bk (via pull_one boundary) ────────────────────────────────────
 
 TEST_CASE("pull_one returns early on bad relpath") {
-  Node node;
-  node.config.homedir = "/tmp/test_rebalance_homedir";
+  Node node("/tmp/test_rebalance_homedir", "127.0.0.1:9999");
   node.rebalancer.pull_one("127.0.0.1:9999", "bad/relpath", "0");
   node.rebalancer.pull_one("127.0.0.1:9999", "cache/only_bucket", "0");
 }

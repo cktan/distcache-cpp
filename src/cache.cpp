@@ -1,7 +1,9 @@
 #include "cache.h"
+#include "ring.h"
 #include "unique.h"
 #include <cstdio>
 #include <cstring>
+#include <ctime>
 #include <dirent.h>
 #include <fcntl.h>
 #include <filesystem>
@@ -64,7 +66,8 @@ static rc_t errno_to_rc(const std::string &msg) {
   return rc_t::err(rc_errcode_t::io, msg);
 }
 
-cache_t::cache_t(const std::string &homedir) : homedir_(homedir) {}
+cache_t::cache_t(const std::string &homedir, keylock_t &keylock)
+    : homedir_(homedir), lru_(homedir_, keylock, ring_t::compute_id) {}
 
 std::string cache_t::abspath(const relpath_t &relpath) const {
   return homedir_ + "/" + relpath.str();
@@ -79,18 +82,19 @@ rc_t cache_t::read(const relpath_t &relpath, fd_t &out) {
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
+  lru_.touch(relpath.str());
   return {};
 }
 
 rc_t cache_t::write(const relpath_t &relpath, fd_t &out) {
   rc_t rc = mkdirs(relpath);
-  if (!rc.ok()) {
+  if (!rc.ok())
     return rc;
-  }
   int fd = ::open(abspath(relpath).c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
+  lru_.put(relpath.str(), time(nullptr));
   return {};
 }
 
@@ -101,12 +105,15 @@ rc_t cache_t::move(const relpath_t &src_relpath,
     return rc;
   if (rename(abspath(src_relpath).c_str(), abspath(dest_relpath).c_str()) < 0)
     return errno_to_rc(strerror(errno));
+  lru_.put(dest_relpath.str(), time(nullptr));
   return {};
 }
 
+// TODO: drop() should be void. nobody cares if we can drop it.
 rc_t cache_t::drop(const relpath_t &relpath) {
   if (unlink(abspath(relpath).c_str()) < 0 && errno != ENOENT)
     return errno_to_rc(strerror(errno));
+  lru_.drop(relpath.str());
   return {};
 }
 
@@ -131,3 +138,28 @@ void cache_t::scan_cache(
     const std::function<void(const std::string &, time_t)> &cb) {
   walk(homedir_ + "/cache", "cache", cb);
 }
+
+void cache_t::batch_put(
+    const std::vector<std::pair<std::string, time_t>> &batch) {
+  lru_.batch_put(batch);
+}
+
+void cache_t::maybe_evict(
+    const std::function<void(const std::string &)> &del_cb) {
+  lru_.maybe_evict(del_cb);
+}
+
+void cache_t::scan(
+    const std::function<void(const std::string &relpath, time_t mtime,
+                             uint32_t relpath_id)> &cb) {
+  lru_.scan(cb);
+}
+
+time_t cache_t::get_mtime(const std::string &relpath) {
+  return lru_.get_mtime(relpath);
+}
+
+size_t cache_t::size() { return lru_.size(); }
+int cache_t::disk_usepct() { return lru_.disk_usepct(); }
+double cache_t::disk_used_gib() { return lru_.disk_used_gib(); }
+bool cache_t::disk_error() { return lru_.disk_error(); }

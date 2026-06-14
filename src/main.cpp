@@ -94,11 +94,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  Node node;
-  node.config.addr = addr_str;
-  node.config.homedir = homedir;
-  node.config.first_id = first_id;
-  node.cache = cache_t(homedir);
+  Node node(homedir, addr_str, first_id);
 
   if (!mkdir_p(homedir) || !mkdir_p(homedir + "/log") ||
       !mkdir_p(homedir + "/cache") || !wipe_dir(homedir + "/tmp")) {
@@ -133,14 +129,14 @@ int main(int argc, char **argv) {
     node.cache.scan_cache([&](const std::string &relpath, time_t mtime) {
       batch.push_back({relpath, mtime});
       if (batch.size() >= BATCH) {
-        node.lru.batch_put(batch);
+        node.cache.batch_put(batch);
         batch.clear();
       }
     });
     if (!batch.empty())
-      node.lru.batch_put(batch);
+      node.cache.batch_put(batch);
 
-    fprintf(stderr, "startup scan complete: %zu entries\n", node.lru.size());
+    fprintf(stderr, "startup scan complete: %zu entries\n", node.cache.size());
   });
   scan_thread.detach();
 

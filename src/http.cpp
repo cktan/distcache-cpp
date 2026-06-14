@@ -101,7 +101,7 @@ static void handle_get(Node &node, const httplib::Request &req,
         bool dest_alive =
             std::find(peers.begin(), peers.end(), dest) != peers.end();
         if (dest_alive) {
-          time_t mt = node.lru.get_mtime(relpath);
+          time_t mt = node.cache.get_mtime(relpath);
           std::string mt_str = std::to_string(mt ? mt : time(nullptr));
           node.jobq.put("hint_pull", dest.c_str(), relpath.c_str(),
                         mt_str.c_str());
@@ -122,9 +122,6 @@ static void handle_get(Node &node, const httplib::Request &req,
     }
     if (delete_after) {
       node.cache.drop(relpath);
-      node.lru.drop(relpath);
-    } else {
-      node.lru.touch(relpath);
     }
     node.feed.put("cache.hit", relpath.c_str());
     node.stats.hits++;
@@ -158,7 +155,7 @@ static void handle_get(Node &node, const httplib::Request &req,
             st->done = true;
             return true;
           }
-          std::string fin = meta_fin();
+          std::string fin = wire_fin();
           sink.write(fin.data(), fin.size());
           sink.done();
           st->done = true;
@@ -187,7 +184,6 @@ static void handle_get(Node &node, const httplib::Request &req,
       send_raw(res, wire_err("fetch failed"));
       return;
     }
-    node.lru.touch(relpath);
     node.stats.served++;
     send_raw(res, wire_data(data.data(), data.size()));
     return;
@@ -210,7 +206,6 @@ static void handle_get(Node &node, const httplib::Request &req,
   }
 
   node.feed.put("s3copy.ok", relpath.c_str());
-  node.lru.put(relpath, time(nullptr));
   node.jobq.put("evict");
 
   fd_t fd2;
@@ -251,15 +246,15 @@ static void handle_health(Node &node, const httplib::Request &,
 
   char used_gib_buf[32];
   snprintf(used_gib_buf, sizeof(used_gib_buf), "%.2f",
-           node.lru.disk_used_gib());
+           node.cache.disk_used_gib());
 
   res.status = 200;
   res.set_header("Content-Type", "application/json");
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      node.config.addr, upsince, upfor, nodes, node.lru.size(),
-      node.lru.disk_usepct(), used_gib_buf,
-      node.lru.disk_error() ? "true" : "false", node.stats.hits.load(),
+      node.config.addr, upsince, upfor, nodes, node.cache.size(),
+      node.cache.disk_usepct(), used_gib_buf,
+      node.cache.disk_error() ? "true" : "false", node.stats.hits.load(),
       node.stats.misses.load(), node.stats.served.load(),
       node.stats.redirects.load(), node.stats.errors.load(),
       node.stats.hint_pull.load(), peers_json);
@@ -337,7 +332,6 @@ static void handle_put(Node &node, const httplib::Request &req,
     send_raw(res, wire_err("write failed"));
     return;
   }
-  node.lru.put(relpath, time(nullptr));
   node.jobq.put("evict");
   send_raw(res, wire_fin());
 }
@@ -356,7 +350,6 @@ static void handle_delete(Node &node, const httplib::Request &req,
   }
   const std::string &relpath = *relpath_opt;
   node.cache.drop(relpath);
-  node.lru.drop(relpath);
   send_raw(res, wire_fin());
 }
 

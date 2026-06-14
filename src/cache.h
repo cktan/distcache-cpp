@@ -17,14 +17,6 @@ public:
   const std::string &str() const { return val_; }
 };
 
-// ── Low-level helpers (operate on absolute paths) ────────────────────────────
-
-// Read entire file content into data. Returns false on error.
-// bool cache_read(const std::string &abspath, std::string &data);
-
-// Delete abspath. Returns true if deleted or already absent.
-bool cache_del(const std::string &abspath);
-
 // ── cache_t — OO wrapper around the file cache ───────────────────────────────
 //
 // Manages cached objects stored as files under <homedir>/cache/.

@@ -27,10 +27,6 @@ bool cache_read(const std::string &abspath, std::string &data) {
   return true;
 }
 
-bool cache_del(const std::string &abspath) {
-  return unlink(abspath.c_str()) == 0 || errno == ENOENT;
-}
-
 static void walk(const std::string &dir, const std::string &relbase,
                  const std::function<void(const std::string &, time_t)> &cb) {
   DIR *d = opendir(dir.c_str());

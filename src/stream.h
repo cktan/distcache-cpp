@@ -1,5 +1,4 @@
 #pragma once
-#include <stdbool.h>
 #include <stddef.h>
 #include <sys/types.h>
 
@@ -21,15 +20,17 @@ typedef struct {
 typedef int (*writer_fn)(void *ctx, const char *buf, size_t n);
 
 /* rfn: return bytes read, 0=EOF, -1=error */
-/* if readline is true, stop at the first newline */
 typedef ssize_t (*reader_fn)(void *ctx, char *buf, size_t n);
 
-/* Write one frame (TYPE:LEN\n[payload]). Returns 0=ok, -1=failure. */
+/* Write one frame (TYPE:LEN\n[payload]). Returns 0=ok, -1=failure.
+   Fails if len > 8192. */
 int stream_out(writer_fn wfn, void *ctx, frame_type_t type, const char *payload,
                size_t len);
 
 /* Read one frame. Returns 0=ok, -1=error, 1=clean EOF before frame start. */
-int stream_in(reader_fn rfn, void *ctx, frame_t *out);
+/* caller to stream_in should start with a zeroed-out frame, and use the
+   same frame for subsequent calls. */
+int stream_in(reader_fn rfn, void *ctx, frame_t *fram);
 
 /* Convenience wrappers for plain file descriptors. */
 int stream_out_fd(int fd, frame_type_t type, const char *payload, size_t len);

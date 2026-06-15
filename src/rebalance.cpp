@@ -161,18 +161,17 @@ struct StreamState {
 
 // Parse one network chunk. fd is opened lazily on the first DATA frame so
 // that an ERROR+FIN response never creates a file at the cache path.
-static bool recv_file(const char *data, size_t data_length, StreamState &state,
+static bool recv_file(const char *data, size_t datasz, StreamState &state,
                       fd_t &fd, const std::string &relpath, cache_t &cache) {
   const char *p = data;
-  size_t rem = data_length;
-  while (rem > 0) {
-    int consumed = stream_in_push(&state.fp, p, rem);
+  const char* q = data + datasz;
+  while (p < q) {
+    int consumed = stream_in_push(&state.fp, p, q - p);
     if (consumed < 0) {
       state.ok = false;
       return false;
     }
     p += consumed;
-    rem -= (size_t)consumed;
     if (!state.fp.complete)
       continue;
 

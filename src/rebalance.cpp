@@ -152,12 +152,12 @@ Rebalancer::scan_for_peer(const std::string &peer_addr) {
 }
 
 struct StreamState {
-  std::string header_buf;              // partial frame header accumulated across chunks
+  std::string header_buf; // partial frame header accumulated across chunks
   enum Phase { HEADER, DATA, SKIP } phase = HEADER;
-  size_t seg_remaining = 0;           // payload bytes left in current frame
-  bool fd_opened = false;             // true once cache.write() created the output file
-  bool is_fin = false;                // true once FIN frame seen
-  bool ok = true;                     // false if any ERROR frame or write failure
+  size_t seg_remaining = 0; // payload bytes left in current frame
+  bool fd_opened = false;   // true once cache.write() created the output file
+  bool is_fin = false;      // true once FIN frame seen
+  bool ok = true;           // false if any ERROR frame or write failure
 };
 
 // Parse one network chunk. fd is opened lazily on the first DATA frame so
@@ -193,7 +193,7 @@ static bool recv_file(const char *data, size_t data_length, StreamState &state,
           }
           state.fd_opened = true;
         }
-	// next phase after HEADER phase is StreamState::DATA
+        // next phase after HEADER phase is StreamState::DATA
         state.phase = StreamState::DATA;
       } else if (hv.compare(0, 6, "ERROR:") == 0) {
         state.ok = false;
@@ -202,7 +202,7 @@ static bool recv_file(const char *data, size_t data_length, StreamState &state,
         } catch (...) {
           state.seg_remaining = 0;
         }
-	// next phase after encountering ERROR is StreamState::SKIP
+        // next phase after encountering ERROR is StreamState::SKIP
         state.phase = StreamState::SKIP;
       } else if (hv.compare(0, 5, "INFO:") == 0) {
         try {

@@ -11,6 +11,10 @@ Where:
   - `\n`      — newline delimiter after the header line
   - payload   — exactly LENGTH bytes; no trailing newline
 
+The entire `TYPE:LENGTH\n` line, including the trailing
+newline, must not exceed **50 bytes**. Implementations may
+use a fixed 50-byte buffer when reading the header.
+
 ## Frame types
 
 | Type       | Payload   | Meaning                                      |

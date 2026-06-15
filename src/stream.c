@@ -20,7 +20,7 @@ static const char *frame_type_str(frame_type_t t) {
 
 int stream_out(writer_fn wfn, void *ctx, frame_type_t type, const char *payload,
                size_t len) {
-  char hdr[64];
+  char hdr[50];
   int hlen = snprintf(hdr, sizeof(hdr), "%s:%zu\n", frame_type_str(type), len);
   if (hlen <= 0 || (size_t)hlen >= sizeof(hdr))
     return -1;
@@ -32,7 +32,7 @@ int stream_out(writer_fn wfn, void *ctx, frame_type_t type, const char *payload,
 }
 
 int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
-  char hdr[65];
+  char hdr[50];
   int hlen = 0;
 
   for (;;) {
@@ -44,7 +44,7 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
       return -1;
     if (c == '\n')
       break;
-    if (hlen >= 64)
+    if (hlen >= 49)
       return -1;
     hdr[hlen++] = c;
   }

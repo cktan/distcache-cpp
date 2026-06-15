@@ -44,7 +44,8 @@ int stream_in_fd(int fd, frame_t *out);
 typedef struct {
   char *colon;   /* points to ':' in raw[], NULL until found */
   char *newline; /* points to '\n' in raw[], NULL until found */
-  size_t top;    /* bytes filled in raw[] */
+  int top;       /* bytes filled in raw[] */
+  bool complete; /* true when full frame is in raw[] */
   char raw[8192 + 50];
 } push_frame_t;
 
@@ -54,7 +55,7 @@ static inline int push_frame_length(const push_frame_t *p) {
   if (p->colon && p->newline > p->colon) {
     char *ep;
     long len = strtol(p->colon + 1, &ep, 10);
-    if (ep == p->newline)
+    if (ep == p->newline && 0 <= len && len <= 1024 * 8)
       return len;
   }
   return -1;
@@ -63,18 +64,14 @@ static inline int push_frame_length(const push_frame_t *p) {
 /* Returns true when a complete, valid frame is in raw[]:
    header fits in 50 bytes, length 0..8192, and all payload bytes arrived. */
 static inline bool push_frame_is_complete(const push_frame_t *p) {
-  int len = push_frame_length(p);
-  if (!(0 <= len && len <= 8192))
-    return false;
-  if (p->newline - p->raw >= 50)
-    return false;
-  return (p->raw + p->top) >= (p->newline + 1 + len);
+  return p->complete;
 }
 
 /* Initialize parser before first use. Call again between frames. */
 static inline void push_frame_init(push_frame_t *p) {
   p->colon = p->newline = NULL;
   p->top = 0;
+  p->complete = false;
 }
 
 /* Push bytes into parser. Returns bytes consumed (0..n) or -1 on error.

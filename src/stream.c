@@ -131,50 +131,38 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
    error. Call push_frame_is_complete() after each call; consumed < n means
    the frame completed mid-buffer and buf[consumed..] belongs to the next
    frame. Zero-init p before first use; zero it again to start a new frame. */
-int stream_in_push(push_frame_t *p, const char *buf, size_t n) {
-  size_t consumed = 0;
-
+int stream_in_push(push_frame_t *fp, const char *buf, size_t n) {
+  const char* p = buf;
+  const char* q = buf + n;
+  
   /* Phase 1: accumulate header bytes until \n */
-  if (!p->newline) {
-    const char *nl = memchr(buf, '\n', n);
-    size_t to_copy = nl ? (size_t)(nl - buf + 1) : n;
-
-    if (p->top + to_copy > 50) return -1;
-
-    if (!p->colon) {
-      const char *col = memchr(buf, ':', to_copy);
-      if (col)
-        p->colon = p->raw + p->top + (size_t)(col - buf);
-    }
-
-    memcpy(p->raw + p->top, buf, to_copy);
-    p->top += to_copy;
-    consumed += to_copy;
-
-    if (!nl)
-      return (int)consumed;
-
-    p->newline = p->raw + p->top - 1;
-
-    if (!p->colon || p->colon >= p->newline) return -1;
-    char *ep;
-    long plen = strtol(p->colon + 1, &ep, 10);
-    if (ep != p->newline || plen < 0 || plen > 8192) return -1;
+  while (!fp->newline && p < q && fp->top < 50) {
+    char ch = *p++;
+    fp->raw[fp->top++] = ch;
+    if (ch == ':' && !fp->colon)
+      fp->colon = fp->raw + fp->top - 1;
+    if (ch == '\n')
+      fp->newline = fp->raw + fp->top - 1;
   }
+  if (!fp->newline) {
+    if (fp->top >= 50) return -1;
+    return p - buf;
+  }
+  if (!fp->colon || fp->colon >= fp->newline) return -1;
+  int plen = push_frame_length(fp);
+  if (plen < 0) return -1;
 
   /* Phase 2: accumulate payload */
-  char *ep;
-  long plen = strtol(p->colon + 1, &ep, 10);
-  size_t have = (size_t)((p->raw + p->top) - (p->newline + 1));
-  if (have >= (size_t)plen)
-    return (int)consumed;
-
-  size_t need = (size_t)plen - have;
-  size_t to_copy = need < (n - consumed) ? need : (n - consumed);
-  memcpy(p->raw + p->top, buf + consumed, to_copy);
-  p->top += to_copy;
-  consumed += to_copy;
-  return (int)consumed;
+  int have = &fp->raw[fp->top] - (fp->newline + 1);
+  int need = plen - have;
+  int avail = q - p;
+  int to_copy = (need < avail) ? need : avail;
+  memcpy(fp->raw + fp->top, p, to_copy);
+  fp->top += to_copy;
+  p += to_copy;
+  if (to_copy == need)
+    fp->complete = true;
+  return p - buf;
 }
 
 static int fd_writer(void *ctx, const char *buf, size_t n) {

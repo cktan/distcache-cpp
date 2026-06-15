@@ -27,20 +27,20 @@ First_id is used to override first ring ID for surgical placement.
 ## Startup
 
 ```
-./distcache -D <homedir> -N <host:port/port> [-p <seed>]...
+./distcache -D <homedir> -N <host:port[/first_id]> [-p <seed>]...
 ```
 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `-D <homedir>` | yes | Root for `cache/`, `tmp/` |
-| `-N <host:port/first_id>` | yes | Node identity; sets HTTP listen address |
-| `-p <host:port/first_id>` | no, repeatable | Bootstrap SWIM peer(s) |
+| `-N <host:port[/first_id]>` | yes | Node identity (nodeid); sets HTTP listen address |
+| `-p <host:port[/first_id]>` | no, repeatable | Bootstrap SWIM peer(s) |
 
 **Startup sequence:**
 
 1. Parse flags (order-independent).
-2. Construct `Node node` and populate `node.config`
-   (`host`, `port`, `addr`, `homedir`, `first_id`).
+2. Construct `Node node(homedir, nodeid)` — populates
+   `node.config.nodeid` and `node.config.homedir`.
 3. `mkdir -p homedir/log homedir/cache`; wipe and recreate
    `homedir/tmp` (removes crash-orphaned tmp files).
 4. Acquire PID lock (`homedir/dist_cache.lock`).
@@ -85,18 +85,19 @@ Each node is identified by `"host:port"` from the `-N` flag.
 ```
 hash(prev, input) = FNV-1a-64(str(prev) + ":" + input) mod 2^32
 
-id[0] = first_id  (if -I given)  OR  hash(0, "host:port")
+id[0] = first_id  (if /first_id given in nodeid)  OR  hash(0, "host:port")
 id[n] = hash(id[n-1], "host:port:" + str(id[n-1]))   n ≥ 1
 ```
 
 Ring space: `[0, 2^32)`. On ID collision, the
 lexicographically smaller node name wins.
 
-**Surgical placement:** `-I <firstid>` lets an operator
-place a node at a specific ring position. Choosing an ID
-between an overloaded node and its predecessor splits that
-node's keyspace without touching anyone else's. All 10 IDs
-shift together since they chain from `id[0]`.
+**Surgical placement:** The `/first_id` suffix in `-N`
+lets an operator place a node at a specific ring position.
+Choosing an ID between an overloaded node and its
+predecessor splits that node's keyspace without touching
+anyone else's. All 10 IDs shift together since they
+chain from `id[0]`.
 
 ### Key routing
 
@@ -126,32 +127,32 @@ isolation.
 
 ```
 struct Node {
-    Config   config;    // host, port, addr, homedir, first_id
+    Config   config;    // nodeid ("host:port/first_id"), homedir
+    keylock_t keylock;  // per-key S3 fetch serialization
+    cache_t  cache;     // file cache + embedded lru_t
     Stats    stats;     // atomic hit/miss/error counters
     atomic<shared_ptr<ring_t>> ring;
-    KeyLock  keylock;   // per-key S3 fetch serialization
-    Feed     feed;      // SWIM + telemetry feed
-    Feed     jobq;      // async job queue
-    lru_t    lru;       // mtime-keyed eviction map
+    feed_t   feed;      // SWIM + telemetry feed
+    feed_t   jobq;      // async job queue
     Membership  membership;
     Rebalancer  rebalancer;
     HttpServer  http;
 };
 ```
 
-**Active classes** (`lru_t`, `HttpServer`, `Membership`,
+**Active classes** (`HttpServer`, `Membership`,
 `Rebalancer`) take `Node&` in their constructors and store
 it as `node_`. All cross-component access happens at runtime
 through `node_.*`, not at construction time, so member
 initialization order does not create circular dependencies.
 
-**Passive types** (`Config`, `Stats`, `KeyLock`, `Feed`,
-`Ring`) have no cross-component dependencies and remain
-default-constructible.
+**`cache_t`** owns `lru_t` internally. Callers interact
+with LRU state via `cache_t` methods (`scan`, `get_mtime`,
+`maybe_evict`, `batch_put`, `size`, `disk_usepct`).
 
-**Free functions** in `cache.cpp` and `s3copy.cpp` that
-previously read `g_config.homedir` now take an explicit
-`const std::string& homedir` parameter.
+**Passive types** (`Config`, `Stats`, `keylock_t`, `feed_t`,
+`ring_t`) have no cross-component dependencies and are
+default-constructible.
 
 ---
 
@@ -243,6 +244,7 @@ cpp-httplib thread-per-request server. Routes:
 
 | Method | Path | Handler |
 |--------|------|---------|
+| `GET` | `/_health` | JSON health + stats |
 | `GET` | `/{bucket}/{key}` | Cache read or S3 fetch |
 | `PUT` | `/{bucket}/{key}` | Cache write |
 | `DELETE` | `/{bucket}/{key}` | Cache delete |
@@ -276,21 +278,30 @@ in memory.
 ### Wire protocol (TYPE:LENGTH)
 
 ```
-DATA:<n>\n<n bytes>FIN:0\n     # successful GET body
+DATA:<n>\n<n bytes>            # one payload chunk (n ≤ 8192)
+...                            # repeated for large objects
+FIN:0\n                        # end of successful GET body
 REDIRECT:<host:port>\nFIN:0\n  # client must reconnect
 ERR:<message>\nFIN:0\n         # error
 FIN:0\n                        # empty success (PUT/DELETE)
 ```
 
 Every response ends with `FIN:0\n`. Missing FIN indicates
-truncation. Identical to the Elixir wire format — existing C
-and Python clients work unchanged.
+truncation. Large objects are split into consecutive DATA
+frames of ≤ 8 192 bytes each, followed by `FIN:0\n`.
+Identical to the Elixir wire format — existing C and
+Python clients work unchanged.
+
+The `stream.h` header exposes the framing layer as a C
+API (`stream_in`, `stream_out`, fd convenience wrappers,
+and the push-based `stream_in_push` / `push_frame_t` for
+non-blocking / `ContentReader` contexts).
 
 ---
 
-## Concurrent S3 fetch (KeyLock)
+## Concurrent S3 fetch (keylock_t)
 
-`KeyLock` prevents duplicate S3 fetches for concurrent
+`keylock_t` prevents duplicate S3 fetches for concurrent
 misses on the same key.
 
 `acquire(relpath)` returns `true` (owner) or `false`
@@ -306,9 +317,10 @@ last waiter or owner exits.
 
 ## LRU eviction
 
-`node.lru` tracks `{relpath → {mtime_posix, relpath_id}}`
-under a single `std::mutex`. LRU heat is approximated by
-mtime: hits call `touch()` (sets mtime to `time(nullptr)`).
+`node.cache` owns `lru_t`, which tracks
+`{relpath → {mtime_posix, relpath_id}}` under a single
+`std::mutex`. LRU heat is approximated by mtime: hits call
+`touch()` (sets mtime to `time(nullptr)`).
 
 ### Eviction policy (checked on every insert)
 
@@ -351,16 +363,19 @@ each alive peer:
 
 ```
 POST /_claim_keyspace
-{"addr": "host:port", "first_id": N}
+{"nodeid": "host:port/first_id"}
 ```
 
 Each receiving peer:
+1. Enqueues a `claim_scan` job to `node.jobq` (returns
+   immediately; the O(N) LRU scan runs off the handler
+   path).
+
+`claim_scan` worker:
 1. Injects the claimant into the ring (`inject_node`).
-2. Scans the LRU for entries whose ring successor is now the
-   claimant (`scan_for_peer` — top 50 hottest within 5
-   days).
-3. For each such entry, enqueues a `hint_pull` job to
-   `node.jobq`.
+2. Scans the LRU for entries whose ring successor is now
+   the claimant (top 50 hottest within 5 days).
+3. Enqueues a `hint_pull` job per matching key.
 
 ### On-hit hint (steady state)
 
@@ -380,8 +395,8 @@ the result.
 |----------|------|----------------------|
 | `hint_pull` | `dest_addr relpath mtime_str` | POSTs `/_hint_pull` to `dest_addr` telling it to pull `relpath` from us. Fired when the GET redirect branch finds the file locally or when `/_claim_keyspace` scan finds keys belonging to a claimant. |
 | `do_pull` | `src_addr relpath mtime_str` | Calls `pull_one(src, relpath, mtime)` to fetch `relpath` from `src_addr` into local cache. Enqueued by the `/_hint_pull` handler so that handler returns immediately. |
-| `claim_scan` | `addr first_id_str` | Calls `inject_node(addr, first_id)` to update the ring, scans the LRU for keys whose successor is `addr`, and enqueues a `hint_pull` job per matching key. Enqueued by the `/_claim_keyspace` handler to avoid blocking it on an O(N) LRU scan. |
-| `evict` | _(none)_ | Calls `node.lru.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
+| `claim_scan` | `nodeid` | Calls `inject_node(nodeid)` to update the ring, scans the LRU for keys whose successor is the claimant, and enqueues a `hint_pull` job per matching key. Enqueued by the `/_claim_keyspace` handler to avoid blocking it on an O(N) LRU scan. |
+| `evict` | _(none)_ | Calls `node.cache.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
 
 The worker POSTs `/_hint_pull` to `dest_addr`:
 
@@ -394,14 +409,14 @@ POST /_hint_pull
 
 The receiving node (new owner) calls `Rebalancer::pull_one`:
 1. Fast check: skip if `cache_exists`.
-2. Acquire `KeyLock` (prevents duplicate pulls).
+2. Acquire `keylock_t` (prevents duplicate pulls).
 3. Re-check `cache_exists` after acquire.
 4. `GET http://src/bucket/key?local=1&delete=1` using a
    streaming GET client receiver.
 5. Parse the `DATA:N\n` envelope header on the fly.
 6. Write payload chunks directly into the cache
    file descriptor (deleting file on failure).
-7. Release `KeyLock`.
+7. Release `keylock_t`.
 
 `?delete=1` tells the source to delete its copy after
 serving — no second round-trip.
@@ -444,21 +459,26 @@ does the atomic rename.
 | Component | Kind | Responsibility |
 |-----------|------|----------------|
 | `main.cpp` | entry point | flag parsing, Node construction, dir setup, lifecycle |
-| `node.h` | struct | owns all shared state; wired together in `Node()` |
+| `node.h` | struct | owns all shared state; wired together in `Node(homedir, nodeid)` |
+| `config.h` | struct | `Config` — `nodeid`, `homedir` |
 | `fnv.h` | inline | FNV-1a-64, `ring_hash(prev, input)` |
 | `ring.h/.cpp` | plain | chord ring: sorted vector, binary search, 10-ID chain |
 | `relpath.h/.cpp` | plain | `compute_relpath`, `to_abs`, path validation |
+| `rc.h/.cpp` | plain | `rc_t` typed error result; `fd_t` RAII file descriptor |
+| `unique.h/.cpp` | plain | `unique_get()` — atomic monotonic counter for tmp names |
 | `pidlock.h/.cpp` | plain | `O_CREAT\|O_EXCL` PID lock, stale-check via `kill(pid,0)` |
-| `feed.h/.cpp` | class | `swim_feed_t` wrapper + consumer thread; `put(n,...)` |
+| `feed.h/.cpp` | class | `feed_t`: `swim_feed_t` wrapper + consumer thread; `put(n,...)` |
 | `membership.h/.cpp` | class | SWIM lifecycle, ring rebuild, inject_node, claim sweep |
-| `cache.h/.cpp` | plain | file read/write (tmp+rename), `scan_cache`, `cache_exists` |
+| `cache.h/.cpp` | class | `cache_t`: file read/write (tmp+rename), owns `lru_t`, exposes LRU forwarding methods |
 | `lru.h/.cpp` | class | mtime-keyed map, disk-pressure eviction, scan, get_mtime |
-| `keylock.h/.cpp` | class | per-key condvar mutex; first caller owns, rest wait |
+| `keylock.h/.cpp` | class | `keylock_t`: per-key condvar mutex; first caller owns, rest wait |
+| `stats.h/.cpp` | struct | `Stats` — atomic hit/miss/served/redirect/error/hint_pull counters |
 | `s3copy.h/.cpp` | plain | POST to sidecar `/copy`; configurable via `S3COPY_URL` |
+| `stream.h` | C API | wire framing: `stream_in/out`, fd wrappers, `push_frame_t`/`stream_in_push` |
 | `wire.h/.cpp` | plain | TYPE:LENGTH encode (`wire_data`, `wire_redirect`, etc.) |
-| `http.h/.cpp` | class | cpp-httplib routes; GET/PUT/DELETE + 2 POST inter-node |
+| `http.h/.cpp` | class | cpp-httplib routes; `/_health` + GET/PUT/DELETE + 2 POST inter-node |
 | `rebalance.h/.cpp` | class | `Rebalancer`: scan_for_peer, pull_one, claim_sweep; drives `node.jobq` |
-| `config.h` | struct | `Config` — host, port, addr, homedir, first_id |
+| `client/distcache.h` | C API | client library: `dc_init`, `dc_get`, `dc_health`, `dc_housekeeping` |
 
 ---
 
@@ -504,9 +524,8 @@ real node processes. The rebalance smoke test
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `-D <homedir>` | _(required)_ | Root for `cache/`, `tmp/` |
-| `-N <host:port>` | _(required)_ | Node identity; HTTP listen address |
-| `-p <host:port>` | _(repeatable)_ | SWIM bootstrap peers |
-| `-I <firstid>` | 0 | Override ring position 0 for surgical placement |
+| `-N <host:port[/first_id]>` | _(required)_ | Node identity (nodeid); HTTP listen address |
+| `-p <host:port[/first_id]>` | _(repeatable)_ | SWIM bootstrap peers |
 | `S3COPY_URL` | `http://localhost:7777` | s3copy sidecar base URL |
 | `DC_CLAIM_DELAY_MS` | 20000 | Max startup claim-sweep delay (ms) |
 

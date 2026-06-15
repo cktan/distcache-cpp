@@ -2,7 +2,7 @@
 
 include Makefile.global
 
-DIRS       := src test
+DIRS       := src test client s3copy
 BUILDDIRS  := $(DIRS:%=build-%)
 CLEANDIRS  := $(DIRS:%=clean-%)
 TESTDIRS   := $(DIRS:%=test-%)

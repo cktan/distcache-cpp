@@ -164,7 +164,7 @@ struct StreamState {
 static bool recv_file(const char *data, size_t datasz, StreamState &state,
                       fd_t &fd, const std::string &relpath, cache_t &cache) {
   const char *p = data;
-  const char* q = data + datasz;
+  const char *q = data + datasz;
   while (p < q) {
     int consumed = stream_in_push(&state.fp, p, q - p);
     if (consumed < 0) {
@@ -172,8 +172,13 @@ static bool recv_file(const char *data, size_t datasz, StreamState &state,
       return false;
     }
     p += consumed;
-    if (!state.fp.complete)
+    if (!state.fp.complete) {
+      if (consumed == 0) {
+        state.ok = false;
+        return false;
+      }
       continue;
+    }
 
     int plen = push_frame_length(&state.fp);
     const char *wp = state.fp.newline + 1;

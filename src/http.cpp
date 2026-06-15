@@ -73,6 +73,20 @@ static int sink_writer(void *ctx, const char *buf, size_t n) {
   return static_cast<httplib::DataSink *>(ctx)->write(buf, n) ? 0 : -1;
 }
 
+static std::string wire_data_chunked(const char *buf, size_t len) {
+  std::string out;
+  const size_t CHUNK = 8192;
+  size_t off = 0;
+  do {
+    size_t n = std::min(CHUNK, len - off);
+    out += "DATA:" + std::to_string(n) + "\n";
+    out.append(buf + off, n);
+    off += n;
+  } while (off < len);
+  out += "FIN:0\n";
+  return out;
+}
+
 static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   char buf[4096];
   ssize_t n = ::read(fd.fd, buf, sizeof(buf));
@@ -185,7 +199,7 @@ static void handle_get(Node &node, const httplib::Request &req,
       return;
     }
     node.stats.served++;
-    send_raw(res, wire_data(data.data(), data.size()));
+    send_raw(res, wire_data_chunked(data.data(), data.size()));
     return;
   }
 

@@ -1,10 +1,10 @@
-HFILES  := distcache.h
+HFILES  := distcache.h ../src/stream.h
 CFILES  := distcache.c
-OBJ     := $(CFILES:.c=.o)
+OBJ     := distcache.o stream.o
 EXEC    := test_distcache
 LIB     := libdistcache.a
 
-CFLAGS  := -std=c17 -Wmissing-declarations -Wall -Wextra -MMD -pthread
+CFLAGS  := -std=c17 -Wmissing-declarations -Wall -Wextra -MMD -pthread -I../src
 LDFLAGS := -lcurl -pthread
 
 ifdef DEBUG
@@ -19,7 +19,10 @@ all: $(LIB) $(EXEC)
 $(LIB): $(OBJ)
 	ar rcs $@ $^
 
-$(EXEC): test_distcache.c distcache.c
+stream.o: ../src/stream.c ../src/stream.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(EXEC): test_distcache.c distcache.c ../src/stream.c
 	$(CC) $(CFLAGS) -DDC_TESTING -o $@ $^ $(LDFLAGS)
 
 *.o: $(HFILES)

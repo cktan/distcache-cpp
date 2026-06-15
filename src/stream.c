@@ -136,20 +136,25 @@ int stream_in_push(push_frame_t *p, const char *buf, size_t n) {
 
   /* Phase 1: accumulate header bytes until \n */
   if (!p->newline) {
-    for (; consumed < n; consumed++) {
-      if (p->top >= 50) return -1;
-      char c = buf[consumed];
-      p->raw[p->top++] = c;
-      if (!p->colon && c == ':')
-        p->colon = p->raw + p->top - 1;
-      if (c == '\n') {
-        p->newline = p->raw + p->top - 1;
-        consumed++;
-        break;
-      }
+    const char *nl = memchr(buf, '\n', n);
+    size_t to_copy = nl ? (size_t)(nl - buf + 1) : n;
+
+    if (p->top + to_copy > 50) return -1;
+
+    if (!p->colon) {
+      const char *col = memchr(buf, ':', to_copy);
+      if (col)
+        p->colon = p->raw + p->top + (size_t)(col - buf);
     }
-    if (!p->newline)
+
+    memcpy(p->raw + p->top, buf, to_copy);
+    p->top += to_copy;
+    consumed += to_copy;
+
+    if (!nl)
       return (int)consumed;
+
+    p->newline = p->raw + p->top - 1;
 
     if (!p->colon || p->colon >= p->newline) return -1;
     char *ep;

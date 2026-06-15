@@ -34,6 +34,8 @@
 
 - **Git Merges:** Always merge branches using `git merge --squash`.
 
+- **Building:** Always use `make -j4` (never plain `make`).
+
 - **Code Formatting:** Always run `make format` before committing.
 
 ### 2. Think Before Coding

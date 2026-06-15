@@ -127,6 +127,51 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
   return 0;
 }
 
+/* Push n bytes into the parser. Returns bytes consumed (0..n) or -1 on
+   error. Call push_frame_is_complete() after each call; consumed < n means
+   the frame completed mid-buffer and buf[consumed..] belongs to the next
+   frame. Zero-init p before first use; zero it again to start a new frame. */
+int stream_in_push(push_frame_t *p, const char *buf, size_t n) {
+  size_t consumed = 0;
+
+  /* Phase 1: accumulate header bytes until \n */
+  if (!p->newline) {
+    for (; consumed < n; consumed++) {
+      if (p->top >= 50) return -1;
+      char c = buf[consumed];
+      p->raw[p->top++] = c;
+      if (!p->colon && c == ':')
+        p->colon = p->raw + p->top - 1;
+      if (c == '\n') {
+        p->newline = p->raw + p->top - 1;
+        consumed++;
+        break;
+      }
+    }
+    if (!p->newline)
+      return (int)consumed;
+
+    if (!p->colon || p->colon >= p->newline) return -1;
+    char *ep;
+    long plen = strtol(p->colon + 1, &ep, 10);
+    if (ep != p->newline || plen < 0 || plen > 8192) return -1;
+  }
+
+  /* Phase 2: accumulate payload */
+  char *ep;
+  long plen = strtol(p->colon + 1, &ep, 10);
+  size_t have = (size_t)((p->raw + p->top) - (p->newline + 1));
+  if (have >= (size_t)plen)
+    return (int)consumed;
+
+  size_t need = (size_t)plen - have;
+  size_t to_copy = need < (n - consumed) ? need : (n - consumed);
+  memcpy(p->raw + p->top, buf + consumed, to_copy);
+  p->top += to_copy;
+  consumed += to_copy;
+  return (int)consumed;
+}
+
 static int fd_writer(void *ctx, const char *buf, size_t n) {
   int fd = *(int *)ctx;
   while (n > 0) {

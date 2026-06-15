@@ -1,5 +1,7 @@
 #pragma once
+#include <stdbool.h>
 #include <stddef.h>
+#include <stdlib.h>
 #include <sys/types.h>
 
 #ifdef __cplusplus
@@ -35,6 +37,51 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *fram);
 /* Convenience wrappers for plain file descriptors. */
 int stream_out_fd(int fd, frame_type_t type, const char *payload, size_t len);
 int stream_in_fd(int fd, frame_t *out);
+
+/* Push-based parser. Zero-init before first call; reset by zeroing again
+   after consuming a complete frame. Pointers colon/newline into raw[] become
+   dangling if the struct is copied — do not copy. */
+typedef struct {
+  char *colon;   /* points to ':' in raw[], NULL until found */
+  char *newline; /* points to '\n' in raw[], NULL until found */
+  size_t top;    /* bytes filled in raw[] */
+  char raw[8192 + 50];
+} push_frame_t;
+
+/* Returns declared payload length from header, or -1 if header incomplete
+   or malformed. Valid only after header \n has been received. */
+static inline int push_frame_length(const push_frame_t *p) {
+  if (p->colon && p->newline > p->colon) {
+    char *ep;
+    long len = strtol(p->colon + 1, &ep, 10);
+    if (ep == p->newline)
+      return len;
+  }
+  return -1;
+}
+
+/* Returns true when a complete, valid frame is in raw[]:
+   header fits in 50 bytes, length 0..8192, and all payload bytes arrived. */
+static inline bool push_frame_is_complete(const push_frame_t *p) {
+  int len = push_frame_length(p);
+  if (!(0 <= len && len <= 8192))
+    return false;
+  if (p->newline - p->raw >= 50)
+    return false;
+  return (p->raw + p->top) >= (p->newline + 1 + len);
+}
+
+/* Initialize parser before first use. Call again between frames. */
+static inline void push_frame_init(push_frame_t *p) {
+  p->colon = p->newline = NULL;
+  p->top = 0;
+}
+
+/* Push bytes into parser. Returns bytes consumed (0..n) or -1 on error.
+   Call push_frame_is_complete() after each call to check if frame is ready.
+   consumed < n means frame completed mid-buffer; remaining bytes start at
+   buf+consumed and belong to the next frame. */
+int stream_in_push(push_frame_t *p, const char *buf, size_t n);
 
 #ifdef __cplusplus
 }

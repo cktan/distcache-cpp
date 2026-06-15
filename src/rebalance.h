@@ -13,7 +13,7 @@ public:
   void start();
   void stop();
 
-  void claim_sweep(const std::string &self_addr, uint32_t first_id);
+  void claim_sweep(const std::string &nodeid);
 
   std::vector<std::pair<std::string, time_t>>
   scan_for_peer(const std::string &peer_addr);

@@ -53,7 +53,7 @@ void Rebalancer::start() {
       if (!split_addr(dest, host, port))
         return;
 
-      std::string body = "{\"src\":\"" + node_.config.addr +
+      std::string body = "{\"src\":\"" + node_.config.nodeid +
                          "\""
                          ",\"relpath\":\"" +
                          relpath +
@@ -73,15 +73,10 @@ void Rebalancer::start() {
       return;
     }
 
-    if (type == "claim_scan" && rec.size() >= 3) {
-      const std::string &addr = rec[1];
-      const std::string &first_id_s = rec[2];
-      uint32_t first_id = 0;
-      try {
-        first_id = (uint32_t)std::stoul(first_id_s);
-      } catch (...) {
-      }
-      node_.membership.inject_node(addr, first_id);
+    if (type == "claim_scan" && rec.size() >= 2) {
+      const std::string &nodeid = rec[1];
+      node_.membership.inject_node(nodeid);
+      auto [addr, fid] = Membership::parse_peer(nodeid);
       auto entries = scan_for_peer(addr);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
@@ -101,15 +96,12 @@ void Rebalancer::start() {
 
 void Rebalancer::stop() { node_.jobq.stop(); }
 
-void Rebalancer::claim_sweep(const std::string &self_addr, uint32_t first_id) {
+void Rebalancer::claim_sweep(const std::string &nodeid) {
   auto peers = node_.membership.alive_peers();
   if (peers.empty())
     return;
 
-  std::string body = "{\"addr\":\"" + self_addr +
-                     "\""
-                     ",\"first_id\":" +
-                     std::to_string(first_id) + "}";
+  std::string body = "{\"nodeid\":\"" + nodeid + "\"}";
 
   for (const auto &peer : peers) {
     std::string host;

@@ -30,31 +30,14 @@ static bool wipe_dir(const std::string &path) {
 }
 
 static void usage(const char *prog) {
-  fprintf(
-      stderr,
-      "Usage: %s -D <homedir> -N <host:port> [-I <firstid>] [-p <seed>]...\n",
-      prog);
-}
-
-static bool parse_addr(const std::string &s, std::string &host,
-                       uint16_t &port) {
-  size_t colon = s.rfind(':');
-  if (colon == std::string::npos)
-    return false;
-  host = s.substr(0, colon);
-  std::string port_s = s.substr(colon + 1);
-  char *end;
-  long p = strtol(port_s.c_str(), &end, 10);
-  if (*end || p <= 0 || p > 65535)
-    return false;
-  port = static_cast<uint16_t>(p);
-  return !host.empty();
+  fprintf(stderr,
+          "Usage: %s -D <homedir> -N <host:port[/first_id]> [-p <seed>]...\n",
+          prog);
 }
 
 int main(int argc, char **argv) {
   std::string homedir;
   std::string addr_str;
-  uint32_t first_id = 0;
   std::vector<std::string> seeds;
 
   for (int i = 1; i < argc; i++) {
@@ -62,14 +45,6 @@ int main(int argc, char **argv) {
       homedir = argv[++i];
     } else if (strcmp(argv[i], "-N") == 0 && i + 1 < argc) {
       addr_str = argv[++i];
-    } else if (strcmp(argv[i], "-I") == 0 && i + 1 < argc) {
-      char *end;
-      unsigned long v = strtoul(argv[++i], &end, 10);
-      if (*end) {
-        fprintf(stderr, "bad -I value\n");
-        return 1;
-      }
-      first_id = static_cast<uint32_t>(v);
     } else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
       seeds.push_back(argv[++i]);
     } else if (strcmp(argv[i], "--version") == 0) {
@@ -87,14 +62,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::string host;
-  uint16_t port;
-  if (!parse_addr(addr_str, host, port)) {
-    fprintf(stderr, "bad -N value: %s\n", addr_str.c_str());
-    return 1;
-  }
-
-  Node node(homedir, addr_str, first_id);
+  Node node(homedir, addr_str);
 
   if (!mkdir_p(homedir) || !mkdir_p(homedir + "/log") ||
       !mkdir_p(homedir + "/cache") || !wipe_dir(homedir + "/tmp")) {
@@ -115,7 +83,7 @@ int main(int argc, char **argv) {
 
   node.rebalancer.start();
 
-  if (!node.membership.start(host, port, first_id, seeds)) {
+  if (!node.membership.start(addr_str, seeds)) {
     node.rebalancer.stop();
     pidlock_release(lockpath);
     return 1;
@@ -140,10 +108,10 @@ int main(int argc, char **argv) {
   });
   scan_thread.detach();
 
-  fprintf(stderr, "distcache %s starting on %s:%d homedir=%s\n",
-          DISTCACHE_VERSION, host.c_str(), port, homedir.c_str());
+  fprintf(stderr, "distcache %s starting on %s homedir=%s\n", DISTCACHE_VERSION,
+          addr_str.c_str(), homedir.c_str());
 
-  node.http.start(host, port);
+  node.http.start(addr_str);
 
   node.feed.stop();
   node.membership.leave();

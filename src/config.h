@@ -1,9 +1,7 @@
 #pragma once
-#include <cstdint>
 #include <string>
 
 struct Config {
-  std::string addr; // "host:port"
+  std::string nodeid; // "host:port" or "host:port/first_id"
   std::string homedir;
-  uint32_t first_id = 0;
 };

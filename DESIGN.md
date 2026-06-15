@@ -14,18 +14,27 @@ responsible node on a cache miss.
 
 ---
 
+## Node Identity
+
+Nodes are identified by the string "host:port/first_id", where 
+first_id is an integer range [0..2^32):
+- first_id is optional
+- when first_id is not specified, the '/' is also optional.
+
+First_id is used to override first ring ID for surgical placement.
+
+
 ## Startup
 
 ```
-./distcache -D <homedir> -N <host:port> [-I <firstid>] [-p <seed>]...
+./distcache -D <homedir> -N <host:port/port> [-p <seed>]...
 ```
 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `-D <homedir>` | yes | Root for `cache/`, `tmp/` |
-| `-N <host:port>` | yes | Node identity; sets HTTP listen address |
-| `-I <firstid>` | no | Override first ring ID for surgical placement |
-| `-p <host:port>` | no, repeatable | Bootstrap SWIM peer(s) |
+| `-N <host:port/first_id>` | yes | Node identity; sets HTTP listen address |
+| `-p <host:port/first_id>` | no, repeatable | Bootstrap SWIM peer(s) |
 
 **Startup sequence:**
 

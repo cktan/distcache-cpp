@@ -6,7 +6,7 @@ struct Node;
 class HttpServer {
 public:
   explicit HttpServer(Node &n);
-  void start(const std::string &host, int port);
+  void start(const std::string &nodeid);
   void stop();
 
 private:

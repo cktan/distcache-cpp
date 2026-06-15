@@ -67,21 +67,33 @@ void Membership::rebuild_ring() {
           membership.size());
 }
 
-void Membership::inject_node(const std::string &addr, uint32_t first_id) {
+void Membership::inject_node(const std::string &nodeid) {
+  auto [addr, fid] = parse_peer(nodeid);
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
-    injected_[addr] = first_id;
+    injected_[addr] = fid;
   }
   rebuild_ring();
 }
 
-bool Membership::start(const std::string &host, uint16_t port,
-                       uint32_t first_id,
+bool Membership::start(const std::string &nodeid,
                        const std::vector<std::string> &seeds) {
-  self_addr_ = host + ":" + std::to_string(port);
-  first_id_ = first_id;
+  auto [addr, fid] = parse_peer(nodeid);
+  size_t colon = addr.rfind(':');
+  std::string host = addr.substr(0, colon);
+  std::string port_str = addr.substr(colon + 1);
+  char *end;
+  long p = strtol(port_str.c_str(), &end, 10);
+  if (*end || p <= 0 || p > 65535) {
+    fprintf(stderr, "membership.start: bad nodeid: %s\n", nodeid.c_str());
+    return false;
+  }
+  uint16_t port = static_cast<uint16_t>(p);
 
-  std::string cookie = first_id ? std::to_string(first_id) : "";
+  self_addr_ = addr;
+  first_id_ = fid;
+
+  std::string cookie = fid ? std::to_string(fid) : "";
 
   std::vector<const char *> seed_ptrs;
   for (const auto &s : seeds)
@@ -136,9 +148,7 @@ bool Membership::start(const std::string &host, uint16_t port,
     fprintf(stderr, "%s\n", line.c_str());
   });
 
-  std::string my_addr = self_addr_;
-  uint32_t my_first = first_id_;
-  std::thread([this, my_addr, my_first]() {
+  std::thread([this, nodeid]() {
     srand(static_cast<unsigned>(time(nullptr)) ^
           static_cast<unsigned>(getpid()));
     int max_ms = 20000;
@@ -150,7 +160,7 @@ bool Membership::start(const std::string &host, uint16_t port,
     }
     int delay_ms = 1000 + (rand() % max_ms);
     std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
-    node_.rebalancer.claim_sweep(my_addr, my_first);
+    node_.rebalancer.claim_sweep(nodeid);
   }).detach();
 
   return true;

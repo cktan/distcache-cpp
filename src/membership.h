@@ -44,13 +44,12 @@ class Membership {
 public:
   explicit Membership(Node &n);
 
-  bool start(const std::string &host, uint16_t port, uint32_t first_id,
-             const std::vector<std::string> &seeds);
+  bool start(const std::string &nodeid, const std::vector<std::string> &seeds);
   void leave();
   void hint_alive(const std::string &peer_addr);
   std::vector<std::string> alive_peers();
   void rebuild_ring();
-  void inject_node(const std::string &addr, uint32_t first_id);
+  void inject_node(const std::string &nodeid);
 
   static std::pair<std::string, uint32_t> parse_peer(const std::string &s);
   static std::string timestamp();

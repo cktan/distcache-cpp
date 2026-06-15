@@ -23,13 +23,11 @@ struct Node {
   Rebalancer rebalancer;
   HttpServer http;
 
-  Node(const std::string &homedir, const std::string &addr,
-       uint32_t first_id = 0)
+  Node(const std::string &homedir, const std::string &nodeid)
       : cache(homedir, keylock), membership(*this), rebalancer(*this),
         http(*this) {
     config.homedir = homedir;
-    config.addr = addr;
-    config.first_id = first_id;
+    config.nodeid = nodeid;
   }
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;

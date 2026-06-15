@@ -56,19 +56,6 @@ static std::string json_str(const std::string &body, const std::string &key) {
   return end == std::string::npos ? "" : body.substr(pos, end - pos);
 }
 
-static std::string json_int(const std::string &body, const std::string &key) {
-  std::string needle = "\"" + key + "\":";
-  size_t pos = body.find(needle);
-  if (pos == std::string::npos)
-    return "";
-  pos += needle.size();
-  size_t end = pos;
-  while (end < body.size() &&
-         (isdigit((unsigned char)body[end]) || body[end] == '-'))
-    end++;
-  return body.substr(pos, end - pos);
-}
-
 static int sink_writer(void *ctx, const char *buf, size_t n) {
   return static_cast<httplib::DataSink *>(ctx)->write(buf, n) ? 0 : -1;
 }
@@ -126,7 +113,8 @@ static void handle_get(Node &node, const httplib::Request &req,
   if (!local_only) {
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
-    if (!dest.empty() && dest != node.config.addr) {
+    if (!dest.empty() &&
+        dest != Membership::parse_peer(node.config.nodeid).first) {
       node.membership.hint_alive(dest);
       node.feed.put("cache.redirect", relpath.c_str(), "dest", dest.c_str());
       if (node.cache.exists(relpath)) {
@@ -266,7 +254,7 @@ static void handle_health(Node &node, const httplib::Request &,
   res.set_header("Content-Type", "application/json");
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      node.config.addr, upsince, upfor, nodes, node.cache.size(),
+      node.config.nodeid, upsince, upfor, nodes, node.cache.size(),
       node.cache.disk_usepct(), used_gib_buf,
       node.cache.disk_error() ? "true" : "false", node.stats.hits.load(),
       node.stats.misses.load(), node.stats.served.load(),
@@ -276,16 +264,14 @@ static void handle_health(Node &node, const httplib::Request &,
 
 static void handle_claim_keyspace(Node &node, const httplib::Request &req,
                                   httplib::Response &res) {
-  std::string addr = json_str(req.body, "addr");
-  std::string first_id_s = json_int(req.body, "first_id");
+  std::string nodeid = json_str(req.body, "nodeid");
 
-  if (addr.empty()) {
-    send_raw(res, wire_err("missing addr"));
+  if (nodeid.empty()) {
+    send_raw(res, wire_err("missing nodeid"));
     return;
   }
 
-  const char *fid = first_id_s.empty() ? "0" : first_id_s.c_str();
-  node.jobq.put("claim_scan", addr.c_str(), fid);
+  node.jobq.put("claim_scan", nodeid.c_str());
   send_raw(res, wire_fin());
 }
 
@@ -370,7 +356,12 @@ static void handle_delete(Node &node, const httplib::Request &req,
 // ── Server lifecycle
 // ──────────────────────────────────────────────────────────
 
-void HttpServer::start(const std::string &host, int port) {
+void HttpServer::start(const std::string &nodeid) {
+  auto [addr, fid] = Membership::parse_peer(nodeid);
+  size_t colon = addr.rfind(':');
+  std::string host = addr.substr(0, colon);
+  int port = std::stoi(addr.substr(colon + 1));
+
   g_start_time = time(nullptr);
   auto *svr = new httplib::Server();
   g_svr = svr;

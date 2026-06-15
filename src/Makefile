@@ -1,7 +1,9 @@
 CXX ?= c++
+CC  ?= cc
 
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -pthread \
             -I$(HOME)/.local/include
+CFLAGS   := -std=c11 -Wall -Wextra -MMD
 
 ifdef DEBUG
     CXXFLAGS += -O0 -g -fsanitize=address,undefined
@@ -16,7 +18,7 @@ LDFLAGS := $(SAN) -L$(HOME)/.local/lib -lswimc17 -pthread
 EXEC    := distcache
 LIB     := libdistcache.a
 MAINOBJ := main.o
-LIBOBJ  := $(patsubst %.cpp,%.o,$(filter-out main.cpp,$(wildcard *.cpp)))
+LIBOBJ  := stream.o $(patsubst %.cpp,%.o,$(filter-out main.cpp,$(wildcard *.cpp)))
 
 all: $(EXEC)
 

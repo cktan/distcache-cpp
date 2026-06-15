@@ -64,7 +64,7 @@ TEST_CASE("wire_data: empty payload") {
 struct write_ctx_t {
   std::string *buf;
 };
-static int str_writer(const char *p, size_t n, void *ctx) {
+static int str_writer(void *ctx, const char *p, size_t n) {
   ((write_ctx_t *)ctx)->buf->append(p, n);
   return 0;
 }
@@ -73,7 +73,7 @@ struct read_ctx_t {
   const std::string *src;
   size_t pos;
 };
-static ssize_t str_reader(char *p, size_t n, void *ctx) {
+static ssize_t str_reader(void *ctx, char *p, size_t n) {
   auto *rc = (read_ctx_t *)ctx;
   size_t avail = rc->src->size() - rc->pos;
   if (avail == 0)
@@ -84,7 +84,7 @@ static ssize_t str_reader(char *p, size_t n, void *ctx) {
   return (ssize_t)take;
 }
 
-static int fail_writer(const char *, size_t, void *) { return -1; }
+static int fail_writer(void *, const char *, size_t) { return -1; }
 
 TEST_CASE("stream_out: DATA frame encoding") {
   std::string buf;
@@ -134,12 +134,11 @@ TEST_CASE("stream_in: round-trip DATA") {
   write_ctx_t wc = {&buf};
   stream_out(str_writer, &wc, FRAME_DATA, "world", 5);
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.type == FRAME_DATA);
   CHECK(f.payload_len == 5);
   CHECK(memcmp(f.payload, "world", 5) == 0);
-  free(f.payload);
 }
 
 TEST_CASE("stream_in: round-trip INFO") {
@@ -147,12 +146,11 @@ TEST_CASE("stream_in: round-trip INFO") {
   write_ctx_t wc = {&buf};
   stream_out(str_writer, &wc, FRAME_INFO, "{}", 2);
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.type == FRAME_INFO);
   CHECK(f.payload_len == 2);
   CHECK(memcmp(f.payload, "{}", 2) == 0);
-  free(f.payload);
 }
 
 TEST_CASE("stream_in: round-trip ERROR") {
@@ -160,12 +158,11 @@ TEST_CASE("stream_in: round-trip ERROR") {
   write_ctx_t wc = {&buf};
   stream_out(str_writer, &wc, FRAME_ERROR, "bad", 3);
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.type == FRAME_ERROR);
   CHECK(f.payload_len == 3);
   CHECK(memcmp(f.payload, "bad", 3) == 0);
-  free(f.payload);
 }
 
 TEST_CASE("stream_in: round-trip FIN") {
@@ -173,11 +170,10 @@ TEST_CASE("stream_in: round-trip FIN") {
   write_ctx_t wc = {&buf};
   stream_out(str_writer, &wc, FRAME_FIN, nullptr, 0);
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.type == FRAME_FIN);
   CHECK(f.payload_len == 0);
-  CHECK(f.payload == nullptr);
 }
 
 TEST_CASE("stream_in: multiple frames in sequence") {
@@ -188,7 +184,7 @@ TEST_CASE("stream_in: multiple frames in sequence") {
   stream_out(str_writer, &wc, FRAME_FIN, nullptr, 0);
 
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.payload_len == 2);
   CHECK(memcmp(f.payload, "ab", 2) == 0);
@@ -197,7 +193,6 @@ TEST_CASE("stream_in: multiple frames in sequence") {
   CHECK(memcmp(f.payload, "cd", 2) == 0);
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.type == FRAME_FIN);
-  free(f.payload); // NULL-safe; prior payload freed by stream_in on re-entry
 }
 
 TEST_CASE("stream_in: binary payload round-trip") {
@@ -207,45 +202,44 @@ TEST_CASE("stream_in: binary payload round-trip") {
   stream_out(str_writer, &wc, FRAME_DATA, reinterpret_cast<const char *>(raw),
              3);
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 0);
   CHECK(f.payload_len == 3);
   CHECK(memcmp(f.payload, raw, 3) == 0);
-  free(f.payload);
 }
 
 TEST_CASE("stream_in: clean EOF returns 1") {
   std::string empty;
   read_ctx_t rc = {&empty, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == 1);
 }
 
 TEST_CASE("stream_in: truncated mid-header returns -1") {
   std::string buf = "DATA:5\nhi"; // payload shorter than declared
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == -1);
 }
 
 TEST_CASE("stream_in: EOF mid-header returns -1") {
   std::string buf = "DAT"; // incomplete header, no newline
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == -1);
 }
 
 TEST_CASE("stream_in: unknown frame type returns -1") {
   std::string buf = "BLOB:3\nxyz";
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == -1);
 }
 
 TEST_CASE("stream_in: malformed header (no colon) returns -1") {
   std::string buf = "DATA\nhello";
   read_ctx_t rc = {&buf, 0};
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in(str_reader, &rc, &f) == -1);
 }
 
@@ -257,7 +251,7 @@ TEST_CASE("stream_in/out: fd round-trip via pipe") {
   stream_out_fd(pipefd[1], FRAME_FIN, nullptr, 0);
   ::close(pipefd[1]);
 
-  frame_t f = {(frame_type_t)0, nullptr, 0};
+  frame_t f = {};
   CHECK(stream_in_fd(pipefd[0], &f) == 0);
   CHECK(f.type == FRAME_INFO);
   CHECK(f.payload_len == 4);
@@ -265,6 +259,5 @@ TEST_CASE("stream_in/out: fd round-trip via pipe") {
   CHECK(stream_in_fd(pipefd[0], &f) == 0);
   CHECK(f.type == FRAME_FIN);
   CHECK(stream_in_fd(pipefd[0], &f) == 1); // clean EOF
-  free(f.payload);
   ::close(pipefd[0]);
 }

@@ -20,34 +20,51 @@ static const char *frame_type_str(frame_type_t t) {
 
 int stream_out(writer_fn wfn, void *ctx, frame_type_t type, const char *payload,
                size_t len) {
+  if (len > 8192)
+    return -1;
   char hdr[50];
   int hlen = snprintf(hdr, sizeof(hdr), "%s:%zu\n", frame_type_str(type), len);
   if (hlen <= 0 || (size_t)hlen >= sizeof(hdr))
     return -1;
-  if (wfn(hdr, (size_t)hlen, ctx) != 0)
+  if (wfn(ctx, hdr, (size_t)hlen) != 0)
     return -1;
-  if (len > 0 && wfn(payload, len, ctx) != 0)
+  if (len > 0 && wfn(ctx, payload, len) != 0)
     return -1;
   return 0;
 }
 
 int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
-  char hdr[50];
-  int hlen = 0;
+  char buf[50];
+  size_t nr = 0;
 
-  for (;;) {
-    char c;
-    ssize_t n = rfn(&c, 1, ctx);
+  /* Seed buf from carry bytes left by the previous call. */
+  if (out->_carry_len > 0) {
+    memcpy(buf, out->_carry, out->_carry_len);
+    nr = out->_carry_len;
+    out->_carry_len = 0;
+  }
+
+  /* Fill buf until we find \n or exhaust the 50-byte limit. */
+  while (!memchr(buf, '\n', nr)) {
+    if (nr >= sizeof(buf))
+      return -1;
+    ssize_t n = rfn(ctx, buf + nr, sizeof(buf) - nr);
     if (n == 0)
-      return hlen == 0 ? 1 : -1;
+      return nr == 0 ? 1 : -1;
     if (n < 0)
       return -1;
-    if (c == '\n')
-      break;
-    if (hlen >= 49)
-      return -1;
-    hdr[hlen++] = c;
+    nr += (size_t)n;
   }
+
+  char *nl = memchr(buf, '\n', nr);
+  /* nl is guaranteed non-NULL by the loop above */
+
+  /* Parse TYPE:LENGTH */
+  char hdr[50];
+  size_t hlen = (size_t)(nl - buf);
+  if (hlen == 0 || hlen >= 49)
+    return -1;
+  memcpy(hdr, buf, hlen);
   hdr[hlen] = '\0';
 
   char *colon = strchr(hdr, ':');
@@ -69,36 +86,48 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
 
   char *endp;
   unsigned long len = strtoul(colon + 1, &endp, 10);
-  if (endp == colon + 1 || *endp != '\0')
+  if (endp == colon + 1 || *endp != '\0' || len > 8192)
     return -1;
 
-  free(out->payload);
-  out->type = type;
+  /* Bytes already read past the header \n. */
+  char *pre = nl + 1;
+  size_t pre_len = (size_t)((buf + nr) - pre);
+
+  out->type        = type;
   out->payload_len = (size_t)len;
 
   if (len == 0) {
-    out->payload = NULL;
+    /* Stash any over-read bytes for the next call. */
+    if (pre_len > 0) {
+      memcpy(out->_carry, pre, pre_len);
+      out->_carry_len = pre_len;
+    }
     return 0;
   }
 
-  out->payload = malloc(len);
-  if (!out->payload)
-    return -1;
+  /* Seed payload from pre-read bytes. */
+  size_t total = pre_len < len ? pre_len : len;
+  if (total > 0)
+    memcpy(out->payload, pre, total);
 
-  size_t total = 0;
+  /* Stash any pre-read bytes that exceed the payload length. */
+  if (pre_len > len) {
+    size_t extra = pre_len - len;
+    memcpy(out->_carry, pre + len, extra);
+    out->_carry_len = extra;
+  }
+
+  /* Read the remaining payload. */
   while (total < len) {
-    ssize_t n = rfn(out->payload + total, len - total, ctx);
-    if (n <= 0) {
-      free(out->payload);
-      out->payload = NULL;
+    ssize_t n = rfn(ctx, out->payload + total, len - total);
+    if (n <= 0)
       return -1;
-    }
     total += (size_t)n;
   }
   return 0;
 }
 
-static int fd_writer(const char *buf, size_t n, void *ctx) {
+static int fd_writer(void *ctx, const char *buf, size_t n) {
   int fd = *(int *)ctx;
   while (n > 0) {
     ssize_t w = write(fd, buf, n);
@@ -110,7 +139,7 @@ static int fd_writer(const char *buf, size_t n, void *ctx) {
   return 0;
 }
 
-static ssize_t fd_reader(char *buf, size_t n, void *ctx) {
+static ssize_t fd_reader(void *ctx, char *buf, size_t n) {
   int fd = *(int *)ctx;
   return read(fd, buf, n);
 }

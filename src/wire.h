@@ -1,7 +1,7 @@
 #pragma once
+#include "stream.h"
 #include <cstddef>
 #include <string>
-#include "stream.h"
 
 static inline std::string meta_data(int n) {
   return "DATA:" + std::to_string(n) + "\n";

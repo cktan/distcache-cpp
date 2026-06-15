@@ -41,4 +41,3 @@ bool wire_check_fin(const std::string &s) {
     return false;
   return s.compare(s.size() - FIN.size(), FIN.size(), FIN) == 0;
 }
-

@@ -129,3 +129,6 @@ the ring position is derived from a hash of `host:port`.
   frames precede or follow it.
 - INFO may appear before the first DATA frame or between
   DATA frames; it never appears after ERROR or REDIRECT.
+- Payload size must not exceed **8192 bytes** (8 KiB).
+  Implementations may reject frames that exceed this
+  limit.

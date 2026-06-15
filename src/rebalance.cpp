@@ -1,6 +1,7 @@
 #include "rebalance.h"
 #include "httplib.h"
 #include "node.h"
+#include "stream.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -152,98 +153,59 @@ Rebalancer::scan_for_peer(const std::string &peer_addr) {
 }
 
 struct StreamState {
-  std::string header_buf; // partial frame header accumulated across chunks
-  enum Phase { HEADER, DATA, SKIP } phase = HEADER;
-  size_t seg_remaining = 0; // payload bytes left in current frame
-  bool fd_opened = false;   // true once cache.write() created the output file
-  bool is_fin = false;      // true once FIN frame seen
-  bool ok = true;           // false if any ERROR frame or write failure
+  push_frame_t fp = {};
+  bool fd_opened = false;
+  bool is_fin = false;
+  bool ok = true;
 };
 
 // Parse one network chunk. fd is opened lazily on the first DATA frame so
 // that an ERROR+FIN response never creates a file at the cache path.
 static bool recv_file(const char *data, size_t data_length, StreamState &state,
                       fd_t &fd, const std::string &relpath, cache_t &cache) {
-  size_t offset = 0;
-  while (offset < data_length) {
-    if (state.phase == StreamState::HEADER) {
-      // Accumulate bytes until we find the '\n' that ends the frame header.
-      const char *p =
-          (const char *)memchr(data + offset, '\n', data_length - offset);
-      if (!p) {
-        state.header_buf.append(data + offset, data_length - offset);
-        return true;
-      }
-      size_t nl_pos = (size_t)(p - (data + offset));
-      state.header_buf.append(data + offset, nl_pos);
-      offset += nl_pos + 1;
+  const char *p = data;
+  size_t rem = data_length;
+  while (rem > 0) {
+    int consumed = stream_in_push(&state.fp, p, rem);
+    if (consumed < 0) {
+      state.ok = false;
+      return false;
+    }
+    p += consumed;
+    rem -= (size_t)consumed;
+    if (!state.fp.complete)
+      continue;
 
-      std::string_view hv{state.header_buf};
-      if (hv.compare(0, 5, "DATA:") == 0) {
-        try {
-          state.seg_remaining = std::stoull(std::string(hv.substr(5)));
-        } catch (...) {
+    int plen = push_frame_length(&state.fp);
+    const char *wp = state.fp.newline + 1;
+
+    if (strncmp(state.fp.raw, "DATA:", 5) == 0) {
+      if (!state.fd_opened) {
+        if (!cache.write(relpath, fd).ok()) {
           state.ok = false;
           return false;
         }
-        if (!state.fd_opened) {
-          if (!cache.write(relpath, fd).ok()) {
-            state.ok = false;
-            return false;
-          }
-          state.fd_opened = true;
-        }
-        // next phase after HEADER phase is StreamState::DATA
-        state.phase = StreamState::DATA;
-      } else if (hv.compare(0, 6, "ERROR:") == 0) {
-        state.ok = false;
-        try {
-          state.seg_remaining = std::stoull(std::string(hv.substr(6)));
-        } catch (...) {
-          state.seg_remaining = 0;
-        }
-        // next phase after encountering ERROR is StreamState::SKIP
-        state.phase = StreamState::SKIP;
-      } else if (hv.compare(0, 5, "INFO:") == 0) {
-        try {
-          state.seg_remaining = std::stoull(std::string(hv.substr(5)));
-        } catch (...) {
-          state.seg_remaining = 0;
-        }
-        state.phase = StreamState::SKIP;
-      } else if (hv.compare(0, 5, "FIN:0") == 0) {
-        state.is_fin = true;
-        return true;
-      } else {
-        state.ok = false;
-        return false;
+        state.fd_opened = true;
       }
-      state.header_buf.clear();
-    } else if (state.phase == StreamState::DATA) {
-      // Write payload bytes to fd, possibly spanning multiple network chunks.
-      size_t avail = data_length - offset;
-      size_t to_write = std::min(avail, state.seg_remaining);
-      size_t written = 0;
-      while (written < to_write) {
-        ssize_t n = ::write(fd.fd, data + offset + written, to_write - written);
+      size_t left = (size_t)plen;
+      while (left > 0) {
+        ssize_t n = ::write(fd.fd, wp, left);
         if (n < 0) {
           state.ok = false;
           return false;
         }
-        written += (size_t)n;
+        wp += n;
+        left -= (size_t)n;
       }
-      state.seg_remaining -= to_write;
-      offset += to_write;
-      if (state.seg_remaining == 0)
-        state.phase = StreamState::HEADER;
-    } else {
-      // SKIP: discard payload bytes for INFO or ERROR frames.
-      size_t to_skip = std::min(data_length - offset, state.seg_remaining);
-      state.seg_remaining -= to_skip;
-      offset += to_skip;
-      if (state.seg_remaining == 0)
-        state.phase = StreamState::HEADER;
+    } else if (strncmp(state.fp.raw, "FIN:", 4) == 0) {
+      state.is_fin = true;
+      return true;
+    } else if (strncmp(state.fp.raw, "ERROR:", 6) == 0) {
+      state.ok = false;
     }
+    // INFO or unknown: skip payload, continue
+
+    push_frame_init(&state.fp);
   }
   return true;
 }

@@ -69,21 +69,20 @@ static std::string json_int(const std::string &body, const std::string &key) {
   return body.substr(pos, end - pos);
 }
 
+static int sink_writer(void *ctx, const char *buf, size_t n) {
+  return static_cast<httplib::DataSink *>(ctx)->write(buf, n) ? 0 : -1;
+}
+
 static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   char buf[4096];
   ssize_t n = ::read(fd.fd, buf, sizeof(buf));
-  if (n > 0) {
-    std::string hdr = meta_data((int)n);
-    if (!sink.write(hdr.data(), hdr.size()))
-      return false;
-    return sink.write(buf, (size_t)n);
-  }
+  if (n > 0)
+    return stream_out(sink_writer, &sink, FRAME_DATA, buf, (size_t)n) == 0;
   if (n < 0) {
     std::string err = wire_err(strerror(errno));
     sink.write(err.data(), err.size());
   }
-  std::string fin = wire_fin();
-  sink.write(fin.data(), fin.size());
+  stream_out(sink_writer, &sink, FRAME_FIN, nullptr, 0);
   sink.done();
   done = true;
   return true;

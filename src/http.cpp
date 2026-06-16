@@ -9,7 +9,6 @@
 #include <ctime>
 #include <functional>
 #include <httplib.h>
-#include <sys/stat.h>
 #include <unistd.h>
 
 HttpServer::HttpServer(Node &n) : node_(n) {}
@@ -31,15 +30,6 @@ static bool split_path(const std::string &path, std::string &bucket,
   return !bucket.empty() && !key.empty();
 }
 
-static bool read_fd(fd_t &fd, std::string &data) {
-  struct stat st;
-  if (fstat(fd.fd, &st) < 0)
-    return false;
-  data.resize(st.st_size);
-  ssize_t n = ::read(fd.fd, data.data(), st.st_size);
-  return n == (ssize_t)st.st_size;
-}
-
 static void send_raw(httplib::Response &res, std::string body) {
   res.status = 200;
   res.set_header("Content-Type", "application/octet-stream");
@@ -58,20 +48,6 @@ static std::string json_str(const std::string &body, const std::string &key) {
 
 static int sink_writer(void *ctx, const char *buf, size_t n) {
   return static_cast<httplib::DataSink *>(ctx)->write(buf, n) ? 0 : -1;
-}
-
-static std::string wire_data_chunked(const char *buf, size_t len) {
-  std::string out;
-  const size_t CHUNK = 8192;
-  size_t off = 0;
-  do {
-    size_t n = std::min(CHUNK, len - off);
-    out += "DATA:" + std::to_string(n) + "\n";
-    out.append(buf + off, n);
-    off += n;
-  } while (off < len);
-  out += "FIN:0\n";
-  return out;
 }
 
 static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
@@ -208,14 +184,13 @@ static void handle_get(Node &node, const httplib::Request &req,
   node.jobq.put("evict");
 
   fd_t fd2;
-  std::string data;
-  if (!node.cache.read(relpath, fd2).ok() || !read_fd(fd2, data)) {
+  if (!node.cache.read(relpath, fd2).ok()) {
     node.stats.errors++;
     send_raw(res, wire_err("read after fetch failed"));
     return;
   }
   node.stats.served++;
-  send_raw(res, wire_data(data.data(), data.size()));
+  serve_fd(fd2, res);
 }
 
 static void handle_health(Node &node, const httplib::Request &,

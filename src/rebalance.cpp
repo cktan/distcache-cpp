@@ -53,7 +53,7 @@ void Rebalancer::start() {
       if (!split_addr(dest, host, port))
         return;
 
-      std::string body = "{\"src\":\"" + node_.config.nodeid +
+      std::string body = "{\"src\":\"" + node_.nodeid +
                          "\""
                          ",\"relpath\":\"" +
                          relpath +

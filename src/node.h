@@ -1,6 +1,5 @@
 #pragma once
 #include "cache.h"
-#include "config.h"
 #include "feed.h"
 #include "http.h"
 #include "keylock.h"
@@ -12,7 +11,7 @@
 #include <memory>
 
 struct Node {
-  Config config;
+  std::string nodeid; // "host:port" or "host:port/first_id"
   keylock_t keylock;
   cache_t cache;
   Stats stats;
@@ -24,9 +23,8 @@ struct Node {
   HttpServer http;
 
   Node(const std::string &nodeid)
-      : cache(keylock), membership(*this), rebalancer(*this), http(*this) {
-    config.nodeid = nodeid;
-  }
+      : nodeid(nodeid), cache(keylock), membership(*this), rebalancer(*this),
+        http(*this) {}
   Node(const Node &) = delete;
   Node &operator=(const Node &) = delete;
 };

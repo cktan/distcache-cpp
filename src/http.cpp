@@ -106,8 +106,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   if (!local_only) {
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
-    if (!dest.empty() &&
-        dest != Membership::parse_peer(node.config.nodeid).first) {
+    if (!dest.empty() && dest != Membership::parse_peer(node.nodeid).first) {
       node.membership.hint_alive(dest);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
@@ -227,7 +226,7 @@ static void handle_health(Node &node, const httplib::Request &,
   res.set_header("Content-Type", "application/json");
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      node.config.nodeid, upsince, upfor, nodes, node.cache.size(),
+      node.nodeid, upsince, upfor, nodes, node.cache.size(),
       node.cache.disk_usepct(), used_gib_buf,
       node.cache.disk_error() ? "true" : "false", node.stats.hits.load(),
       node.stats.misses.load(), node.stats.served.load(),

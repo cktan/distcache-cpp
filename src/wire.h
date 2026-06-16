@@ -13,7 +13,7 @@ std::string wire_data(const char *buf, size_t n);
 // Encode an INFO frame: "INFO:<n>\n<json>\nFIN:0\n"
 std::string wire_info(const std::string &json);
 
-// Encode a REDIRECT frame: "REDIRECT:<node>\nFIN:0\n"
+// Encode a REDIRECT frame: "REDIRECT:<n>\n[\"node\"]FIN:0\n"
 std::string wire_redirect(const std::string &node);
 
 // Encode an ERR frame: "ERR:<msg>\nFIN:0\n"

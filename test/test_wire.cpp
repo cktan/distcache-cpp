@@ -30,7 +30,7 @@ TEST_CASE("wire_info: correct framing") {
 
 TEST_CASE("wire_redirect: correct framing") {
   std::string s = wire_redirect("127.0.0.1:4002");
-  CHECK(s == "REDIRECT:127.0.0.1:4002\nFIN:0\n");
+  CHECK(s == "REDIRECT:18\n[\"127.0.0.1:4002\"]FIN:0\n");
   CHECK(wire_check_fin(s));
 }
 

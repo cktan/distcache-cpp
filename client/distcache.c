@@ -429,6 +429,31 @@ static int json_num_field(const char *json, size_t jlen, const char *key,
   return -1;
 }
 
+/* Parse a JSON string array ["a","b",...] into names[]. Returns count. */
+static int parse_string_array(const char *json, size_t jlen,
+                              char names[][DC_NODE_NAME_MAX], int max_names) {
+  int count = 0;
+  const char *p = json;
+  const char *end = json + jlen;
+  while (count < max_names && p < end) {
+    const char *q = memchr(p, '"', (size_t)(end - p));
+    if (!q)
+      break;
+    const char *start = q + 1;
+    const char *r = memchr(start, '"', (size_t)(end - start));
+    if (!r)
+      break;
+    size_t len = (size_t)(r - start);
+    if (len > 0 && len < DC_NODE_NAME_MAX) {
+      memcpy(names[count], start, len);
+      names[count][len] = '\0';
+      count++;
+    }
+    p = r + 1;
+  }
+  return count;
+}
+
 static int parse_membership_names(const char *json, size_t jlen,
                                   char names[][DC_NODE_NAME_MAX],
                                   int max_names) {
@@ -507,13 +532,13 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
                      sizeof(st->err_type));
       json_str_field(payload, (size_t)plen, "message", st->err_msg,
                      sizeof(st->err_msg));
+    } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
+      strncpy(st->status, "redirect", sizeof(st->status) - 1);
+      st->n_redir = parse_string_array(payload, (size_t)plen, st->redir_names,
+                                       DC_MAX_REDIR_NODES);
     } else if (strncmp(st->fp.raw, "INFO:", 5) == 0) {
       json_str_field(payload, (size_t)plen, "status", st->status,
                      sizeof(st->status));
-      if (strcmp(st->status, "redirect") == 0) {
-        st->n_redir = parse_membership_names(
-            payload, (size_t)plen, st->redir_names, DC_MAX_REDIR_NODES);
-      }
     }
 
     push_frame_init(&st->fp);

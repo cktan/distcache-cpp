@@ -397,6 +397,9 @@ class _ChunkReader:
                     on_data(frame.payload)
                 else:
                     data_chunks.append(frame.payload)
+            elif frame.type == "REDIRECT":
+                result["status"] = "redirect"
+                result["nodes"] = json.loads(frame.payload)
             elif frame.type in ("INFO", "ERROR"):
                 result.update(json.loads(frame.payload))
 
@@ -639,9 +642,7 @@ def get(bucket: str, key: str,
             return
 
         if result["status"] == "redirect":
-            membership = result.get("membership", {})
-            names  = [e["name"] for e in membership.get("alive",   [])]
-            names += [e["name"] for e in membership.get("suspect", [])]
+            names = result.get("nodes", [])
             with _ring_lock:
                 _ring_update(names)
                 new_target = find_successor(_ring, dest_id(bucket, key))

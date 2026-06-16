@@ -35,11 +35,9 @@ struct LRUEntry {
 // via statvfs() on every insert — no background polling thread.
 class lru_t {
 public:
-  // homedir: filesystem root for statvfs() disk-pressure checks.
   // keylock: coordinates eviction with in-flight S3 fetches.
   // id_fn: computes the ring relpath_id for a given relpath.
-  lru_t(const std::string &homedir, keylock_t &keylock,
-        std::function<uint32_t(const std::string &)> id_fn);
+  lru_t(keylock_t &keylock, std::function<uint32_t(const std::string &)> id_fn);
 
   // Add or update an entry. relpath_id is computed via id_fn.
   void put(const relpath_t &relpath, time_t mtime);
@@ -72,13 +70,12 @@ public:
   // #files in the LRU.
   size_t size();
 
-  // statvfs() wrappers on homedir_.
+  // statvfs() wrappers on the cwd (process is chdir'd into homedir).
   int disk_usepct();
   double disk_used_gib();
   bool disk_error();
 
 private:
-  const std::string &homedir_;
   keylock_t &keylock_;
   std::function<uint32_t(const std::string &)> id_fn_;
 

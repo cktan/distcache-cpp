@@ -66,8 +66,7 @@ static rc_t errno_to_rc(const std::string &msg) {
   return rc_t::err(rc_errcode_t::io, msg);
 }
 
-cache_t::cache_t(keylock_t &keylock)
-    : lru_("./", keylock, ring_t::compute_id) {}
+cache_t::cache_t(keylock_t &keylock) : lru_(keylock, ring_t::compute_id) {}
 
 std::string cache_t::abspath(const relpath_t &relpath) const {
   return std::filesystem::absolute("./" + relpath.str());

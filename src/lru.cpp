@@ -7,9 +7,9 @@ static constexpr int EVICT_MIN_AGE_S = 300;
 static constexpr int LOW_THRESHOLD = 70;
 static constexpr int HIGH_THRESHOLD = 90;
 
-lru_t::lru_t(const std::string &homedir, keylock_t &keylock,
+lru_t::lru_t(keylock_t &keylock,
              std::function<uint32_t(const std::string &)> id_fn)
-    : homedir_(homedir), keylock_(keylock), id_fn_(std::move(id_fn)) {}
+    : keylock_(keylock), id_fn_(std::move(id_fn)) {}
 
 void lru_t::put(const relpath_t &relpath, time_t mtime) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
@@ -42,7 +42,7 @@ size_t lru_t::size() {
 
 int lru_t::disk_usepct() {
   struct statvfs st;
-  if (statvfs(homedir_.c_str(), &st) < 0)
+  if (statvfs("./", &st) < 0)
     return 0;
   if (st.f_blocks == 0)
     return 0;
@@ -53,7 +53,7 @@ int lru_t::disk_usepct() {
 
 double lru_t::disk_used_gib() {
   struct statvfs st;
-  if (statvfs(homedir_.c_str(), &st) < 0)
+  if (statvfs("./", &st) < 0)
     return 0.0;
   return static_cast<double>(st.f_blocks - st.f_bavail) * st.f_frsize /
          (1024.0 * 1024.0 * 1024.0);
@@ -61,7 +61,7 @@ double lru_t::disk_used_gib() {
 
 bool lru_t::disk_error() {
   struct statvfs st;
-  return statvfs(homedir_.c_str(), &st) < 0;
+  return statvfs("./", &st) < 0;
 }
 
 void lru_t::rebuild_cold_list_locked() {

@@ -10,7 +10,7 @@ FORMATDIRS := $(DIRS:%=format-%)
 
 all: $(BUILDDIRS)
 
-$(BUILDDIRS): $(HTTPLIB_H) $(SWIM_H) $(SWIMC_A)
+$(BUILDDIRS): $(HTTPLIB_H) $(SPDLOG_H) $(SWIM_H) $(SWIMC_A)
 
 $(BUILDDIRS):
 	$(MAKE) -C $(@:build-%=%)

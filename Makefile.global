@@ -16,6 +16,14 @@ $(HTTPLIB_H):
 	mkdir -p $(dir $@)
 	cp /tmp/cpp-httplib/httplib.h $@
 
+SPDLOG_H := $(HOME)/.local/include/spdlog/spdlog.h
+
+$(SPDLOG_H):
+	@echo copying spdlog headers to ~/.local/include
+	cd /tmp && git clone https://github.com/gabime/spdlog.git
+	mkdir -p $(HOME)/.local/include
+	cp -r /tmp/spdlog/include/spdlog $(HOME)/.local/include/
+
 SWIM_H   := $(HOME)/.local/include/swim.h
 SWIMC_A  := $(HOME)/.local/lib/libswimc17.a
 

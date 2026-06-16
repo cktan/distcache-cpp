@@ -116,18 +116,23 @@ int main(int argc, char **argv) {
       "distcache", spdlog::sinks_init_list{file_sink});
   spdlog::set_default_logger(startup_logger);
 
+  // Set lock file so no one can start another distcache on
+  // this homedir.
   std::string lockpath = "./dist_cache.lock";
   if (!pidlock_acquire(lockpath)) {
     spdlog::error("another instance holds {}", lockpath);
     return 1;
   }
 
+  // Set signal handlers
   g_http_signal = &node.http;
   signal(SIGTERM, on_signal);
   signal(SIGINT, on_signal);
 
+  // Start the rebalancer service
   node.rebalancer.start();
 
+  // Start the membership service
   if (!node.membership.start(addr_str, seeds)) {
     spdlog::error("failed to start membership on {}", addr_str);
     node.rebalancer.stop();
@@ -135,10 +140,14 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Captures startup_logger by value (not via spdlog::default_logger())
-  // since this thread outlives the later set_default_logger() swap and
-  // a global default could change underneath it mid-scan.
-  std::thread scan_thread([&node, startup_logger]() {
+  spdlog::info("distcache {} starting on {} homedir={}", DISTCACHE_VERSION,
+               addr_str, std::filesystem::current_path().string());
+
+  // Starting here, write logs to file only
+  spdlog::set_default_logger(file_logger);
+
+  // Start a thread to scan the files in ./cache
+  std::thread scan_thread([&node]() {
     constexpr size_t BATCH = 1024;
     std::vector<std::pair<std::string, time_t>> batch;
     batch.reserve(BATCH);
@@ -153,16 +162,11 @@ int main(int argc, char **argv) {
     if (!batch.empty())
       node.cache.batch_put(batch);
 
-    startup_logger->info("startup scan complete: {} entries",
-                         node.cache.size());
+    spdlog::info("startup scan complete: {} entries", node.cache.size());
   });
   scan_thread.detach();
 
-  spdlog::info("distcache {} starting on {} homedir={}", DISTCACHE_VERSION,
-               addr_str, std::filesystem::current_path().string());
-
-  // Starting here, write logs to file only
-  spdlog::set_default_logger(file_logger);
+  // Start http service. This call will return when http service stops.
   node.http.start(addr_str);
 
   spdlog::info("distcache stopping ...");

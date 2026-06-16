@@ -273,24 +273,25 @@ in memory.
 3. **Local-only miss (`?local=1`):** return
    `ERR:ERR_NOT_CACHED` without hitting S3 (used by
    inter-node pulls).
-4. **Cache miss on owned key:** fetch from S3 via sidecar.
+4. **Cache miss on owned key:** fetch from S3 via sidecar,
+   then stream the file with `serve_fd`.
 
 ### Wire protocol (TYPE:LENGTH)
 
 ```
-DATA:<n>\n<n bytes>            # one payload chunk (n ≤ 8192)
-...                            # repeated for large objects
-FIN:0\n                        # end of successful GET body
-REDIRECT:<host:port>\nFIN:0\n  # client must reconnect
-ERR:<message>\nFIN:0\n         # error
-FIN:0\n                        # empty success (PUT/DELETE)
+DATA:<n>\n<n bytes>                  # one payload chunk (n ≤ 8192)
+...                                  # repeated for large objects
+FIN:0\n                              # end of successful GET body
+REDIRECT:<n>\n["host:port/id"]FIN:0\n  # client must retry on listed node
+ERR:<message>\nFIN:0\n               # error
+FIN:0\n                              # empty success (PUT/DELETE)
 ```
 
 Every response ends with `FIN:0\n`. Missing FIN indicates
 truncation. Large objects are split into consecutive DATA
-frames of ≤ 8 192 bytes each, followed by `FIN:0\n`.
-Identical to the Elixir wire format — existing C and
-Python clients work unchanged.
+frames of ≤ 8 192 bytes each. The REDIRECT payload is a
+JSON array of node names; clients add all listed nodes to
+their ring before retrying.
 
 The `stream.h` header exposes the framing layer as a C
 API (`stream_in`, `stream_out`, fd convenience wrappers,

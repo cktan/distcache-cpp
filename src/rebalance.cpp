@@ -38,11 +38,15 @@ static bool split_addr(const std::string &addr, std::string &host, int &port) {
 }
 
 void Rebalancer::start() {
+  // start the job-queue consumer thread
   node_.jobq.start([this](std::vector<std::string> rec) {
     if (rec.empty())
       return;
     const std::string &type = rec[0];
 
+    // hint_pull: queued by this node (claim_scan below, or a GET redirect
+    // in http.cpp) when it owns or once owned a key that peer `dest` should
+    // now have. POSTs to dest's /_hint_pull so dest queues its own do_pull.
     if (type == "hint_pull" && rec.size() >= 4) {
       const std::string &dest = rec[1];
       const std::string &relpath = rec[2];
@@ -64,28 +68,43 @@ void Rebalancer::start() {
       httplib::Client cli(host, port);
       cli.set_connection_timeout(3);
       cli.set_read_timeout(5);
+      // notify dest peer that this relpath is ready for it to pull
       cli.Post("/_hint_pull", body, "application/json");
       return;
     }
 
+    // do_pull: queued by handle_hint_pull (http.cpp) on receiving a
+    // /_hint_pull POST from the peer that owns relpath. Fetches the object
+    // from that peer into the local cache.
     if (type == "do_pull" && rec.size() >= 4) {
-      pull_one(rec[1], rec[2], rec[3]);
+      const std::string &src_addr = rec[1];
+      const std::string &relpath = rec[2];
+      const std::string &mtime_str = rec[3];
+      pull_one(src_addr, relpath, mtime_str);
       return;
     }
 
+    // claim_scan: queued by handle_claim_keyspace (http.cpp) on receiving
+    // a /_claim_keyspace POST, sent by claim_sweep() to every peer when
+    // nodeid joins the ring. Finds keys this node now owns on nodeid's
+    // behalf and hint_pulls each one.
     if (type == "claim_scan" && rec.size() >= 2) {
       const std::string &nodeid = rec[1];
+      // register the new peer in the ring before scanning against it
       node_.membership.inject_node(nodeid);
       auto [addr, fid] = Membership::parse_peer(nodeid);
       auto entries = scan_for_peer(addr);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
+        // queue a hint_pull job per key now owned by addr
         node_.jobq.put("hint_pull", addr.c_str(), relpath.c_str(),
                        mt_str.c_str());
       }
       return;
     }
 
+    // evict: queued by handle_put/pull_one/handle_get (after adding a file)
+    // and by pull_one here. Runs the disk-pressure eviction sweep.
     if (type == "evict") {
       node_.cache.maybe_evict(
           [this](const std::string &p) { node_.cache.drop(p); });
@@ -94,6 +113,7 @@ void Rebalancer::start() {
   });
 }
 
+// stop the job-queue consumer thread
 void Rebalancer::stop() { node_.jobq.stop(); }
 
 void Rebalancer::claim_sweep(const std::string &nodeid) {
@@ -112,6 +132,7 @@ void Rebalancer::claim_sweep(const std::string &nodeid) {
     httplib::Client cli(host, port);
     cli.set_connection_timeout(3);
     cli.set_read_timeout(10);
+    // tell peer to claim its share of nodeid's keyspace
     cli.Post("/_claim_keyspace", body, "application/json");
   }
 }
@@ -177,6 +198,7 @@ static bool recv_file(const char *data, size_t datasz, StreamState &state,
 
     if (strncmp(state.fp.raw, "DATA:", 5) == 0) {
       if (!state.fd_opened) {
+        // open cache file for write, lazily, on first DATA frame
         if (!cache.write(relpath, fd).ok()) {
           state.ok = false;
           return false;
@@ -216,6 +238,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
   if (node_.cache.exists(relpath))
     return;
 
+  // lock relpath so a concurrent pull/fetch can't race this one
   node_.keylock.acquire(relpath);
 
   if (node_.cache.exists(relpath)) {
@@ -238,6 +261,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
   StreamState state;
   fd_t fd;
 
+  // stream-fetch the object from src_addr
   auto resp = cli.Get(path.c_str(), [&](const char *data, size_t data_length) {
     return recv_file(data, data_length, state, fd, relpath, node_.cache);
   });
@@ -246,6 +270,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
 
   fd.close();
   if (!ok) {
+    // remove partial/corrupt file written by a failed fetch
     node_.cache.drop(relpath);
   }
   node_.keylock.release(relpath);
@@ -258,6 +283,7 @@ void Rebalancer::pull_one(const std::string &src_addr,
     }
     if (mt == 0)
       mt = time(nullptr);
+    // trigger an async disk-pressure check now that a file was added
     node_.jobq.put("evict");
     node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
   }

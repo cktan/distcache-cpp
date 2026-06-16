@@ -5,6 +5,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <spdlog/sinks/basic_file_sink.h>
+#include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
 #include <thread>
 #include <vector>
@@ -96,6 +98,15 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
+      "./log/distcache.log");
+  auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
+  auto startup_logger = std::make_shared<spdlog::logger>(
+      "distcache", spdlog::sinks_init_list{file_sink, console_sink});
+  auto file_logger = std::make_shared<spdlog::logger>(
+      "distcache", spdlog::sinks_init_list{file_sink});
+  spdlog::set_default_logger(startup_logger);
+
   std::string lockpath = "./dist_cache.lock";
   if (!pidlock_acquire(lockpath)) {
     fprintf(stderr, "Error: another instance holds %s\n", lockpath.c_str());
@@ -109,6 +120,7 @@ int main(int argc, char **argv) {
   node.rebalancer.start();
 
   if (!node.membership.start(addr_str, seeds)) {
+    spdlog::error("failed to start membership on {}", addr_str);
     node.rebalancer.stop();
     pidlock_release(lockpath);
     return 1;
@@ -134,10 +146,12 @@ int main(int argc, char **argv) {
   scan_thread.detach();
 
   spdlog::info("distcache {} starting on {} homedir={}", DISTCACHE_VERSION,
-               addr_str, homedir);
+               addr_str, std::filesystem::current_path().string());
 
+  spdlog::set_default_logger(file_logger);
   node.http.start(addr_str);
 
+  spdlog::info("distcache stopping ...");
   node.feed.stop();
   node.membership.leave();
   node.rebalancer.stop();

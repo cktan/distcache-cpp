@@ -3,5 +3,4 @@
 
 struct Config {
   std::string nodeid; // "host:port" or "host:port/first_id"
-  std::string homedir;
 };

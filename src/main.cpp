@@ -103,10 +103,8 @@ int main(int argc, char **argv) {
   }
 
   // homedir is now the cwd, so every path built from it downstream
-  // (Node, mkdir_p, lockpath, log files) only needs to be relative.
-  homedir = "./";
-
-  Node node(homedir, addr_str);
+  // (mkdir_p, lockpath, log files) only needs to be relative.
+  Node node(addr_str);
 
   if (!mkdir_p("./log", ec)) {
     fprintf(stderr, "Error: failed to create ./log: %s\n",

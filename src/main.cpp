@@ -1,6 +1,5 @@
 #include "node.h"
 #include "pidlock.h"
-#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -18,15 +17,16 @@ static void on_signal(int) {
     g_http_signal->stop();
 }
 
-static bool mkdir_p(const std::string &path) {
-  std::error_code ec;
+static bool mkdir_p(const std::string &path, std::error_code &ec) {
   std::filesystem::create_directories(path, ec);
   return !ec;
 }
 
-static bool wipe_dir(const std::string &path) {
-  std::filesystem::remove_all(path);
-  return mkdir_p(path);
+static bool wipe_dir(const std::string &path, std::error_code &ec) {
+  std::filesystem::remove_all(path, ec);
+  if (ec)
+    return false;
+  return mkdir_p(path, ec);
 }
 
 static void usage(const char *prog) {
@@ -35,9 +35,8 @@ static void usage(const char *prog) {
           prog);
 }
 
-static void parse_arg(int argc, char **argv,
-		      std::string& homedir,
-		      std::string& addr_str) {
+static bool parse_arg(int argc, char **argv, std::string &homedir,
+                      std::string &addr_str, std::vector<std::string> &seeds) {
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) {
       homedir = argv[++i];
@@ -47,66 +46,59 @@ static void parse_arg(int argc, char **argv,
       seeds.push_back(argv[++i]);
     } else if (strcmp(argv[i], "--version") == 0) {
       printf("distcache %s\n", DISTCACHE_VERSION);
-      return 0;
+      return true;
     } else {
       fprintf(stderr, "unknown flag: %s\n", argv[i]);
-      usage(argv[0]);
-      return 1;
+      return false;
     }
   }
+  if (homedir.empty() || addr_str.empty()) {
+    return false;
+  }
+  return true;
 }
-
 
 int main(int argc, char **argv) {
   std::string homedir;
   std::string addr_str;
   std::vector<std::string> seeds;
+  std::error_code ec;
 
-  for (int i = 1; i < argc; i++) {
-    if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) {
-      homedir = argv[++i];
-    } else if (strcmp(argv[i], "-N") == 0 && i + 1 < argc) {
-      addr_str = argv[++i];
-    } else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
-      seeds.push_back(argv[++i]);
-    } else if (strcmp(argv[i], "--version") == 0) {
-      printf("distcache %s\n", DISTCACHE_VERSION);
-      return 0;
-    } else {
-      fprintf(stderr, "unknown flag: %s\n", argv[i]);
-      usage(argv[0]);
-      return 1;
-    }
-  }
-
-  if (homedir.empty() || addr_str.empty()) {
+  if (!parse_arg(argc, argv, homedir, addr_str, seeds)) {
     usage(argv[0]);
     return 1;
   }
 
-  {
-    std::error_code ec;
-    std::filesystem::current_path(homedir, ec);
-    if (ec) {
-      fprintf(stderr, "failed to chdir into homedir %s: %s\n", homedir.c_str(),
-              ec.message().c_str());
-      return 1;
-    }
+  // chdir into homedir
+  std::filesystem::current_path(homedir, ec);
+  if (ec) {
+    fprintf(stderr, "Error: failed to chdir into homedir %s: %s\n",
+            homedir.c_str(), ec.message().c_str());
+    return 1;
   }
   homedir = "./";
 
   Node node(homedir, addr_str);
 
-  if (!mkdir_p(homedir + "/log") || !mkdir_p(homedir + "/cache") ||
-      !wipe_dir(homedir + "/tmp")) {
-    fprintf(stderr, "failed to create homedir structure: %s\n",
-            strerror(errno));
+  if (!mkdir_p("./log", ec)) {
+    fprintf(stderr, "Error: failed to create ./log: %s\n",
+            ec.message().c_str());
+    return 1;
+  }
+  if (!mkdir_p("./cache", ec)) {
+    fprintf(stderr, "Error: failed to create ./cache: %s\n",
+            ec.message().c_str());
+    return 1;
+  }
+  if (!wipe_dir("./tmp", ec)) {
+    fprintf(stderr, "Error: failed to create ./tmp: %s\n",
+            ec.message().c_str());
     return 1;
   }
 
-  std::string lockpath = homedir + "/dist_cache.lock";
+  std::string lockpath = "./dist_cache.lock";
   if (!pidlock_acquire(lockpath)) {
-    fprintf(stderr, "another instance holds %s\n", lockpath.c_str());
+    fprintf(stderr, "Error: another instance holds %s\n", lockpath.c_str());
     return 1;
   }
 

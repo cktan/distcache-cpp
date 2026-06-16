@@ -89,6 +89,23 @@ static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   return true;
 }
 
+static void serve_fd(fd_t &fd, httplib::Response &res) {
+  struct StreamState {
+    fd_t fd;
+    bool done = false;
+  };
+  auto st = std::make_shared<StreamState>();
+  st->fd = std::move(fd);
+  res.status = 200;
+  res.set_chunked_content_provider(
+      "application/octet-stream",
+      [st](size_t, httplib::DataSink &sink) mutable -> bool {
+        if (st->done)
+          return true;
+        return send_file(st->fd, st->done, sink);
+      });
+}
+
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
 static void handle_get(Node &node, const httplib::Request &req,
@@ -147,22 +164,7 @@ static void handle_get(Node &node, const httplib::Request &req,
     node.feed.put("cache.hit", relpath.c_str());
     node.stats.hits++;
     node.stats.served++;
-
-    struct StreamState {
-      fd_t fd;
-      bool done = false;
-    };
-    auto st = std::make_shared<StreamState>();
-    st->fd = std::move(fd);
-
-    res.status = 200;
-    res.set_chunked_content_provider(
-        "application/octet-stream",
-        [st](size_t, httplib::DataSink &sink) mutable -> bool {
-          if (st->done)
-            return true;
-          return send_file(st->fd, st->done, sink);
-        });
+    serve_fd(fd, res);
     return;
   }
 
@@ -182,22 +184,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   if (node.cache.read(relpath, fd).ok()) {
     node.keylock.release(relpath);
     node.stats.served++;
-
-    struct StreamState {
-      fd_t fd;
-      bool done = false;
-    };
-    auto st = std::make_shared<StreamState>();
-    st->fd = std::move(fd);
-
-    res.status = 200;
-    res.set_chunked_content_provider(
-        "application/octet-stream",
-        [st](size_t, httplib::DataSink &sink) mutable -> bool {
-          if (st->done)
-            return true;
-          return send_file(st->fd, st->done, sink);
-        });
+    serve_fd(fd, res);
     return;
   }
 

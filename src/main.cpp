@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <spdlog/spdlog.h>
 #include <sys/stat.h>
 #include <thread>
 #include <vector>
@@ -108,8 +109,8 @@ int main(int argc, char **argv) {
   });
   scan_thread.detach();
 
-  fprintf(stderr, "distcache %s starting on %s homedir=%s\n", DISTCACHE_VERSION,
-          addr_str.c_str(), homedir.c_str());
+  spdlog::info("distcache {} starting on {} homedir={}", DISTCACHE_VERSION,
+               addr_str, homedir);
 
   node.http.start(addr_str);
 
@@ -118,6 +119,6 @@ int main(int argc, char **argv) {
   node.rebalancer.stop();
   pidlock_release(lockpath);
 
-  fprintf(stderr, "distcache stopped\n");
+  spdlog::info("distcache stopped");
   return 0;
 }

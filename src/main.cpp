@@ -13,12 +13,16 @@
 
 #define DISTCACHE_VERSION "0.1.0"
 
+// Signal handlers can't capture state, so the server to stop is reached
+// through a global instead of being passed in.
 static HttpServer *g_http_signal = nullptr;
 static void on_signal(int) {
   if (g_http_signal)
     g_http_signal->stop();
 }
 
+// ec is an out-param rather than relying on errno: std::filesystem
+// operations report failures via std::error_code, not errno.
 static bool mkdir_p(const std::string &path, std::error_code &ec) {
   std::filesystem::create_directories(path, ec);
   return !ec;
@@ -78,6 +82,8 @@ int main(int argc, char **argv) {
             homedir.c_str(), ec.message().c_str());
     return 1;
   }
+  // homedir is now the cwd, so every path built from it downstream
+  // (Node, mkdir_p, lockpath, log files) only needs to be relative.
   homedir = "./";
 
   Node node(homedir, addr_str);
@@ -98,6 +104,9 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  // Both loggers share file_sink so every message lands in the log
+  // file; startup_logger additionally echoes to the console until
+  // the server starts serving, then we drop to file_logger only.
   auto file_sink = std::make_shared<spdlog::sinks::basic_file_sink_mt>(
       "./log/distcache.log");
   auto console_sink = std::make_shared<spdlog::sinks::stdout_color_sink_mt>();
@@ -109,7 +118,7 @@ int main(int argc, char **argv) {
 
   std::string lockpath = "./dist_cache.lock";
   if (!pidlock_acquire(lockpath)) {
-    fprintf(stderr, "Error: another instance holds %s\n", lockpath.c_str());
+    spdlog::error("another instance holds {}", lockpath);
     return 1;
   }
 
@@ -126,7 +135,10 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  std::thread scan_thread([&node]() {
+  // Captures startup_logger by value (not via spdlog::default_logger())
+  // since this thread outlives the later set_default_logger() swap and
+  // a global default could change underneath it mid-scan.
+  std::thread scan_thread([&node, startup_logger]() {
     constexpr size_t BATCH = 1024;
     std::vector<std::pair<std::string, time_t>> batch;
     batch.reserve(BATCH);
@@ -141,13 +153,15 @@ int main(int argc, char **argv) {
     if (!batch.empty())
       node.cache.batch_put(batch);
 
-    fprintf(stderr, "startup scan complete: %zu entries\n", node.cache.size());
+    startup_logger->info("startup scan complete: {} entries",
+                         node.cache.size());
   });
   scan_thread.detach();
 
   spdlog::info("distcache {} starting on {} homedir={}", DISTCACHE_VERSION,
                addr_str, std::filesystem::current_path().string());
 
+  // Starting here, write logs to file only
   spdlog::set_default_logger(file_logger);
   node.http.start(addr_str);
 

@@ -21,13 +21,13 @@ static bool valid_component(const std::string &s) {
   return true;
 }
 
-std::optional<std::string> compute_relpath(const std::string &bucket,
-                                           const std::string &key) {
+std::optional<relpath_t> compute_relpath(const std::string &bucket,
+                                         const std::string &key) {
   if (!valid_component(bucket))
     return std::nullopt;
   if (!valid_component(key))
     return std::nullopt;
-  return "cache/" + bucket + "/" + key;
+  return relpath_t{"cache/" + bucket + "/" + key};
 }
 
 std::string to_abs(const std::string &homedir, const std::string &relpath) {

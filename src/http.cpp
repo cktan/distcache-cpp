@@ -97,8 +97,8 @@ static void handle_get(Node &node, const httplib::Request &req,
     send_raw(res, wire_err("invalid bucket or key"));
     return;
   }
-  const std::string &relpath = *relpath_opt;
-  uint32_t rp_id = ring_t::compute_id(relpath);
+  const relpath_t &relpath = *relpath_opt;
+  uint32_t rp_id = ring_t::compute_id(relpath.str());
 
   bool local_only = req.has_param("local");
   bool delete_after = req.has_param("delete");
@@ -109,15 +109,16 @@ static void handle_get(Node &node, const httplib::Request &req,
     if (!dest.empty() &&
         dest != Membership::parse_peer(node.config.nodeid).first) {
       node.membership.hint_alive(dest);
-      node.feed.put("cache.redirect", relpath.c_str(), "dest", dest.c_str());
+      node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
+                    dest.c_str());
       if (node.cache.exists(relpath)) {
         auto peers = node.membership.alive_peers();
         bool dest_alive =
             std::find(peers.begin(), peers.end(), dest) != peers.end();
         if (dest_alive) {
-          time_t mt = node.cache.get_mtime(relpath);
+          time_t mt = node.cache.get_mtime(relpath.str());
           std::string mt_str = std::to_string(mt ? mt : time(nullptr));
-          node.jobq.put("hint_pull", dest.c_str(), relpath.c_str(),
+          node.jobq.put("hint_pull", dest.c_str(), relpath.str().c_str(),
                         mt_str.c_str());
         }
       }
@@ -137,7 +138,7 @@ static void handle_get(Node &node, const httplib::Request &req,
     if (delete_after) {
       node.cache.drop(relpath);
     }
-    node.feed.put("cache.hit", relpath.c_str());
+    node.feed.put("cache.hit", relpath.str().c_str());
     node.stats.hits++;
     node.stats.served++;
     serve_fd(fd, res);
@@ -150,15 +151,15 @@ static void handle_get(Node &node, const httplib::Request &req,
   }
 
   node.stats.misses++;
-  node.feed.put("cache.miss", relpath.c_str());
+  node.feed.put("cache.miss", relpath.str().c_str());
 
-  node.keylock.acquire(relpath);
+  node.keylock.acquire(relpath.str());
 
   // Another thread may have fetched while we waited. Open under lock so the
   // fd keeps the inode alive, then release the lock before reading content.
   fd_t fd;
   if (node.cache.read(relpath, fd).ok()) {
-    node.keylock.release(relpath);
+    node.keylock.release(relpath.str());
     node.stats.served++;
     serve_fd(fd, res);
     return;
@@ -171,16 +172,16 @@ static void handle_get(Node &node, const httplib::Request &req,
     rc = node.cache.move(tmp_rel, relpath);
   }
   remove(tmp_abs.c_str()); // LATER: queue this to g_jobq
-  node.keylock.release(relpath);
+  node.keylock.release(relpath.str());
 
   if (!rc.ok()) {
     node.stats.errors++;
-    node.feed.put("s3copy.err", relpath.c_str(), rc.errstr());
+    node.feed.put("s3copy.err", relpath.str().c_str(), rc.errstr());
     send_raw(res, wire_err("s3copy failed"));
     return;
   }
 
-  node.feed.put("s3copy.ok", relpath.c_str());
+  node.feed.put("s3copy.ok", relpath.str().c_str());
   node.jobq.put("evict");
 
   fd_t fd2;
@@ -276,7 +277,7 @@ static void handle_put(Node &node, const httplib::Request &req,
     send_raw(res, wire_err("invalid bucket or key"));
     return;
   }
-  const std::string &relpath = *relpath_opt;
+  const relpath_t &relpath = *relpath_opt;
 
   fd_t fd;
   if (!node.cache.write(relpath, fd).ok()) {
@@ -320,7 +321,7 @@ static void handle_delete(Node &node, const httplib::Request &req,
     send_raw(res, wire_err("invalid bucket or key"));
     return;
   }
-  const std::string &relpath = *relpath_opt;
+  const relpath_t &relpath = *relpath_opt;
   node.cache.drop(relpath);
   send_raw(res, wire_fin());
 }

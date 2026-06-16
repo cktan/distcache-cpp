@@ -27,11 +27,10 @@
 // automatically; callers do not touch the lru directly.
 
 class cache_t {
-  std::string homedir_;
   lru_t lru_;
 
 public:
-  cache_t(const std::string &homedir, keylock_t &keylock);
+  cache_t(keylock_t &keylock);
 
   // True if relpath exists and is readable.
   bool exists(const relpath_t &relpath) const;

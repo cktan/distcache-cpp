@@ -35,6 +35,28 @@ static void usage(const char *prog) {
           prog);
 }
 
+static void parse_arg(int argc, char **argv,
+		      std::string& homedir,
+		      std::string& addr_str) {
+  for (int i = 1; i < argc; i++) {
+    if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) {
+      homedir = argv[++i];
+    } else if (strcmp(argv[i], "-N") == 0 && i + 1 < argc) {
+      addr_str = argv[++i];
+    } else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
+      seeds.push_back(argv[++i]);
+    } else if (strcmp(argv[i], "--version") == 0) {
+      printf("distcache %s\n", DISTCACHE_VERSION);
+      return 0;
+    } else {
+      fprintf(stderr, "unknown flag: %s\n", argv[i]);
+      usage(argv[0]);
+      return 1;
+    }
+  }
+}
+
+
 int main(int argc, char **argv) {
   std::string homedir;
   std::string addr_str;
@@ -62,10 +84,21 @@ int main(int argc, char **argv) {
     return 1;
   }
 
+  {
+    std::error_code ec;
+    std::filesystem::current_path(homedir, ec);
+    if (ec) {
+      fprintf(stderr, "failed to chdir into homedir %s: %s\n", homedir.c_str(),
+              ec.message().c_str());
+      return 1;
+    }
+  }
+  homedir = "./";
+
   Node node(homedir, addr_str);
 
-  if (!mkdir_p(homedir) || !mkdir_p(homedir + "/log") ||
-      !mkdir_p(homedir + "/cache") || !wipe_dir(homedir + "/tmp")) {
+  if (!mkdir_p(homedir + "/log") || !mkdir_p(homedir + "/cache") ||
+      !wipe_dir(homedir + "/tmp")) {
     fprintf(stderr, "failed to create homedir structure: %s\n",
             strerror(errno));
     return 1;

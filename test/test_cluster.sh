@@ -15,6 +15,7 @@ cleanup() {
 trap cleanup EXIT
 
 rm -rf "$DIR1" "$DIR2"
+mkdir -p "$DIR1" "$DIR2"
 
 "$DC" -D "$DIR1" -N "127.0.0.1:$PORT1" -p "127.0.0.1:$PORT2" 2>/dev/null &
 PID1=$!

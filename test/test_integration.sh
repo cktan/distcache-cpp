@@ -13,6 +13,7 @@ cleanup() {
 trap cleanup EXIT
 
 rm -rf "$HOMEDIR"
+mkdir -p "$HOMEDIR"
 "$DC" -D "$HOMEDIR" -N "127.0.0.1:$PORT" 2>/dev/null &
 PID=$!
 sleep 1

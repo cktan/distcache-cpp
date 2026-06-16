@@ -27,6 +27,7 @@ cleanup() {
 trap cleanup EXIT
 
 rm -rf "$DIRA" "$DIRB"
+mkdir -p "$DIRA" "$DIRB"
 
 echo "[test] starting node A ($ADDRA) solo"
 "$DC" -D "$DIRA" -N "$ADDRA" &

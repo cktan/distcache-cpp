@@ -69,7 +69,7 @@ curl -sf "http://127.0.0.1:$S3PORT/ping" >/dev/null \
 echo "[s3cluster] fake S3 ready (pid=$S3PID)"
 
 # ── Start 10 nodes ────────────────────────────────────────────────────────────
-for d in "${DIRS[@]}"; do rm -rf "$d"; done
+for d in "${DIRS[@]}"; do rm -rf "$d"; mkdir -p "$d"; done
 
 for i in $(seq 0 $((N_NODES - 1))); do
     port=${PORTS[$i]}

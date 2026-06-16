@@ -67,10 +67,10 @@ static rc_t errno_to_rc(const std::string &msg) {
 }
 
 cache_t::cache_t(keylock_t &keylock)
-  : lru_("./", keylock, ring_t::compute_id) {}
+    : lru_("./", keylock, ring_t::compute_id) {}
 
 std::string cache_t::abspath(const relpath_t &relpath) const {
-  return std::filesystem::absolute("./"+relpath.str());
+  return std::filesystem::absolute("./" + relpath.str());
 }
 
 bool cache_t::exists(const relpath_t &relpath) const {

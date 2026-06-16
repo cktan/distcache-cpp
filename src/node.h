@@ -24,8 +24,7 @@ struct Node {
   HttpServer http;
 
   Node(const std::string &homedir, const std::string &nodeid)
-      : cache(keylock), membership(*this), rebalancer(*this),
-        http(*this) {
+      : cache(keylock), membership(*this), rebalancer(*this), http(*this) {
     config.homedir = homedir;
     config.nodeid = nodeid;
   }

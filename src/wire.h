@@ -3,13 +3,6 @@
 #include <cstddef>
 #include <string>
 
-static inline std::string meta_data(int n) {
-  return "DATA:" + std::to_string(n) + "\n";
-}
-
-// Encode a DATA frame: "DATA:<n>\n<bytes>FIN:0\n"
-std::string wire_data(const char *buf, size_t n);
-
 // Encode an INFO frame: "INFO:<n>\n<json>\nFIN:0\n"
 std::string wire_info(const std::string &json);
 

@@ -4,17 +4,6 @@
 
 static const std::string FIN = "FIN:0\n";
 
-std::string wire_data(const char *buf, size_t n) {
-  std::string out;
-  out.reserve(32 + n + FIN.size());
-  out += "DATA:";
-  out += std::to_string(n);
-  out += "\n";
-  out.append(buf, n);
-  out += FIN;
-  return out;
-}
-
 std::string wire_info(const std::string &json) {
   std::string out;
   out += "INFO:";

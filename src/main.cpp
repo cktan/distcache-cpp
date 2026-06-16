@@ -28,6 +28,7 @@ static bool mkdir_p(const std::string &path, std::error_code &ec) {
   return !ec;
 }
 
+// Make sure that the path dir is empty
 static bool wipe_dir(const std::string &path, std::error_code &ec) {
   std::filesystem::remove_all(path, ec);
   if (ec)
@@ -35,14 +36,32 @@ static bool wipe_dir(const std::string &path, std::error_code &ec) {
   return mkdir_p(path, ec);
 }
 
+// Print a usage message
 static void usage(const char *prog) {
   fprintf(stderr,
-          "Usage: %s -D <homedir> -N <host:port[/first_id]> [-p <seed>]...\n",
+          "Usage: %s -D <homedir> -N <host:port[/first_id]> [-p <seed>]...\n"
+          "\n"
+          "distcache is a node in a distributed cache cluster. Each node\n"
+          "stores its cached objects under <homedir> and serves them over\n"
+          "HTTP, redirecting requests to the node responsible for a key.\n"
+          "\n"
+          "  -D <homedir>          directory to store this node's cache,\n"
+          "                        logs, and lock file\n"
+          "  -N <host:port[/first_id]>\n"
+          "                        address this node listens on; an\n"
+          "                        optional /first_id sets its first ring\n"
+          "                        id instead of deriving one\n"
+          "  -p <seed>             address of an existing cluster member\n"
+          "                        to join through; may be repeated\n",
           prog);
 }
 
+// Parse argc/argv to extract parameters
 static bool parse_arg(int argc, char **argv, std::string &homedir,
                       std::string &addr_str, std::vector<std::string> &seeds) {
+  homedir = "";
+  addr_str = "";
+  seeds.clear();
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) {
       homedir = argv[++i];
@@ -82,6 +101,7 @@ int main(int argc, char **argv) {
             homedir.c_str(), ec.message().c_str());
     return 1;
   }
+
   // homedir is now the cwd, so every path built from it downstream
   // (Node, mkdir_p, lockpath, log files) only needs to be relative.
   homedir = "./";

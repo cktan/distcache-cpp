@@ -12,6 +12,8 @@
 
 Rebalancer::Rebalancer(Node &n) : node_(n) {}
 
+// Splits "cache/bucket/key..." back into bucket and key. Used by pull_one
+// to rebuild the request path for fetching from the source peer.
 static bool relpath_to_bk(const std::string &relpath, std::string &bucket,
                           std::string &key) {
   if (relpath.compare(0, 6, "cache/") != 0)
@@ -24,6 +26,9 @@ static bool relpath_to_bk(const std::string &relpath, std::string &bucket,
   return !bucket.empty() && !key.empty();
 }
 
+// Splits "host:port" into host and port. Used wherever a peer/dest address
+// needs to become an httplib::Client target (hint_pull, claim_sweep,
+// pull_one).
 static bool split_addr(const std::string &addr, std::string &host, int &port) {
   size_t colon = addr.rfind(':');
   if (colon == std::string::npos)
@@ -37,6 +42,9 @@ static bool split_addr(const std::string &addr, std::string &host, int &port) {
   return port > 0 && port <= 65535;
 }
 
+// Called once at node startup (main.cpp). Registers the job-queue handler
+// that drives async rebalance work; see the per-type comments below for who
+// queues each job type.
 void Rebalancer::start() {
   // start the job-queue consumer thread
   node_.jobq.start([this](std::vector<std::string> rec) {
@@ -116,6 +124,9 @@ void Rebalancer::start() {
 // stop the job-queue consumer thread
 void Rebalancer::stop() { node_.jobq.stop(); }
 
+// Called by Membership when nodeid joins the ring. Tells every alive peer
+// to run claim_scan for nodeid, so each peer hint_pulls the keys it now
+// owns on nodeid's behalf.
 void Rebalancer::claim_sweep(const std::string &nodeid) {
   auto peers = node_.membership.alive_peers();
   if (peers.empty())
@@ -137,6 +148,9 @@ void Rebalancer::claim_sweep(const std::string &nodeid) {
   }
 }
 
+// Called by the claim_scan job handler above. Scans the local LRU for keys
+// whose ring successor is now peer_addr, returning up to the 50 most
+// recently touched (oldest entries skipped via the 5-day cutoff).
 std::vector<std::pair<std::string, time_t>>
 Rebalancer::scan_for_peer(const std::string &peer_addr) {
   auto ring = node_.ring.load();
@@ -228,6 +242,9 @@ static bool recv_file(const char *data, size_t datasz, StreamState &state,
   return true;
 }
 
+// Called by the do_pull job handler above. Streams relpath from src_addr
+// into the local cache, guarding against duplicate concurrent fetches via
+// keylock and a double exists() check.
 void Rebalancer::pull_one(const std::string &src_addr,
                           const std::string &relpath,
                           const std::string &mtime_str) {

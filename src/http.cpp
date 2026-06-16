@@ -177,17 +177,27 @@ static void handle_get(Node &node, const httplib::Request &req,
   node.keylock.acquire(relpath);
 
   // Another thread may have fetched while we waited. Open under lock so the
-  // fd keeps the inode alive, then release before reading content.
+  // fd keeps the inode alive, then release the lock before reading content.
   fd_t fd;
   if (node.cache.read(relpath, fd).ok()) {
     node.keylock.release(relpath);
-    std::string data;
-    if (!read_fd(fd, data)) {
-      send_raw(res, wire_err("fetch failed"));
-      return;
-    }
     node.stats.served++;
-    send_raw(res, wire_data_chunked(data.data(), data.size()));
+
+    struct StreamState {
+      fd_t fd;
+      bool done = false;
+    };
+    auto st = std::make_shared<StreamState>();
+    st->fd = std::move(fd);
+
+    res.status = 200;
+    res.set_chunked_content_provider(
+        "application/octet-stream",
+        [st](size_t, httplib::DataSink &sink) mutable -> bool {
+          if (st->done)
+            return true;
+          return send_file(st->fd, st->done, sink);
+        });
     return;
   }
 
@@ -197,7 +207,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   if (rc.ok()) {
     rc = node.cache.move(tmp_rel, relpath);
   }
-  remove(tmp_abs.c_str()); // TODO: queue this to g_jobq
+  remove(tmp_abs.c_str()); // LATER: queue this to g_jobq
   node.keylock.release(relpath);
 
   if (!rc.ok()) {

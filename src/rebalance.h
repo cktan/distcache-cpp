@@ -1,14 +1,18 @@
 #pragma once
+// rebalancer_t: moves cache entries between nodes when ring membership
+// changes. Drives claim_sweep (push owned keys to a joining node),
+// scan_for_peer (find keys a peer should own), and pull_one (fetch
+// one entry from a source peer).
 #include "feed.h"
 #include <cstdint>
 #include <string>
 #include <vector>
 
-struct Node;
+struct node_t;
 
-class Rebalancer {
+class rebalancer_t {
 public:
-  explicit Rebalancer(Node &n);
+  explicit rebalancer_t(node_t &n);
 
   void start();
   void stop();
@@ -22,5 +26,5 @@ public:
                 const std::string &mtime_str);
 
 private:
-  Node &node_;
+  node_t &node_;
 };

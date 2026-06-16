@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-Rebalancer::Rebalancer(Node &n) : node_(n) {}
+rebalancer_t::rebalancer_t(node_t &n) : node_(n) {}
 
 // Splits "cache/bucket/key..." back into bucket and key. Used by pull_one
 // to rebuild the request path for fetching from the source peer.
@@ -45,7 +45,7 @@ static bool split_addr(const std::string &addr, std::string &host, int &port) {
 // Called once at node startup (main.cpp). Registers the job-queue handler
 // that drives async rebalance work; see the per-type comments below for who
 // queues each job type.
-void Rebalancer::start() {
+void rebalancer_t::start() {
   // start the job-queue consumer thread
   node_.jobq.start([this](std::vector<std::string> rec) {
     if (rec.empty())
@@ -100,7 +100,7 @@ void Rebalancer::start() {
       const std::string &nodeid = rec[1];
       // register the new peer in the ring before scanning against it
       node_.membership.inject_node(nodeid);
-      auto [addr, fid] = Membership::parse_peer(nodeid);
+      auto [addr, fid] = membership_t::parse_peer(nodeid);
       auto entries = scan_for_peer(addr);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
@@ -122,12 +122,12 @@ void Rebalancer::start() {
 }
 
 // stop the job-queue consumer thread
-void Rebalancer::stop() { node_.jobq.stop(); }
+void rebalancer_t::stop() { node_.jobq.stop(); }
 
-// Called by Membership when nodeid joins the ring. Tells every alive peer
+// Called by membership_t when nodeid joins the ring. Tells every alive peer
 // to run claim_scan for nodeid, so each peer hint_pulls the keys it now
 // owns on nodeid's behalf.
-void Rebalancer::claim_sweep(const std::string &nodeid) {
+void rebalancer_t::claim_sweep(const std::string &nodeid) {
   auto peers = node_.membership.alive_peers();
   if (peers.empty())
     return;
@@ -152,7 +152,7 @@ void Rebalancer::claim_sweep(const std::string &nodeid) {
 // whose ring successor is now peer_addr, returning up to the 50 most
 // recently touched (oldest entries skipped via the 5-day cutoff).
 std::vector<std::pair<std::string, time_t>>
-Rebalancer::scan_for_peer(const std::string &peer_addr) {
+rebalancer_t::scan_for_peer(const std::string &peer_addr) {
   auto ring = node_.ring.load();
   time_t cutoff = time(nullptr) - 5 * 86400;
 
@@ -245,9 +245,9 @@ static bool recv_file(const char *data, size_t datasz, StreamState &state,
 // Called by the do_pull job handler above. Streams relpath from src_addr
 // into the local cache, guarding against duplicate concurrent fetches via
 // keylock and a double exists() check.
-void Rebalancer::pull_one(const std::string &src_addr,
-                          const std::string &relpath,
-                          const std::string &mtime_str) {
+void rebalancer_t::pull_one(const std::string &src_addr,
+                            const std::string &relpath,
+                            const std::string &mtime_str) {
   std::string bucket, key;
   if (!relpath_to_bk(relpath, bucket, key))
     return;

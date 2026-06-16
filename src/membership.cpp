@@ -9,9 +9,10 @@
 #include <thread>
 #include <unistd.h>
 
-Membership::Membership(Node &n) : node_(n) {}
+membership_t::membership_t(node_t &n) : node_(n) {}
 
-std::pair<std::string, uint32_t> Membership::parse_peer(const std::string &s) {
+std::pair<std::string, uint32_t>
+membership_t::parse_peer(const std::string &s) {
   size_t slash = s.find('/');
   if (slash == std::string::npos)
     return {s, 0};
@@ -29,7 +30,7 @@ std::pair<std::string, uint32_t> Membership::parse_peer(const std::string &s) {
   return {addr, static_cast<uint32_t>(val)};
 }
 
-void Membership::rebuild_ring() {
+void membership_t::rebuild_ring() {
   if (!inst_)
     return;
 
@@ -67,7 +68,7 @@ void Membership::rebuild_ring() {
           membership.size());
 }
 
-void Membership::inject_node(const std::string &nodeid) {
+void membership_t::inject_node(const std::string &nodeid) {
   auto [addr, fid] = parse_peer(nodeid);
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
@@ -76,8 +77,8 @@ void Membership::inject_node(const std::string &nodeid) {
   rebuild_ring();
 }
 
-bool Membership::start(const std::string &nodeid,
-                       const std::vector<std::string> &seeds) {
+bool membership_t::start(const std::string &nodeid,
+                         const std::vector<std::string> &seeds) {
   auto [addr, fid] = parse_peer(nodeid);
   size_t colon = addr.rfind(':');
   std::string host = addr.substr(0, colon);
@@ -166,19 +167,19 @@ bool Membership::start(const std::string &nodeid,
   return true;
 }
 
-void Membership::leave() {
+void membership_t::leave() {
   if (inst_) {
     swim_leave(inst_);
     inst_ = nullptr;
   }
 }
 
-void Membership::hint_alive(const std::string &peer_addr) {
+void membership_t::hint_alive(const std::string &peer_addr) {
   if (inst_)
     swim_hint_alive(inst_, peer_addr.c_str());
 }
 
-std::vector<std::string> Membership::alive_peers() {
+std::vector<std::string> membership_t::alive_peers() {
   if (!inst_)
     return {};
 
@@ -201,7 +202,7 @@ std::vector<std::string> Membership::alive_peers() {
   return result;
 }
 
-std::string Membership::timestamp() {
+std::string membership_t::timestamp() {
   time_t now = time(nullptr);
   struct tm tm;
   gmtime_r(&now, &tm);

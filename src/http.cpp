@@ -11,7 +11,7 @@
 #include <httplib.h>
 #include <unistd.h>
 
-HttpServer::HttpServer(Node &n) : node_(n) {}
+http_server_t::http_server_t(node_t &n) : node_(n) {}
 
 static time_t g_start_time = 0;
 static httplib::Server *g_svr = nullptr;
@@ -84,7 +84,7 @@ static void serve_fd(fd_t &fd, httplib::Response &res) {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
-static void handle_get(Node &node, const httplib::Request &req,
+static void handle_get(node_t &node, const httplib::Request &req,
                        httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
@@ -106,7 +106,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   if (!local_only) {
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
-    if (!dest.empty() && dest != Membership::parse_peer(node.nodeid).first) {
+    if (!dest.empty() && dest != membership_t::parse_peer(node.nodeid).first) {
       node.membership.hint_alive(dest);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
@@ -193,7 +193,7 @@ static void handle_get(Node &node, const httplib::Request &req,
   serve_fd(fd2, res);
 }
 
-static void handle_health(Node &node, const httplib::Request &,
+static void handle_health(node_t &node, const httplib::Request &,
                           httplib::Response &res) {
   auto peers = node.membership.alive_peers();
   std::string peers_json = "[";
@@ -234,7 +234,7 @@ static void handle_health(Node &node, const httplib::Request &,
       node.stats.hint_pull.load(), peers_json);
 }
 
-static void handle_claim_keyspace(Node &node, const httplib::Request &req,
+static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
                                   httplib::Response &res) {
   std::string nodeid = json_str(req.body, "nodeid");
 
@@ -247,7 +247,7 @@ static void handle_claim_keyspace(Node &node, const httplib::Request &req,
   send_raw(res, wire_fin());
 }
 
-static void handle_hint_pull(Node &node, const httplib::Request &req,
+static void handle_hint_pull(node_t &node, const httplib::Request &req,
                              httplib::Response &res) {
   std::string src = json_str(req.body, "src");
   std::string relpath = json_str(req.body, "relpath");
@@ -263,7 +263,7 @@ static void handle_hint_pull(Node &node, const httplib::Request &req,
   send_raw(res, wire_fin());
 }
 
-static void handle_put(Node &node, const httplib::Request &req,
+static void handle_put(node_t &node, const httplib::Request &req,
                        httplib::Response &res,
                        const httplib::ContentReader &content_reader) {
   std::string bucket, key;
@@ -308,7 +308,7 @@ static void handle_put(Node &node, const httplib::Request &req,
   send_raw(res, wire_fin());
 }
 
-static void handle_delete(Node &node, const httplib::Request &req,
+static void handle_delete(node_t &node, const httplib::Request &req,
                           httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
@@ -328,8 +328,8 @@ static void handle_delete(Node &node, const httplib::Request &req,
 // ── Server lifecycle
 // ──────────────────────────────────────────────────────────
 
-void HttpServer::start(const std::string &nodeid) {
-  auto [addr, fid] = Membership::parse_peer(nodeid);
+void http_server_t::start(const std::string &nodeid) {
+  auto [addr, fid] = membership_t::parse_peer(nodeid);
   size_t colon = addr.rfind(':');
   std::string host = addr.substr(0, colon);
   int port = std::stoi(addr.substr(colon + 1));
@@ -367,7 +367,7 @@ void HttpServer::start(const std::string &nodeid) {
   svr->listen(host, port);
 }
 
-void HttpServer::stop() {
+void http_server_t::stop() {
   if (g_svr)
     g_svr->stop();
 }

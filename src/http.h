@@ -1,14 +1,14 @@
 #pragma once
 #include <string>
 
-struct Node;
+struct node_t;
 
-class HttpServer {
+class http_server_t {
 public:
-  explicit HttpServer(Node &n);
+  explicit http_server_t(node_t &n);
   void start(const std::string &nodeid);
   void stop();
 
 private:
-  Node &node_;
+  node_t &node_;
 };

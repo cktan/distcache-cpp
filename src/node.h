@@ -10,7 +10,7 @@
 #include <atomic>
 #include <memory>
 
-struct Node {
+struct node_t {
   std::string nodeid; // "host:port" or "host:port/first_id"
   keylock_t keylock;
   cache_t cache;
@@ -18,13 +18,13 @@ struct Node {
   std::atomic<std::shared_ptr<ring_t>> ring{std::make_shared<ring_t>()};
   feed_t feed;
   feed_t jobq;
-  Membership membership;
-  Rebalancer rebalancer;
-  HttpServer http;
+  membership_t membership;
+  rebalancer_t rebalancer;
+  http_server_t http;
 
-  Node(const std::string &nodeid)
+  node_t(const std::string &nodeid)
       : nodeid(nodeid), cache(keylock), membership(*this), rebalancer(*this),
         http(*this) {}
-  Node(const Node &) = delete;
-  Node &operator=(const Node &) = delete;
+  node_t(const node_t &) = delete;
+  node_t &operator=(const node_t &) = delete;
 };

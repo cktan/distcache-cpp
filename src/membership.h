@@ -1,7 +1,7 @@
 #pragma once
 // ── SWIM Cluster Membership & Consistent Hashing Integration ─────────────────
 //
-// Membership manages cluster membership tracking using the SWIM (Simple
+// membership_t manages cluster membership tracking using the SWIM (Simple
 // Weakly-consistent Infection-style Process Group Membership) protocol.
 // It detects node joins/leaves/failures and dynamically rebuilds the Chord
 // consistent hashing ring.
@@ -38,11 +38,11 @@
 #include <swim.h>
 #include <vector>
 
-struct Node;
+struct node_t;
 
-class Membership {
+class membership_t {
 public:
-  explicit Membership(Node &n);
+  explicit membership_t(node_t &n);
 
   bool start(const std::string &nodeid, const std::vector<std::string> &seeds);
   void leave();
@@ -55,7 +55,7 @@ public:
   static std::string timestamp();
 
 private:
-  Node &node_;
+  node_t &node_;
   swim_t *inst_ = nullptr;
   std::string self_addr_;
   uint32_t first_id_ = 0;

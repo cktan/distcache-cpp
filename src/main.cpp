@@ -15,7 +15,7 @@
 
 // Signal handlers can't capture state, so the server to stop is reached
 // through a global instead of being passed in.
-static HttpServer *g_http_signal = nullptr;
+static http_server_t *g_http_signal = nullptr;
 static void on_signal(int) {
   if (g_http_signal)
     g_http_signal->stop();
@@ -104,7 +104,7 @@ int main(int argc, char **argv) {
 
   // homedir is now the cwd, so every path built from it downstream
   // (mkdir_p, lockpath, log files) only needs to be relative.
-  Node node(addr_str);
+  node_t node(addr_str);
 
   if (!mkdir_p("./log", ec)) {
     fprintf(stderr, "Error: failed to create ./log: %s\n",

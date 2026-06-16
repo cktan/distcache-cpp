@@ -61,12 +61,6 @@ static inline int push_frame_length(const push_frame_t *p) {
   return -1;
 }
 
-/* Returns true when a complete, valid frame is in raw[]:
-   header fits in 50 bytes, length 0..8192, and all payload bytes arrived. */
-static inline bool push_frame_is_complete(const push_frame_t *p) {
-  return p->complete;
-}
-
 /* Initialize parser before first use. Call again between frames. */
 static inline void push_frame_init(push_frame_t *p) {
   p->colon = p->newline = NULL;
@@ -75,7 +69,7 @@ static inline void push_frame_init(push_frame_t *p) {
 }
 
 /* Push bytes into parser. Returns bytes consumed (0..n) or -1 on error.
-   Call push_frame_is_complete() after each call to check if frame is ready.
+   Check p->complete after each call to see if frame is ready.
    consumed < n means frame completed mid-buffer; remaining bytes start at
    buf+consumed and belong to the next frame. */
 int stream_in_push(push_frame_t *p, const char *buf, size_t n);

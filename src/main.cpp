@@ -7,7 +7,6 @@
 #include <cstring>
 #include <filesystem>
 #include <spdlog/spdlog.h>
-#include <sys/stat.h>
 #include <thread>
 #include <vector>
 
@@ -20,9 +19,9 @@ static void on_signal(int) {
 }
 
 static bool mkdir_p(const std::string &path) {
-  if (mkdir(path.c_str(), 0755) == 0 || errno == EEXIST)
-    return true;
-  return false;
+  std::error_code ec;
+  std::filesystem::create_directories(path, ec);
+  return !ec;
 }
 
 static bool wipe_dir(const std::string &path) {

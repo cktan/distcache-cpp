@@ -485,34 +485,6 @@ static int parse_string_array(const char *json, size_t jlen,
   return count;
 }
 
-static int parse_membership_names(const char *json, size_t jlen,
-                                  char names[][DC_NODE_NAME_MAX],
-                                  int max_names) {
-  static const char needle[] = "\"name\":\"";
-  const size_t nlen = sizeof(needle) - 1;
-  int count = 0;
-  const char *p = json;
-  const char *end = json + jlen;
-
-  while (count < max_names && p < end) {
-    const char *found = memmem(p, (size_t)(end - p), needle, nlen);
-    if (!found)
-      break;
-    const char *start = found + nlen;
-    const char *q = memchr(start, '"', (size_t)(end - start));
-    if (!q)
-      break;
-    size_t len = (size_t)(q - start);
-    if (len > 0 && len < DC_NODE_NAME_MAX) {
-      memcpy(names[count], start, len);
-      names[count][len] = '\0';
-      count++;
-    }
-    p = q + 1;
-  }
-  return count;
-}
-
 /* ── Streaming wire-protocol parser ─────────────────────────────────────── */
 
 typedef struct {
@@ -741,13 +713,8 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
     if (strncmp(fp.raw, "FIN:", 4) == 0)
       break;
     if (strncmp(fp.raw, "INFO:", 5) == 0) {
-      /* Truncate at "dead": to exclude dead-node names from the scan. */
-      static const char dead_key[] = "\"dead\":";
-      const char *dead_pos =
-          memmem(payload, (size_t)plen, dead_key, sizeof(dead_key) - 1);
-      size_t scan_len = dead_pos ? (size_t)(dead_pos - payload) : (size_t)plen;
       *n_names =
-          parse_membership_names(payload, scan_len, names, DC_MAX_REDIR_NODES);
+          parse_string_array(payload, (size_t)plen, names, DC_MAX_REDIR_NODES);
       found = 1;
       ret = 0;
     }

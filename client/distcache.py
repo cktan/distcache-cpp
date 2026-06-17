@@ -416,7 +416,11 @@ class _ChunkReader:
                 result["status"] = "redirect"
                 result["nodes"] = json.loads(frame.payload)
             elif frame.type in ("INFO", "ERROR"):
-                result.update(json.loads(frame.payload))
+                parsed = json.loads(frame.payload)
+                if isinstance(parsed, list):
+                    result["_list"] = parsed
+                else:
+                    result.update(parsed)
 
         if result.get("status") in ("error", "redirect"):
             return result
@@ -504,13 +508,11 @@ def _execute(
 # ---------------------------------------------------------------------------
 
 def _fetch_nodes(node: _Node) -> list[str]:
-    """Call GET /_nodes and return the alive+suspect node names."""
+    """Call GET /_nodes and return node IDs."""
     result = _execute(node, "/_nodes")
     if result.get("status") == "error":
         raise DistCacheError(result.get("message", "/_nodes error"), DCERR_PROTOCOL)
-    alive   = result.get("alive",   [])
-    suspect = result.get("suspect", [])
-    return [e["name"] for e in alive + suspect]
+    return result.get("_list", [])
 
 
 # ---------------------------------------------------------------------------

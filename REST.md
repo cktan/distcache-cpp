@@ -94,17 +94,14 @@ response. Used by the client libraries for ring housekeeping.
 **Response** (`INFO` frame, then `FIN`):
 
 ```json
-{
-  "alive":   [{"name": "host:port[/first_id]"}, ...],
-  "suspect": [],
-  "dead":    []
-}
+["host:port[/first_id]", ...]
 ```
 
-`alive` includes the node itself plus all alive/suspected
-SWIM peers. Names include the `/first_id` cookie when the
-node was started with one; clients use it to place the node
-on the consistent-hash ring at the correct position.
+A flat array of node IDs (alive and suspected peers,
+including self). Each ID is `host:port`, optionally
+suffixed with `/first_id`; clients use the suffix to
+place the node on the consistent-hash ring at the
+correct position.
 
 ---
 

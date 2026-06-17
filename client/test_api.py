@@ -152,6 +152,11 @@ class TestChunkProtocol(unittest.TestCase):
         result = self._reader(body).read_response()
         self.assertEqual(result["data"], b"")
 
+    def test_read_response_info_list(self):
+        body = make_frame("INFO", json.dumps(["a:1", "b:2"]).encode()) + make_fin()
+        result = self._reader(body).read_response()
+        self.assertEqual(result["_list"], ["a:1", "b:2"])
+
     def test_truncation_raises_eoferror(self):
         body = b"DATA:100\nshort"
         with self.assertRaises(EOFError):
@@ -237,15 +242,8 @@ class TestModuleAPI(unittest.TestCase):
         self.assertIn("node1:4001", dc.get_nodes())
 
     def test_get_nodes_grows_on_redirect(self):
-        redirect_body = make_info({
-            "status": "redirect",
-            "membership": {
-                "alive":   [{"name": "node1:4001", "first_id": 1},
-                            {"name": "node2:4002", "first_id": 2}],
-                "suspect": [],
-            }
-        }) + make_fin()
-        ok_body = make_data(b"data") + make_fin()
+        redirect_body = make_frame("REDIRECT", json.dumps(["node2:4002"]).encode()) + make_fin()
+        ok_body       = make_data(b"data") + make_fin()
 
         with patch("distcache._do_request", side_effect=self._mock_request(redirect_body, ok_body)):
             chunks = []

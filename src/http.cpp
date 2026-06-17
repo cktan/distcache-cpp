@@ -239,13 +239,13 @@ static void handle_health(node_t &node, const httplib::Request &,
 static void handle_nodes(node_t &node, const httplib::Request &,
                          httplib::Response &res) {
   auto peers = node.membership.raw_peers();
-  std::string json = "{\"alive\":[";
+  std::string json = "[";
   for (size_t i = 0; i < peers.size(); ++i) {
-    json += "{\"name\":\"" + peers[i] + "\"}";
-    if (i + 1 < peers.size())
+    if (i > 0)
       json += ",";
+    json += "\"" + peers[i] + "\"";
   }
-  json += "],\"suspect\":[],\"dead\":[]}";
+  json += "]";
   send_raw(res, wire_info(json));
 }
 

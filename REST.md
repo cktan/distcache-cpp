@@ -1,0 +1,216 @@
+# DistCache HTTP API
+
+All endpoints listen on the address given to `-N host:port[/first_id]`.
+
+---
+
+## Wire Protocol
+
+Most endpoints speak a binary frame protocol over the HTTP
+response body (Content-Type: `application/octet-stream`).
+Each frame is:
+
+```
+TYPE:LEN\n
+<LEN bytes of payload>
+```
+
+Frames appear back-to-back with no separator except for
+`INFO` frames, which write one extra `\n` after the payload
+before the following frame.
+
+Frame types emitted by the server:
+
+| Type       | Payload                                          |
+|------------|--------------------------------------------------|
+| `INFO`     | JSON object                                      |
+| `DATA`     | raw file bytes (one frame per chunk)             |
+| `REDIRECT` | JSON array of node IDs: `["host:port[/id]"]`     |
+| `ERROR`    | JSON `{"type":"ERR_*","message":"..."}`          |
+| `FIN`      | empty (LEN=0); marks end of response             |
+
+Every non-streaming response ends with `FIN:0\n`.
+
+### Error payload
+
+`type` is one of the server error codes below, or an
+arbitrary string for internal errors. Clients map `type` to
+a numeric error code; unknown types map to `DCERR_PROTOCOL`.
+
+| `type`                | Meaning                      |
+|-----------------------|------------------------------|
+| `ERR_NOT_CACHED`      | key not in local cache       |
+| `ERR_NO_NODE`         | no node owns this key        |
+| `ERR_DISK_FULL`       | cache disk is full           |
+| `ERR_S3`              | S3 fetch failed              |
+| `ERR_S3_AUTH`         | S3 authentication failure    |
+| `ERR_NOT_FOUND`       | object not found in S3       |
+| `ERR_TIMEOUT`         | operation timed out          |
+| `ERR_UNKNOWN_COMMAND` | unrecognized request         |
+| `ERR_BAD_OBJECT_NAME` | malformed bucket or key      |
+
+---
+
+## Endpoints
+
+### `GET /_health`
+
+Returns node health and statistics as **plain JSON** (not
+wire-framed). Intended for monitoring tools and shell scripts.
+
+**Response body** (Content-Type: `application/json`):
+
+```json
+{
+  "addr":      "127.0.0.1:4001",
+  "upsince":   "2026-06-17T00:00:00Z",
+  "upfor":     "0d 1h 23m",
+  "nodes":     3,
+  "lru_size":  1024,
+  "disk_pct":  42,
+  "used_gib":  1.23,
+  "df_error":  false,
+  "hits":      9000,
+  "misses":    100,
+  "served":    9100,
+  "redirects": 50,
+  "errors":    2,
+  "hint_pull": 10,
+  "peers":     ["127.0.0.1:4002", "127.0.0.1:4003"]
+}
+```
+
+`peers` lists the addresses of other alive cluster members
+(excludes self). `nodes` counts all ring entries including
+self.
+
+---
+
+### `GET /_nodes`
+
+Returns current cluster membership as a wire-framed `INFO`
+response. Used by the client libraries for ring housekeeping.
+
+**Response** (`INFO` frame, then `FIN`):
+
+```json
+{
+  "alive":   [{"name": "host:port[/first_id]"}, ...],
+  "suspect": [],
+  "dead":    []
+}
+```
+
+`alive` includes the node itself plus all alive/suspected
+SWIM peers. Names include the `/first_id` cookie when the
+node was started with one; clients use it to place the node
+on the consistent-hash ring at the correct position.
+
+---
+
+### `GET /{bucket}/{key}`
+
+Fetch a cached object. `bucket` and `key` are path
+components; `key` may contain `/`.
+
+**Query parameters:**
+
+| Parameter | Effect                                            |
+|-----------|---------------------------------------------------|
+| `local`   | serve only from local cache; skip ring routing    |
+| `delete`  | delete object from cache after serving            |
+
+**Responses:**
+
+- **Cache hit on this node** — one or more `DATA` frames
+  containing the raw file bytes, terminated by `FIN`.
+- **Key owned by another node** — `REDIRECT` frame whose
+  payload is a JSON array with one element: the responsible
+  node's address. Followed by `FIN`.
+- **Error** — `ERROR` frame followed by `FIN`.
+
+The ring routes by computing `FNV-1a-64(0, "cache/{bucket}/{key}")`
+and finding the successor node. When `?local` is set, ring
+routing is skipped entirely.
+
+---
+
+### `PUT /{bucket}/{key}`
+
+Store an object in the local cache. The request body is
+written verbatim to the cache file.
+
+**Request body:** raw file bytes (any Content-Type).
+
+**Responses:**
+
+- **Success** — `FIN:0\n`
+- **Error** — `ERROR` frame followed by `FIN`
+
+---
+
+### `DELETE /{bucket}/{key}`
+
+Remove an object from the local cache. Succeeds silently if
+the object is not present.
+
+**Responses:**
+
+- **Success** — `FIN:0\n`
+- **Error** — `ERROR` frame followed by `FIN`
+
+---
+
+### `POST /_claim_keyspace`
+
+Internal endpoint. Tells this node to scan its cache for
+keys now owned by a newly joined peer and push them to it.
+Called by the rebalancer during node join.
+
+**Request body** (JSON):
+
+```json
+{"nodeid": "host:port[/first_id]"}
+```
+
+**Responses:**
+
+- **Success** — `FIN:0\n`
+- **Error** — `ERROR` frame followed by `FIN`
+
+---
+
+### `POST /_hint_pull`
+
+Internal endpoint. Tells this node to fetch a specific
+object from a peer that is relinquishing ownership of it.
+Enqueues an async pull job.
+
+**Request body** (JSON):
+
+```json
+{
+  "src":     "host:port",
+  "relpath": "cache/bucket/key",
+  "mtime":   "1718582400"
+}
+```
+
+`mtime` is the object's last-modified time as a Unix
+timestamp string. If 0 or absent, the receiver uses the
+current time.
+
+**Responses:**
+
+- **Success** — `FIN:0\n`
+- **Error** — `ERROR` frame followed by `FIN`
+
+---
+
+## Node IDs
+
+A node ID has the form `host:port` or `host:port/first_id`.
+`first_id` is an optional 32-bit decimal integer that pins
+the node's first ring position; subsequent positions are
+derived via chained FNV-1a hashes. When absent, all 10 ring
+positions are computed from the address string.

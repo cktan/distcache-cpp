@@ -13,8 +13,7 @@
 
 http_server_t::http_server_t(node_t &n) : node_(n) {}
 
-static time_t g_start_time = 0;
-static httplib::Server *g_svr = nullptr;
+http_server_t::~http_server_t() = default;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -194,7 +193,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
 }
 
 static void handle_health(node_t &node, const httplib::Request &,
-                          httplib::Response &res) {
+                          httplib::Response &res, time_t start_time) {
   auto peers = node.membership.alive_peers();
   std::string peers_json = "[";
   for (size_t i = 0; i < peers.size(); ++i) {
@@ -205,10 +204,10 @@ static void handle_health(node_t &node, const httplib::Request &,
 
   char upsince[32] = {};
   struct tm tm_buf = {};
-  gmtime_r(&g_start_time, &tm_buf);
+  gmtime_r(&start_time, &tm_buf);
   strftime(upsince, sizeof(upsince), "%Y-%m-%dT%H:%M:%SZ", &tm_buf);
 
-  long diff = static_cast<long>(time(nullptr) - g_start_time);
+  long diff = static_cast<long>(time(nullptr) - start_time);
   long d = diff / 86400;
   long h = (diff % 86400) / 3600;
   long m = (diff % 3600) / 60;
@@ -347,44 +346,43 @@ void http_server_t::start(const std::string &nodeid) {
   std::string host = addr.substr(0, colon);
   int port = std::stoi(addr.substr(colon + 1));
 
-  g_start_time = time(nullptr);
-  auto *svr = new httplib::Server();
-  g_svr = svr;
+  start_time_ = time(nullptr);
+  svr_ = std::make_unique<httplib::Server>();
 
-  svr->Get("/_health",
-           [this](const httplib::Request &req, httplib::Response &res) {
-             handle_health(node_, req, res);
-           });
-  svr->Get("/_nodes",
-           [this](const httplib::Request &req, httplib::Response &res) {
-             handle_nodes(node_, req, res);
-           });
-  svr->Post("/_claim_keyspace",
+  svr_->Get("/_health",
             [this](const httplib::Request &req, httplib::Response &res) {
-              handle_claim_keyspace(node_, req, res);
+              handle_health(node_, req, res, start_time_);
             });
-  svr->Post("/_hint_pull",
+  svr_->Get("/_nodes",
             [this](const httplib::Request &req, httplib::Response &res) {
-              handle_hint_pull(node_, req, res);
+              handle_nodes(node_, req, res);
             });
-  svr->Get(R"(/[^/]+/.+)",
-           [this](const httplib::Request &req, httplib::Response &res) {
-             handle_get(node_, req, res);
-           });
-  svr->Put(R"(/[^/]+/.+)",
-           [this](const httplib::Request &req, httplib::Response &res,
-                  const httplib::ContentReader &content_reader) {
-             handle_put(node_, req, res, content_reader);
-           });
-  svr->Delete(R"(/[^/]+/.+)",
-              [this](const httplib::Request &req, httplib::Response &res) {
-                handle_delete(node_, req, res);
-              });
+  svr_->Post("/_claim_keyspace",
+             [this](const httplib::Request &req, httplib::Response &res) {
+               handle_claim_keyspace(node_, req, res);
+             });
+  svr_->Post("/_hint_pull",
+             [this](const httplib::Request &req, httplib::Response &res) {
+               handle_hint_pull(node_, req, res);
+             });
+  svr_->Get(R"(/[^/]+/.+)",
+            [this](const httplib::Request &req, httplib::Response &res) {
+              handle_get(node_, req, res);
+            });
+  svr_->Put(R"(/[^/]+/.+)",
+            [this](const httplib::Request &req, httplib::Response &res,
+                   const httplib::ContentReader &content_reader) {
+              handle_put(node_, req, res, content_reader);
+            });
+  svr_->Delete(R"(/[^/]+/.+)",
+               [this](const httplib::Request &req, httplib::Response &res) {
+                 handle_delete(node_, req, res);
+               });
 
-  svr->listen(host, port);
+  svr_->listen(host, port);
 }
 
 void http_server_t::stop() {
-  if (g_svr)
-    g_svr->stop();
+  if (svr_)
+    svr_->stop();
 }

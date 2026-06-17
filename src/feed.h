@@ -1,4 +1,5 @@
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <string>
@@ -33,5 +34,5 @@ public:
 private:
   swim_feed_t *feed_ = nullptr;
   std::thread thread_;
-  bool running_ = false;
+  std::atomic<bool> running_ = false;
 };

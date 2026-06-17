@@ -61,6 +61,7 @@ private:
   std::string self_addr_;
   uint32_t first_id_ = 0;
 
+  std::mutex ring_mu_;
   std::mutex injected_mtx_;
   std::map<std::string, uint32_t> injected_;
 };

@@ -31,6 +31,7 @@ membership_t::parse_peer(const std::string &s) {
 }
 
 void membership_t::rebuild_ring() {
+  std::lock_guard<std::mutex> lk(ring_mu_);
   if (!inst_)
     return;
 
@@ -168,10 +169,14 @@ bool membership_t::start(const std::string &nodeid,
 }
 
 void membership_t::leave() {
-  if (inst_) {
-    swim_leave(inst_);
+  swim_t *tmp = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(ring_mu_);
+    tmp = inst_;
     inst_ = nullptr;
   }
+  if (tmp)
+    swim_leave(tmp);
 }
 
 void membership_t::hint_alive(const std::string &peer_addr) {
@@ -180,11 +185,16 @@ void membership_t::hint_alive(const std::string &peer_addr) {
 }
 
 std::vector<std::string> membership_t::alive_peers() {
-  if (!inst_)
+  swim_t *inst = nullptr;
+  {
+    std::lock_guard<std::mutex> lk(ring_mu_);
+    inst = inst_;
+  }
+  if (!inst)
     return {};
 
   char *buf = nullptr;
-  int n = swim_peers(inst_, false, &buf);
+  int n = swim_peers(inst, false, &buf);
   if (n <= 0) {
     free(buf);
     return {};
@@ -203,18 +213,23 @@ std::vector<std::string> membership_t::alive_peers() {
 }
 
 std::vector<std::string> membership_t::raw_peers() {
+  swim_t *inst = nullptr;
   std::vector<std::string> result;
-  if (!self_addr_.empty()) {
-    std::string self_nodeid = self_addr_;
-    if (first_id_)
-      self_nodeid += "/" + std::to_string(first_id_);
-    result.push_back(self_nodeid);
+  {
+    std::lock_guard<std::mutex> lk(ring_mu_);
+    inst = inst_;
+    if (!self_addr_.empty()) {
+      std::string self_nodeid = self_addr_;
+      if (first_id_)
+        self_nodeid += "/" + std::to_string(first_id_);
+      result.push_back(self_nodeid);
+    }
   }
-  if (!inst_)
+  if (!inst)
     return result;
 
   char *buf = nullptr;
-  int n = swim_peers(inst_, false, &buf);
+  int n = swim_peers(inst, false, &buf);
   if (n > 0) {
     const char *p = buf;
     for (int i = 0; i < n; i++) {

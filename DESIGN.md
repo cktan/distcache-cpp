@@ -48,8 +48,8 @@ extra coordination.
 **Startup sequence:**
 
 1. Parse flags (order-independent).
-2. Construct `Node node(homedir, nodeid)` — populates
-   `node.config.nodeid` and `node.config.homedir`.
+2. `chdir(homedir)` — all relative paths resolve from here.
+   Construct `node_t node(nodeid)` — sets `node.nodeid`.
 3. `mkdir -p homedir/log homedir/cache`; wipe and recreate
    `homedir/tmp` (removes crash-orphaned tmp files).
 4. Acquire PID lock (`homedir/dist_cache.lock`).
@@ -135,31 +135,32 @@ stack. Tests instantiate a local `Node` per test case for
 isolation.
 
 ```
-struct Node {
-    Config   config;    // nodeid ("host:port/first_id"), homedir
+struct node_t {
+    std::string nodeid; // "host:port" or "host:port/first_id"
     keylock_t keylock;  // per-key S3 fetch serialization
     cache_t  cache;     // file cache + embedded lru_t
     Stats    stats;     // atomic hit/miss/error counters
     atomic<shared_ptr<ring_t>> ring;
     feed_t   feed;      // SWIM + telemetry feed
     feed_t   jobq;      // async job queue
-    Membership  membership;
-    Rebalancer  rebalancer;
-    HttpServer  http;
+    membership_t  membership;
+    rebalancer_t  rebalancer;
+    http_server_t http;
 };
 ```
 
-**Active classes** (`HttpServer`, `Membership`,
-`Rebalancer`) take `Node&` in their constructors and store
-it as `node_`. All cross-component access happens at runtime
-through `node_.*`, not at construction time, so member
-initialization order does not create circular dependencies.
+**Active classes** (`http_server_t`, `membership_t`,
+`rebalancer_t`) take `node_t&` in their constructors and
+store it as `node_`. All cross-component access happens at
+runtime through `node_.*`, not at construction time, so
+member initialization order does not create circular
+dependencies.
 
 **`cache_t`** owns `lru_t` internally. Callers interact
 with LRU state via `cache_t` methods (`scan`, `get_mtime`,
 `maybe_evict`, `batch_put`, `size`, `disk_usepct`).
 
-**Passive types** (`Config`, `Stats`, `keylock_t`, `feed_t`,
+**Passive types** (`Stats`, `keylock_t`, `feed_t`,
 `ring_t`) have no cross-component dependencies and are
 default-constructible.
 
@@ -315,8 +316,8 @@ rebuilt lazily from the full map when exhausted. Entries are
 validated on pop (stale if removed or refreshed since the
 build).
 
-**Disk usage:** `lru_t::disk_usepct()` calls `statvfs()` on
-`node_.config.homedir` on every insert. No background
+**Disk usage:** `lru_t::disk_usepct()` calls `statvfs("./")` on
+every insert (process is chdir'd into homedir). No background
 polling thread — the check is cheap and inline.
 
 **LRU scan:** `scan(cb)` iterates every entry under the
@@ -423,8 +424,7 @@ does the atomic rename.
 | Component | Kind | Responsibility |
 |-----------|------|----------------|
 | `main.cpp` | entry point | flag parsing, Node construction, dir setup, lifecycle |
-| `node.h` | struct | owns all shared state; wired together in `Node(homedir, nodeid)` |
-| `config.h` | struct | `Config` — `nodeid`, `homedir` |
+| `node.h` | struct | owns all shared state; wired together in `node_t(nodeid)` |
 | `fnv.h` | inline | FNV-1a-64, `ring_hash(prev, input)` |
 | `ring.h/.cpp` | plain | chord ring: sorted vector, binary search, 10-ID chain |
 | `relpath.h/.cpp` | plain | `compute_relpath`, `to_abs`, path validation |

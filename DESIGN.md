@@ -14,6 +14,25 @@ responsible node on a cache miss.
 
 ---
 
+## Node Identity
+
+A node ID has the form `host:port` or `host:port/first_id`.
+`first_id` is an optional 32-bit unsigned integer that
+overrides the node's first ring position; when absent all
+10 ring positions are derived by the FNV-1a chain (see
+"Node identity and chord ring" below).
+
+```
+127.0.0.1:4001           # no placement override
+127.0.0.1:4001/805306368 # first ring ID pinned to 0x30000000
+```
+
+The `/first_id` suffix is preserved in SWIM gossip so that
+peers can reconstruct the full 10-ID ring chain without
+extra coordination.
+
+---
+
 ## Startup
 
 ```

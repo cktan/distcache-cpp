@@ -48,31 +48,44 @@ extra coordination.
 **Startup sequence:**
 
 1. Parse flags (order-independent).
-2. `chdir(homedir)` — all relative paths resolve from here.
-   Construct `node_t node(nodeid)` — sets `node.nodeid`.
-3. `mkdir -p homedir/log homedir/cache`; wipe and recreate
-   `homedir/tmp` (removes crash-orphaned tmp files).
-4. Acquire PID lock (`homedir/dist_cache.lock`).
-5. Set `g_http_signal = &node.http`; install
+2. Construct `node_t node(homedir, nodeid)`.
+   Set `node.seeds`.
+3. `mkdir -p homedir/log` (needed before logger opens
+   the log file).
+4. Set up spdlog file + console sinks.
+5. Acquire PID lock (`homedir/dist_cache.lock`).
+6. Set `g_node_signal = &node`; install
    `SIGTERM`/`SIGINT` handlers.
-6. Start `node.rebalancer` (`node.jobq` consumer thread).
-7. `node.membership.start()` — SWIM instance + feed
-   consumer + claim sweep thread.
-8. Detach background cache scan thread (1 024-file batches
-   into LRU).
-9. `node.http.start()` — blocks until signal.
-10. Shutdown: `node.feed.stop()`,
-    `node.membership.leave()`, `node.rebalancer.stop()`,
-    release PID lock.
+7. `node.start()` — creates `homedir/{cache,tmp}`,
+   starts rebalancer and membership, detaches the
+   startup scan thread, spawns the http thread.
+8. `node.join()` — blocks until the http thread exits.
+9. Release PID lock.
+
+### node_t::start / stop / join
+
+`start()` encapsulates the service-launch sequence so
+that tests can bring up multiple nodes in one process
+without a `chdir`. It returns `false` if membership
+fails to bind; on failure it rolls back the rebalancer
+before returning.
+
+`stop()` calls `http.stop()`, `feed.stop()`,
+`membership.leave()`, `rebalancer.stop()` in order.
+It is safe to call from a signal handler (no locks,
+no allocation).
+
+`join()` joins the http background thread. Call it
+after `stop()` to wait for a clean exit.
 
 ### Signal handler
 
 `on_signal` is a file-scope function that calls
-`g_http_signal->stop()`. `g_http_signal` is a
-`static HttpServer*` set in `main()` before
-`signal()` is installed. It is the only surviving
-file-scope pointer — necessary because POSIX signal
-handlers cannot capture state.
+`g_node_signal->stop()`. `g_node_signal` is a
+`static node_t*` set in `main()` before `signal()`
+is installed. It is the only surviving file-scope
+pointer — necessary because POSIX signal handlers
+cannot capture state.
 
 ### PID lock
 
@@ -143,18 +156,30 @@ isolation.
 
 ```
 struct node_t {
-    std::string nodeid; // "host:port" or "host:port/first_id"
-    keylock_t keylock;  // per-key S3 fetch serialization
-    cache_t  cache;     // file cache + embedded lru_t
-    Stats    stats;     // atomic hit/miss/error counters
+    std::string homedir; // absolute path; all file ops use abspath()
+    std::string nodeid;  // "host:port" or "host:port/first_id"
+    std::vector<std::string> seeds; // SWIM bootstrap peers
+    keylock_t keylock;   // per-key S3 fetch serialization
+    cache_t   cache;     // file cache + embedded lru_t
+    Stats     stats;     // atomic hit/miss/error counters
     atomic<shared_ptr<ring_t>> ring;
-    feed_t   feed;      // SWIM + telemetry feed
-    feed_t   jobq;      // async job queue
+    feed_t    feed;      // SWIM + telemetry feed
+    feed_t    jobq;      // async job queue
     membership_t  membership;
     rebalancer_t  rebalancer;
     http_server_t http;
+
+    bool start();  // create dirs, start services, spawn http thread
+    void stop();   // signal all services to stop
+    void join();   // wait for http thread to exit
 };
 ```
+
+`abspath(relpath)` returns `homedir + "/" + relpath`.
+All components (`cache_t`, `lru_t`, `node_t`) use
+stored `homedir_` strings rather than the process
+CWD, so multiple nodes can run concurrently in one
+process with different homedirs.
 
 **Active classes** (`http_server_t`, `membership_t`,
 `rebalancer_t`) take `node_t&` in their constructors and
@@ -190,9 +215,10 @@ relpath = "cache/my-bucket/images/photo.jpg"
 ```
 
 Every LRU entry, ring-hash, and cache function uses the full
-relpath. `to_abs(homedir, relpath)` joins to get the
-absolute path. `compute_relpath` rejects `..`, `.`, empty
-segments, and trailing slashes.
+relpath. `cache_t::abspath(relpath)` joins `homedir_` and
+the relpath string to get the absolute path.
+`compute_relpath` rejects `..`, `.`, empty segments, and
+trailing slashes.
 
 ### Atomic writes
 
@@ -377,8 +403,8 @@ rebuilt lazily from the full map when exhausted. Entries are
 validated on pop (stale if removed or refreshed since the
 build).
 
-**Disk usage:** `lru_t::disk_usepct()` calls `statvfs("./")` on
-every insert (process is chdir'd into homedir). No background
+**Disk usage:** `lru_t::disk_usepct()` calls
+`statvfs(homedir_.c_str())` on every insert. No background
 polling thread — the check is cheap and inline.
 
 **LRU scan:** `scan(cb)` iterates every entry under the
@@ -477,11 +503,11 @@ does the atomic rename.
 
 | Component | Kind | Responsibility |
 |-----------|------|----------------|
-| `main.cpp` | entry point | flag parsing, Node construction, dir setup, lifecycle |
-| `node.h` | struct | owns all shared state; wired together in `node_t(nodeid)` |
+| `main.cpp` | entry point | flag parsing, node construction, logger setup, pidlock, lifecycle |
+| `node.h/.cpp` | struct | owns all shared state; `start/stop/join`; `abspath()` |
 | `fnv.h` | inline | FNV-1a-64, `ring_hash(prev, input)` |
 | `ring.h/.cpp` | plain | chord ring: sorted vector, binary search, 10-ID chain |
-| `relpath.h/.cpp` | plain | `compute_relpath`, `to_abs`, path validation |
+| `relpath.h/.cpp` | plain | `compute_relpath`, path validation |
 | `rc.h/.cpp` | plain | `rc_t` typed error result; `fd_t` RAII file descriptor |
 | `unique.h/.cpp` | plain | `unique_get()` — atomic monotonic counter for tmp names |
 | `pidlock.h/.cpp` | plain | `O_CREAT\|O_EXCL` PID lock, stale-check via `kill(pid,0)` |
@@ -529,9 +555,11 @@ make -C test test-rebalance   # opt-in two-node rebalance smoke test
 ```
 
 Unit tests (`test/test_*.cpp`) use doctest. Each test case
-constructs a local `Node` for isolation — no shared global
-state between tests. Shell tests (`test/test_*.sh`) start
-real node processes. The rebalance smoke test
+constructs a local `node_t(homedir, nodeid)` for isolation —
+no shared global state between tests. Multiple nodes can be
+started in one process by calling `start()` on each with a
+distinct homedir and port. Shell tests (`test/test_*.sh`)
+start real node processes. The rebalance smoke test
 (`test/integration_rebalance.sh`) sets
 `DC_CLAIM_DELAY_MS=3000` to shorten the claim sweep delay.
 

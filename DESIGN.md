@@ -14,16 +14,6 @@ responsible node on a cache miss.
 
 ---
 
-## Node Identity
-
-Nodes are identified by the string "host:port/first_id", where 
-first_id is an integer range [0..2^32):
-- first_id is optional
-- when first_id is not specified, the '/' is also optional.
-
-First_id is used to override first ring ID for surgical placement.
-
-
 ## Startup
 
 ```
@@ -238,60 +228,25 @@ SWIM has delivered the convergence event.
 
 ---
 
-## HTTP server and wire protocol
+## HTTP server
 
-cpp-httplib thread-per-request server. Routes:
+cpp-httplib thread-per-request server. Route handlers are
+static free functions taking `node_t&` as their first
+argument; `http_server_t::start()` registers them via
+lambdas that capture `node_` by reference.
 
-| Method | Path | Handler |
-|--------|------|---------|
-| `GET` | `/_health` | JSON health + stats |
-| `GET` | `/{bucket}/{key}` | Cache read or S3 fetch |
-| `PUT` | `/{bucket}/{key}` | Cache write |
-| `DELETE` | `/{bucket}/{key}` | Cache delete |
-| `POST` | `/_claim_keyspace` | Rebalance: peer claims keyspace |
-| `POST` | `/_hint_pull` | Rebalance: pull hint from peer |
+The `PUT` handler uses cpp-httplib's `ContentReader`
+streaming interface to write incoming body chunks directly
+to the cache file descriptor as they arrive, avoiding
+buffering the full request payload in memory.
 
-Route handlers are static free functions that take `Node&`
-as their first argument. `HttpServer::start()` registers
-them via lambdas that capture `node_` by reference.
+The GET handler serves four cases: ring-redirect to the
+responsible peer; local cache hit; local-only miss
+(`?local`); and cache miss with S3 fallback. `?no_redirect`
+skips the redirect step but keeps S3 fallback.
 
-The `PUT` handler utilizes cpp-httplib's `ContentReader`
-streaming interface to write incoming body chunks
-directly to the destination cache file descriptor as they
-arrive, avoiding buffering the entire request payload
-in memory.
-
-### GET handler — four cases
-
-1. **Foreign key (ring says someone else owns it):** emit
-   REDIRECT, ring-hint the owner as alive, and — if the file
-   exists locally — enqueue an on-hit hint to `node.jobq` so
-   the owner pulls it.
-2. **Cache hit (local file exists):** serve DATA; touch LRU.
-   `?delete=1` deletes after serving (used by rebalance
-   pulls).
-3. **Local-only miss (`?local=1`):** return
-   `ERR:ERR_NOT_CACHED` without hitting S3 (used by
-   inter-node pulls).
-4. **Cache miss on owned key:** fetch from S3 via sidecar,
-   then stream the file with `serve_fd`.
-
-### Wire protocol (TYPE:LENGTH)
-
-```
-DATA:<n>\n<n bytes>                  # one payload chunk (n ≤ 8192)
-...                                  # repeated for large objects
-FIN:0\n                              # end of successful GET body
-REDIRECT:<n>\n["host:port/id"]FIN:0\n  # client must retry on listed node
-ERR:<message>\nFIN:0\n               # error
-FIN:0\n                              # empty success (PUT/DELETE)
-```
-
-Every response ends with `FIN:0\n`. Missing FIN indicates
-truncation. Large objects are split into consecutive DATA
-frames of ≤ 8 192 bytes each. The REDIRECT payload is a
-JSON array of node names; clients add all listed nodes to
-their ring before retrying.
+For the full API — endpoints, query parameters, wire-frame
+format, and error codes — see **[REST.md](REST.md)**.
 
 The `stream.h` header exposes the framing layer as a C
 API (`stream_in`, `stream_out`, fd convenience wrappers,
@@ -360,14 +315,7 @@ Data migrates to its ring owner via two mechanisms.
 
 After a random delay (1–`DC_CLAIM_DELAY_MS` ms, default
 1–20 000 ms), a joining node POSTs `/_claim_keyspace` to
-each alive peer:
-
-```
-POST /_claim_keyspace
-{"nodeid": "host:port/first_id"}
-```
-
-Each receiving peer:
+each alive peer. Each receiving peer:
 1. Enqueues a `claim_scan` job to `node.jobq` (returns
    immediately; the O(N) LRU scan runs off the handler
    path).
@@ -399,12 +347,8 @@ the result.
 | `claim_scan` | `nodeid` | Calls `inject_node(nodeid)` to update the ring, scans the LRU for keys whose successor is the claimant, and enqueues a `hint_pull` job per matching key. Enqueued by the `/_claim_keyspace` handler to avoid blocking it on an O(N) LRU scan. |
 | `evict` | _(none)_ | Calls `node.cache.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
 
-The worker POSTs `/_hint_pull` to `dest_addr`:
-
-```
-POST /_hint_pull
-{"src": "host:port", "relpath": "cache/b/k", "mtime": "T"}
-```
+The worker POSTs `/_hint_pull` to `dest_addr`
+(see REST.md for the request schema).
 
 ### Pull endpoint (/_hint_pull)
 

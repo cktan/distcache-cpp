@@ -414,7 +414,7 @@ class _ChunkReader:
                     data_chunks.append(frame.payload)
             elif frame.type == "REDIRECT":
                 result["status"] = "redirect"
-                result["nodes"] = json.loads(frame.payload)
+                result["nodes"] = [json.loads(frame.payload)]
             elif frame.type in ("INFO", "ERROR"):
                 parsed = json.loads(frame.payload)
                 if isinstance(parsed, list):

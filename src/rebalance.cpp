@@ -101,7 +101,7 @@ void rebalancer_t::start() {
       // register the new peer in the ring before scanning against it
       node_.membership.inject_node(nodeid);
       auto [addr, fid] = membership_t::parse_peer(nodeid);
-      auto entries = scan_for_peer(addr);
+      auto entries = scan_for_peer(nodeid);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
         // queue a hint_pull job per key now owned by addr
@@ -152,7 +152,7 @@ void rebalancer_t::claim_sweep(const std::string &nodeid) {
 // whose ring successor is now peer_addr, returning up to the 50 most
 // recently touched (oldest entries skipped via the 5-day cutoff).
 std::vector<std::pair<std::string, time_t>>
-rebalancer_t::scan_for_peer(const std::string &peer_addr) {
+rebalancer_t::scan_for_peer(const std::string &peer_nodeid) {
   auto ring = node_.ring.load();
   time_t cutoff = time(nullptr) - 5 * 86400;
 
@@ -163,7 +163,7 @@ rebalancer_t::scan_for_peer(const std::string &peer_addr) {
       [&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
         if (mtime < cutoff)
           return;
-        if (ring->successor(rp_id) != peer_addr)
+        if (ring->successor(rp_id) != peer_nodeid)
           return;
         heap.push({mtime, relpath});
         if (heap.size() > 50)

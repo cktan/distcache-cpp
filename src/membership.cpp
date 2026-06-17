@@ -42,13 +42,18 @@ void membership_t::rebuild_ring() {
 
   std::map<std::string, std::vector<uint32_t>> membership;
 
-  membership[self_addr_] = ring_t::compute_ids(self_addr_, first_id_);
+  auto make_nodeid = [](const std::string &addr, uint32_t fid) {
+    return fid ? addr + "/" + std::to_string(fid) : addr;
+  };
+
+  membership[make_nodeid(self_addr_, first_id_)] =
+      ring_t::compute_ids(self_addr_, first_id_);
 
   if (buf && n > 0) {
     const char *p = buf;
     for (int i = 0; i < n; i++) {
       auto [addr, fid] = parse_peer(std::string(p));
-      membership[addr] = ring_t::compute_ids(addr, fid);
+      membership[make_nodeid(addr, fid)] = ring_t::compute_ids(addr, fid);
       p += strlen(p) + 1;
     }
   }
@@ -57,8 +62,9 @@ void membership_t::rebuild_ring() {
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
     for (const auto &[addr, fid] : injected_) {
-      if (membership.find(addr) == membership.end())
-        membership[addr] = ring_t::compute_ids(addr, fid);
+      std::string nodeid = make_nodeid(addr, fid);
+      if (membership.find(nodeid) == membership.end())
+        membership[nodeid] = ring_t::compute_ids(addr, fid);
     }
   }
 

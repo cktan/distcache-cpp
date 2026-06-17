@@ -122,6 +122,12 @@ inside a `shared_ptr<ring_t>`. It lives in `node.ring` as
 `std::atomic<std::shared_ptr<ring_t>>` — lock-free read on
 the hot path, atomic-swap on membership change.
 
+Each `RingEntry::node` holds the full nodeid
+(`host:port` or `host:port/first_id`), so
+`ring_t::successor()` returns a full nodeid. The
+GET handler compares it directly to `node.nodeid`
+to decide whether to redirect.
+
 Successor lookup: O(log N) binary search (`bisect_left`).
 `ring_t::next_after()` is O(log N + K) where K is the number
 of excluded nodes to skip.
@@ -240,6 +246,9 @@ and a `put(n, ...)` method.
 `swim_peers()`, merges alive peers with self and with any
 injected-but-not-yet-converged nodes (`injected_` map), and
 atomic-stores a new `shared_ptr<ring_t>` into `node_.ring`.
+Ring keys are full nodeids (`host:port` or
+`host:port/first_id`); the ring ID chain is still
+computed from the bare address and first_id.
 
 **Pre-convergence injection:** `inject_node(addr, first_id)`
 adds a node to the `injected_` map and triggers an immediate

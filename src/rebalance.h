@@ -20,7 +20,7 @@ public:
   void claim_sweep(const std::string &nodeid);
 
   std::vector<std::pair<std::string, time_t>>
-  scan_for_peer(const std::string &peer_addr);
+  scan_for_peer(const std::string &peer_nodeid);
 
   void pull_one(const std::string &src_addr, const std::string &relpath,
                 const std::string &mtime_str);

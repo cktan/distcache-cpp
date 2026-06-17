@@ -16,7 +16,7 @@ std::string wire_info(const std::string &json) {
 }
 
 std::string wire_redirect(const std::string &node) {
-  std::string json = "[\"" + node + "\"]";
+  std::string json = "\"" + node + "\"";
   std::string out;
   out += "REDIRECT:";
   out += std::to_string(json.size());

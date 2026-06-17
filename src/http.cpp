@@ -106,20 +106,21 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (!local_only && !no_redirect) {
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
-    if (!dest.empty() && dest != membership_t::parse_peer(node.nodeid).first) {
+    if (!dest.empty() && dest != node.nodeid) {
       // Key belongs to another ring node; update membership and redirect.
-      node.membership.hint_alive(dest);
+      std::string dest_addr = membership_t::parse_peer(dest).first;
+      node.membership.hint_alive(dest_addr);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
       if (node.cache.exists(relpath)) {
         auto peers = node.membership.alive_peers();
         bool dest_alive =
-            std::find(peers.begin(), peers.end(), dest) != peers.end();
+            std::find(peers.begin(), peers.end(), dest_addr) != peers.end();
         if (dest_alive) {
           // Proactively migrate: ask dest to pull the locally-cached copy.
           time_t mt = node.cache.get_mtime(relpath.str());
           std::string mt_str = std::to_string(mt ? mt : time(nullptr));
-          node.jobq.put("hint_pull", dest.c_str(), relpath.str().c_str(),
+          node.jobq.put("hint_pull", dest_addr.c_str(), relpath.str().c_str(),
                         mt_str.c_str());
         }
       }

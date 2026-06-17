@@ -25,7 +25,7 @@ Frame types emitted by the server:
 |------------|--------------------------------------------------|
 | `INFO`     | JSON object                                      |
 | `DATA`     | raw file bytes (one frame per chunk)             |
-| `REDIRECT` | JSON array of node IDs: `["host:port[/id]"]`     |
+| `REDIRECT` | JSON string: `"host:port/first_id"`              |
 | `ERROR`    | JSON `{"type":"ERR_*","message":"..."}`          |
 | `FIN`      | empty (LEN=0); marks end of response             |
 
@@ -123,8 +123,8 @@ components; `key` may contain `/`.
 - **Cache hit on this node** — one or more `DATA` frames
   containing the raw file bytes, terminated by `FIN`.
 - **Key owned by another node** — `REDIRECT` frame whose
-  payload is a JSON array with one element: the responsible
-  node's address. Followed by `FIN`.
+  payload is a single JSON string `"host:port/first_id"`
+  identifying the responsible node. Followed by `FIN`.
 - **Error** — `ERROR` frame followed by `FIN`.
 
 The ring routes by computing `FNV-1a-64(0, "cache/{bucket}/{key}")`

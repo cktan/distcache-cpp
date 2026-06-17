@@ -460,6 +460,26 @@ static int json_num_field(const char *json, size_t jlen, const char *key,
   return -1;
 }
 
+/* Parse a JSON string "..." into buf[bufsz]. Returns 1 on success, 0 on
+ * failure (malformed or truncated). */
+static int parse_json_string(const char *json, size_t jlen, char *buf,
+                             size_t bufsz) {
+  const char *end = json + jlen;
+  const char *q = memchr(json, '"', jlen);
+  if (!q)
+    return 0;
+  const char *start = q + 1;
+  const char *r = memchr(start, '"', (size_t)(end - start));
+  if (!r)
+    return 0;
+  size_t len = (size_t)(r - start);
+  if (len == 0 || len >= bufsz)
+    return 0;
+  memcpy(buf, start, len);
+  buf[len] = '\0';
+  return 1;
+}
+
 /* Parse a JSON string array ["a","b",...] into names[]. Returns count. */
 static int parse_string_array(const char *json, size_t jlen,
                               char names[][DC_NODE_NAME_MAX], int max_names) {
@@ -537,8 +557,8 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
                      sizeof(st->err_msg));
     } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
       strncpy(st->status, "redirect", sizeof(st->status) - 1);
-      st->n_redir = parse_string_array(payload, (size_t)plen, st->redir_names,
-                                       DC_MAX_REDIR_NODES);
+      st->n_redir = parse_json_string(payload, (size_t)plen, st->redir_names[0],
+                                      DC_NODE_NAME_MAX);
     } else if (strncmp(st->fp.raw, "INFO:", 5) == 0) {
       json_str_field(payload, (size_t)plen, "status", st->status,
                      sizeof(st->status));

@@ -107,6 +107,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
     if (!dest.empty() && dest != membership_t::parse_peer(node.nodeid).first) {
+      // Key belongs to another ring node; update membership and redirect.
       node.membership.hint_alive(dest);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
@@ -115,6 +116,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
         bool dest_alive =
             std::find(peers.begin(), peers.end(), dest) != peers.end();
         if (dest_alive) {
+          // Proactively migrate: ask dest to pull the locally-cached copy.
           time_t mt = node.cache.get_mtime(relpath.str());
           std::string mt_str = std::to_string(mt ? mt : time(nullptr));
           node.jobq.put("hint_pull", dest.c_str(), relpath.str().c_str(),
@@ -127,7 +129,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     }
   }
 
-  // If cache-hit ...
+  // Cache hit: open fd before optional drop so inode stays live after unlink.
   if (node.cache.exists(relpath)) {
     fd_t fd;
     if (!node.cache.read(relpath, fd).ok()) {
@@ -170,7 +172,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (rc.ok()) {
     rc = node.cache.move(tmp_rel, relpath);
   }
-  remove(tmp_abs.c_str()); // LATER: queue this to g_jobq
+  remove(tmp_abs.c_str()); // LATER: queue this to g_jobq?
   node.keylock.release(relpath.str());
 
   if (!rc.ok()) {

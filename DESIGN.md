@@ -87,7 +87,8 @@ Our own PID (crash recovery) is accepted immediately.
 
 ## Node identity and chord ring
 
-Each node is identified by `"host:port"` from the `-N` flag.
+Each node is identified by `"host:port[/first_id]"` from the
+`-N` flag.
 
 ### Ring IDs (10 per node)
 

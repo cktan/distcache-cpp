@@ -42,7 +42,7 @@ check_fin "$resp"
 # GET after delete (miss — no sidecar running)
 resp=$(curl -s "http://127.0.0.1:$PORT/bucket/key1")
 check_fin "$resp"
-[[ "$resp" == ERR:* ]] || fail "GET after delete should be ERR, got: $resp"
+[[ "$resp" == ERROR:* ]] || fail "GET after delete should be ERR, got: $resp"
 
 # PUT with key containing slashes
 resp=$(curl -s -X PUT "http://127.0.0.1:$PORT/bucket/path/to/obj" -d "data")

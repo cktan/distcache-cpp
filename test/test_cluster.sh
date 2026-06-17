@@ -45,7 +45,7 @@ for i in $(seq 1 10); do
     if [[ "$resp" == REDIRECT:* ]]; then
         redirects=$((redirects + 1))
         # Parse destination and follow redirect.
-        dest=$(printf '%s' "$resp" | sed -n '2p' | sed 's/^\["\([^"]*\)"\].*/\1/' | cut -d'/' -f1)
+        dest=$(printf '%s' "$resp" | sed -n '2p' | sed 's/^"\([^"]*\)".*/\1/' | cut -d'/' -f1)
         follow=$(curl -s "http://$dest/bkt/key$i")
         echo "$follow" | grep -q "value$i" || fail "follow-redirect GET key$i: $follow"
     elif [[ "$resp" == DATA:* ]]; then

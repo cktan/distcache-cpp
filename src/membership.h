@@ -48,6 +48,7 @@ public:
   void leave();
   void hint_alive(const std::string &peer_addr);
   std::vector<std::string> alive_peers();
+  std::vector<std::string> raw_peers();
   void rebuild_ring();
   void inject_node(const std::string &nodeid);
 

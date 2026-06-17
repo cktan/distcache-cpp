@@ -202,6 +202,30 @@ std::vector<std::string> membership_t::alive_peers() {
   return result;
 }
 
+std::vector<std::string> membership_t::raw_peers() {
+  std::vector<std::string> result;
+  if (!self_addr_.empty()) {
+    std::string self_nodeid = self_addr_;
+    if (first_id_)
+      self_nodeid += "/" + std::to_string(first_id_);
+    result.push_back(self_nodeid);
+  }
+  if (!inst_)
+    return result;
+
+  char *buf = nullptr;
+  int n = swim_peers(inst_, false, &buf);
+  if (n > 0) {
+    const char *p = buf;
+    for (int i = 0; i < n; i++) {
+      result.push_back(std::string(p));
+      p += strlen(p) + 1;
+    }
+  }
+  free(buf);
+  return result;
+}
+
 std::string membership_t::timestamp() {
   time_t now = time(nullptr);
   struct tm tm;

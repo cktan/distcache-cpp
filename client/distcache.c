@@ -48,6 +48,7 @@ typedef struct {
 
 typedef struct {
   char name[DC_NODE_NAME_MAX];
+  uint32_t first_id;
   int dead;
   pthread_mutex_t mu;
   pthread_cond_t cv;
@@ -98,16 +99,41 @@ static uint32_t fnv1a_ring(uint32_t prev, const char *input) {
   return (uint32_t)(h % UINT64_C(0x100000000));
 }
 
-static void compute_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]) {
+static void strip_nodeid(const char *raw, char *addr, size_t addr_sz,
+                         uint32_t *first_id) {
+  const char *slash = strchr(raw, '/');
+  if (slash) {
+    size_t alen = (size_t)(slash - raw);
+    if (alen >= addr_sz)
+      alen = addr_sz - 1;
+    memcpy(addr, raw, alen);
+    addr[alen] = '\0';
+    char *end;
+    unsigned long val = strtoul(slash + 1, &end, 10);
+    *first_id = (end != slash + 1 && *end == '\0') ? (uint32_t)val : 0;
+  } else {
+    strncpy(addr, raw, addr_sz - 1);
+    addr[addr_sz - 1] = '\0';
+    *first_id = 0;
+  }
+}
+
+static void compute_node_ids(const char *name, uint32_t first_id,
+                             uint32_t ids[DC_IDS_PER_NODE]) {
   uint32_t prev = 0;
   for (int i = 0; i < DC_IDS_PER_NODE; i++) {
-    char input[512];
-    if (i == 0)
-      snprintf(input, sizeof(input), "%s", name);
-    else
-      snprintf(input, sizeof(input), "%s:%u", name, (unsigned)prev);
-    prev = fnv1a_ring(prev, input);
-    ids[i] = prev;
+    if (i == 0 && first_id != 0) {
+      ids[0] = first_id;
+      prev = first_id;
+    } else {
+      char input[512];
+      if (i == 0)
+        snprintf(input, sizeof(input), "%s", name);
+      else
+        snprintf(input, sizeof(input), "%s:%u", name, (unsigned)prev);
+      prev = fnv1a_ring(prev, input);
+      ids[i] = prev;
+    }
   }
 }
 
@@ -153,7 +179,7 @@ static int ring_rebuild(void) {
     if (g_nodes[i]->dead)
       continue;
     uint32_t ids[DC_IDS_PER_NODE];
-    compute_node_ids(g_nodes[i]->name, ids);
+    compute_node_ids(g_nodes[i]->name, g_nodes[i]->first_id, ids);
     for (int j = 0; j < DC_IDS_PER_NODE; j++) {
       ring[n].id = ids[j];
       ring[n].node_idx = i;
@@ -207,9 +233,9 @@ static CURL *curl_handle_init(void) {
   return h;
 }
 
-static void node_init(dc_node_t *n, const char *name) {
+static void node_init(dc_node_t *n, const char *raw_name) {
   memset(n, 0, sizeof(*n));
-  strncpy(n->name, name, DC_NODE_NAME_MAX - 1);
+  strip_nodeid(raw_name, n->name, DC_NODE_NAME_MAX, &n->first_id);
   pthread_mutex_init(&n->mu, NULL);
   pthread_cond_init(&n->cv, NULL);
 }
@@ -294,9 +320,13 @@ static void node_reset(dc_conn_t *conn) {
  * the ring. Caller must hold g_ring_mu. */
 static int ring_add_nodes(const char names[][DC_NODE_NAME_MAX], int n) {
   for (int i = 0; i < n; i++) {
+    char addr[DC_NODE_NAME_MAX];
+    uint32_t fid = 0;
+    strip_nodeid(names[i], addr, sizeof(addr), &fid);
+
     int found = -1;
     for (int j = 0; j < g_n_nodes; j++) {
-      if (strcmp(g_nodes[j]->name, names[i]) == 0) {
+      if (strcmp(g_nodes[j]->name, addr) == 0) {
         found = j;
         break;
       }
@@ -307,6 +337,7 @@ static int ring_add_nodes(const char names[][DC_NODE_NAME_MAX], int n) {
         g_nodes[found]->dead = 0;
         pthread_mutex_unlock(&g_nodes[found]->mu);
       }
+      g_nodes[found]->first_id = fid;
       continue;
     }
 
@@ -799,7 +830,10 @@ int dc_housekeeping(char *errbuf, int errsz) {
         continue;
       int in_a = 0;
       for (int j = 0; j < n_new; j++) {
-        if (strcmp(g_nodes[i]->name, new_names[j]) == 0) {
+        char addr[DC_NODE_NAME_MAX];
+        uint32_t fid = 0;
+        strip_nodeid(new_names[j], addr, sizeof(addr), &fid);
+        if (strcmp(g_nodes[i]->name, addr) == 0) {
           in_a = 1;
           break;
         }
@@ -821,9 +855,13 @@ int dc_housekeeping(char *errbuf, int errsz) {
 
     /* Add or revive nodes in A. */
     for (int j = 0; j < n_new; j++) {
+      char addr[DC_NODE_NAME_MAX];
+      uint32_t fid = 0;
+      strip_nodeid(new_names[j], addr, sizeof(addr), &fid);
+
       int found = -1;
       for (int i = 0; i < g_n_nodes; i++) {
-        if (strcmp(g_nodes[i]->name, new_names[j]) == 0) {
+        if (strcmp(g_nodes[i]->name, addr) == 0) {
           found = i;
           break;
         }
@@ -834,6 +872,7 @@ int dc_housekeeping(char *errbuf, int errsz) {
           g_nodes[found]->dead = 0;
           pthread_mutex_unlock(&g_nodes[found]->mu);
         }
+        g_nodes[found]->first_id = fid;
       } else {
         dc_node_t *nn = calloc(1, sizeof(dc_node_t));
         if (!nn)
@@ -1220,7 +1259,7 @@ uint32_t dc_test_fnv1a(uint32_t prev, const char *input) {
   return fnv1a_ring(prev, input);
 }
 void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]) {
-  compute_node_ids(name, ids);
+  compute_node_ids(name, 0, ids);
 }
 uint32_t dc_test_dest_id(const char *bucket, const char *key) {
   return compute_dest_id(bucket, key);

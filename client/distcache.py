@@ -128,13 +128,24 @@ def _fnv1a_mod(prev: int, input_str: str) -> int:
 # Ring
 # ---------------------------------------------------------------------------
 
-def node_ids(node_name: str) -> list[int]:
-    """Compute the 10 ring IDs for a node (matches Elixir and C)."""
+def _strip_nodeid(s: str) -> tuple[str, int]:
+    """Split 'host:port[/first_id]' into (host:port, first_id)."""
+    slash = s.find('/')
+    if slash >= 0:
+        try:
+            return s[:slash], int(s[slash + 1:])
+        except ValueError:
+            return s[:slash], 0
+    return s, 0
+
+
+def node_ids(node_name: str, first_id: int = 0) -> list[int]:
+    """Compute the 10 ring IDs for a node (matches server and C client)."""
     ids:  list[int] = []
-    prev: int       = 0
-    for i in range(_IDS_PER_NODE):
-        inp  = node_name if i == 0 else f"{node_name}:{prev}"
-        prev = _fnv1a_mod(prev, inp)
+    prev: int = first_id if first_id != 0 else _fnv1a_mod(0, node_name)
+    ids.append(prev)
+    for _ in range(1, _IDS_PER_NODE):
+        prev = _fnv1a_mod(prev, f"{node_name}:{prev}")
         ids.append(prev)
     return ids
 
@@ -191,13 +202,15 @@ _STALE_ERRORS = (
 
 
 class _Node:
-    def __init__(self, name: str) -> None:
-        host, port_str = name.rsplit(":", 1)
-        self.name  = name
-        self.dead  = False
-        self._host = host
-        self._port = int(port_str)
-        self._cv   = threading.Condition()
+    def __init__(self, raw_name: str) -> None:
+        clean, fid         = _strip_nodeid(raw_name)
+        host, port_str     = clean.rsplit(":", 1)
+        self.name          = clean
+        self.first_id      = fid
+        self.dead          = False
+        self._host         = host
+        self._port         = int(port_str)
+        self._cv           = threading.Condition()
         self._slots: list[_Slot] = [_Slot() for _ in range(_POOL_SIZE)]
 
     def checkout(self) -> tuple[int, http.client.HTTPConnection]:
@@ -315,17 +328,19 @@ def _find_node(name: str) -> Optional[_Node]:
 def _ring_update(names: list[str]) -> None:
     """Add/revive nodes and rebuild the ring. Caller must hold _ring_lock."""
     existing = {n.name: n for n in _nodes}
-    for name in names:
-        if name in existing:
-            n = existing[name]
+    for raw in names:
+        addr, fid = _strip_nodeid(raw)
+        if addr in existing:
+            n = existing[addr]
             if n.dead:
                 with n._cv:
                     n.dead = False
+            n.first_id = fid
         else:
-            new_node = _Node(name)
+            new_node = _Node(raw)
             _nodes.append(new_node)
-            existing[name] = new_node
-    members = {n.name: node_ids(n.name) for n in _nodes if not n.dead}
+            existing[addr] = new_node
+    members = {n.name: node_ids(n.name, n.first_id) for n in _nodes if not n.dead}
     _ring.clear()
     _ring.extend(_build_sorted_ring(members))
 
@@ -569,7 +584,7 @@ def housekeeping() -> None:
         # Step 3: update ring under lock
         with _ring_lock:
             if fetch_error is None and new_names:
-                a_set = set(new_names)
+                a_set = {_strip_nodeid(name)[0] for name in new_names}
 
                 # Mark B-A nodes dead and close their idle connections
                 for n in _nodes:
@@ -578,15 +593,17 @@ def housekeeping() -> None:
 
                 # Add or revive A nodes
                 existing = {n.name: n for n in _nodes}
-                for name in new_names:
-                    if name in existing:
-                        if existing[name].dead:
-                            with existing[name]._cv:
-                                existing[name].dead = False
+                for raw in new_names:
+                    addr, fid = _strip_nodeid(raw)
+                    if addr in existing:
+                        if existing[addr].dead:
+                            with existing[addr]._cv:
+                                existing[addr].dead = False
+                        existing[addr].first_id = fid
                     else:
-                        new_node = _Node(name)
+                        new_node = _Node(raw)
                         _nodes.append(new_node)
-                        existing[name] = new_node
+                        existing[addr] = new_node
 
             # Compact fully-drained tombstones
             i = 0
@@ -601,7 +618,7 @@ def housekeeping() -> None:
                 i += 1
 
             # Rebuild ring from live nodes
-            members = {n.name: node_ids(n.name) for n in _nodes if not n.dead}
+            members = {n.name: node_ids(n.name, n.first_id) for n in _nodes if not n.dead}
             _ring.clear()
             _ring.extend(_build_sorted_ring(members))
 

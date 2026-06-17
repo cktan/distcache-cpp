@@ -234,6 +234,19 @@ static void handle_health(node_t &node, const httplib::Request &,
       node.stats.hint_pull.load(), peers_json);
 }
 
+static void handle_nodes(node_t &node, const httplib::Request &,
+                         httplib::Response &res) {
+  auto peers = node.membership.raw_peers();
+  std::string json = "{\"alive\":[";
+  for (size_t i = 0; i < peers.size(); ++i) {
+    json += "{\"name\":\"" + peers[i] + "\"}";
+    if (i + 1 < peers.size())
+      json += ",";
+  }
+  json += "],\"suspect\":[],\"dead\":[]}";
+  send_raw(res, wire_info(json));
+}
+
 static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
                                   httplib::Response &res) {
   std::string nodeid = json_str(req.body, "nodeid");
@@ -341,6 +354,10 @@ void http_server_t::start(const std::string &nodeid) {
   svr->Get("/_health",
            [this](const httplib::Request &req, httplib::Response &res) {
              handle_health(node_, req, res);
+           });
+  svr->Get("/_nodes",
+           [this](const httplib::Request &req, httplib::Response &res) {
+             handle_nodes(node_, req, res);
            });
   svr->Post("/_claim_keyspace",
             [this](const httplib::Request &req, httplib::Response &res) {

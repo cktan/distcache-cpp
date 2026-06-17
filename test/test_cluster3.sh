@@ -76,7 +76,7 @@ for i in $(seq 1 15); do
             break
         elif [[ "$resp" == REDIRECT:* ]]; then
             # Follow the redirect once.
-            dest=$(printf '%s' "$resp" | head -1 | sed 's/REDIRECT://' | tr -d '\r\n')
+            dest=$(printf '%s' "$resp" | sed -n '2p' | sed 's/^\["\([^"]*\)"\].*/\1/' | cut -d'/' -f1)
             follow=$(curl -s "http://$dest/bkt3/k$i")
             if [[ "$follow" == DATA:* ]]; then
                 echo "$follow" | grep -q "val$i" \

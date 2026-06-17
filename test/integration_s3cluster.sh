@@ -106,7 +106,7 @@ for key in $(seq 1 500); do
     resp=$(curl -s "http://127.0.0.1:${PORTS[0]}/moby/$key" 2>/dev/null)
     served_port="${PORTS[0]}"
     if [[ "$resp" == REDIRECT:* ]]; then
-        dest=$(printf '%s' "$resp" | head -1 | sed 's/REDIRECT://' | tr -d '\r\n')
+        dest=$(printf '%s' "$resp" | sed -n '2p' | sed 's/^\["\([^"]*\)"\].*/\1/' | cut -d'/' -f1)
         served_port=$(printf '%s' "$dest" | awk -F: '{print $NF}')
         resp=$(curl -s "http://$dest/moby/$key" 2>/dev/null)
     fi
@@ -186,7 +186,7 @@ verified=0
 for key in $(seq 1 500); do
     resp=$(curl -s "http://127.0.0.1:${SURVIVING_PORTS[0]}/moby/$key" 2>/dev/null)
     if [[ "$resp" == REDIRECT:* ]]; then
-        dest=$(printf '%s' "$resp" | head -1 | sed 's/REDIRECT://' | tr -d '\r\n')
+        dest=$(printf '%s' "$resp" | sed -n '2p' | sed 's/^\["\([^"]*\)"\].*/\1/' | cut -d'/' -f1)
         resp=$(curl -s "http://$dest/moby/$key" 2>/dev/null)
     fi
     [[ "$resp" == DATA:* ]] \

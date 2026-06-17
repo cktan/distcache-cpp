@@ -20,7 +20,7 @@ TEST_CASE("wire_redirect: correct framing") {
 
 TEST_CASE("wire_err: correct framing") {
   std::string s = wire_err("not found");
-  CHECK(s == "ERR:not found\nFIN:0\n");
+  CHECK(s == "ERROR:42\n{\"type\":\"not found\",\"message\":\"not found\"}FIN:0\n");
   CHECK(wire_check_fin(s));
 }
 

@@ -27,7 +27,14 @@ std::string wire_redirect(const std::string &node) {
 }
 
 std::string wire_err(const std::string &msg) {
-  return "ERR:" + msg + "\n" + FIN;
+  std::string json = "{\"type\":\"" + msg + "\",\"message\":\"" + msg + "\"}";
+  std::string out;
+  out += "ERROR:";
+  out += std::to_string(json.size());
+  out += "\n";
+  out += json;
+  out += FIN;
+  return out;
 }
 
 std::string wire_fin() { return FIN; }

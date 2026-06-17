@@ -249,6 +249,57 @@ SWIM has delivered the convergence event.
 
 ---
 
+## Feed and Job Queue
+
+The system utilizes `feed_t` (defined in `feed.h`), which wraps
+the C-style `swim_feed_t` from `swimc17` with a C++ interface
+and a background consumer thread.
+
+### The feed_t Abstraction
+
+`feed_t` provides a multi-producer, single-consumer (MPSC)
+queue model. It supports:
+- **Thread-safe Enqueueing**: Multiple threads call `put()`
+  which compiles arguments into `swim_feed_put`.
+- **Non-blocking/Blocking Wait**: The consumer thread calls
+  `swim_feed_wait()` with a timeout to sleep until new
+  events are available or `stop()` is called.
+- **Batch Processing**: The consumer thread drains all
+  available entries in a loop using `swim_feed_get()`.
+
+### Telemetry & Event Feed (node.feed)
+
+`node.feed` is passed to the SWIM startup options. It serves
+two roles:
+1. **SWIM Events**: The membership library puts cluster events
+   (`node` up/down, `warning`) directly into this feed.
+2. **App Telemetry**: Route handlers and rebalancer write
+   performance events (e.g., `cache.hit`, `cache.miss`,
+   `cache.redirect`, `rebalance.pull`) to it.
+
+The consumer thread runs inside `membership_t`. When a `node`
+`down` event is detected, it updates the local injected peer
+cache and rebuilds the chord ring. Telemetry and warnings are
+logged to standard error.
+
+### Job Queue (node.jobq)
+
+`node.jobq` acts as an asynchronous job queue. By offloading
+background tasks to `node.jobq`, the HTTP server threads avoid
+blocking on disk I/O or inter-node network requests.
+
+The consumer thread runs inside `rebalancer_t`. The following
+types of jobs are currently supported:
+
+| Job type | Args | Description |
+|----------|------|-------------|
+| `hint_pull` | `dest_addr relpath mtime_str` | POSTs `/_hint_pull` to `dest_addr` telling it to pull `relpath` from us. Fired when the GET redirect branch finds the file locally or when `/_claim_keyspace` scan finds keys belonging to a claimant. |
+| `do_pull` | `src_addr relpath mtime_str` | Calls `pull_one(src, relpath, mtime)` to fetch `relpath` from `src_addr` into local cache. Enqueued by the `/_hint_pull` handler so that handler returns immediately. |
+| `claim_scan` | `nodeid` | Calls `inject_node(nodeid)` to update the ring, scans the LRU for keys whose successor is the claimant, and enqueues a `hint_pull` job per matching key. Enqueued by the `/_claim_keyspace` handler to avoid blocking it on an O(N) LRU scan. |
+| `evict` | _(none)_ | Calls `node.cache.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
+
+---
+
 ## HTTP server
 
 cpp-httplib thread-per-request server. Route handlers are
@@ -357,16 +408,9 @@ proactively.
 ### Job queue (node.jobq)
 
 `node.jobq` is a second `swim_feed_t`-backed `Feed` used as
-a general async job queue. A single worker thread drains it;
-callers enqueue and return immediately without waiting for
-the result.
-
-| Job type | Args | What the worker does |
-|----------|------|----------------------|
-| `hint_pull` | `dest_addr relpath mtime_str` | POSTs `/_hint_pull` to `dest_addr` telling it to pull `relpath` from us. Fired when the GET redirect branch finds the file locally or when `/_claim_keyspace` scan finds keys belonging to a claimant. |
-| `do_pull` | `src_addr relpath mtime_str` | Calls `pull_one(src, relpath, mtime)` to fetch `relpath` from `src_addr` into local cache. Enqueued by the `/_hint_pull` handler so that handler returns immediately. |
-| `claim_scan` | `nodeid` | Calls `inject_node(nodeid)` to update the ring, scans the LRU for keys whose successor is the claimant, and enqueues a `hint_pull` job per matching key. Enqueued by the `/_claim_keyspace` handler to avoid blocking it on an O(N) LRU scan. |
-| `evict` | _(none)_ | Calls `node.cache.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
+a general async job queue. For a detailed list of supported
+job types and queue mechanics, see
+[Feed and Job Queue](#feed-and-job-queue).
 
 The worker POSTs `/_hint_pull` to `dest_addr`
 (see REST.md for the request schema).

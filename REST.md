@@ -115,10 +115,11 @@ components; `key` may contain `/`.
 
 **Query parameters:**
 
-| Parameter | Effect                                            |
-|-----------|---------------------------------------------------|
-| `local`   | serve only from local cache; skip ring routing    |
-| `delete`  | delete object from cache after serving            |
+| Parameter     | Effect                                        |
+|---------------|-----------------------------------------------|
+| `local`       | serve only from local cache; skip ring routing|
+| `no_redirect` | serve directly; fetch from S3 if not cached   |
+| `delete`      | delete object from cache after serving        |
 
 **Responses:**
 
@@ -130,8 +131,10 @@ components; `key` may contain `/`.
 - **Error** — `ERROR` frame followed by `FIN`.
 
 The ring routes by computing `FNV-1a-64(0, "cache/{bucket}/{key}")`
-and finding the successor node. When `?local` is set, ring
-routing is skipped entirely.
+and finding the successor node. `?local` skips ring routing
+and returns `ERR_NOT_CACHED` on a miss. `?no_redirect` also
+skips ring routing but falls through to S3 on a miss, so
+the caller always receives the object directly.
 
 ---
 

@@ -100,9 +100,10 @@ static void handle_get(node_t &node, const httplib::Request &req,
   uint32_t rp_id = ring_t::compute_id(relpath.str());
 
   bool local_only = req.has_param("local");
+  bool no_redirect = req.has_param("no_redirect");
   bool delete_after = req.has_param("delete");
 
-  if (!local_only) {
+  if (!local_only && !no_redirect) {
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
     if (!dest.empty() && dest != membership_t::parse_peer(node.nodeid).first) {

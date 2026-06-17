@@ -27,10 +27,11 @@
 // automatically; callers do not touch the lru directly.
 
 class cache_t {
+  std::string homedir_;
   lru_t lru_;
 
 public:
-  cache_t(keylock_t &keylock);
+  cache_t(keylock_t &keylock, std::string homedir);
 
   // True if relpath exists and is readable.
   bool exists(const relpath_t &relpath) const;
@@ -51,7 +52,6 @@ public:
   // Generate a unique tmp relpath under tmp/.
   relpath_t tmp_relpath();
 
-  // Join homedir + "/" + relpath.
   std::string abspath(const relpath_t &relpath) const;
 
   // Create parent directories of relpath.

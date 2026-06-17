@@ -37,7 +37,9 @@ class lru_t {
 public:
   // keylock: coordinates eviction with in-flight S3 fetches.
   // id_fn: computes the ring relpath_id for a given relpath.
-  lru_t(keylock_t &keylock, std::function<uint32_t(const std::string &)> id_fn);
+  // homedir: absolute path to the node's home directory; used for statvfs.
+  lru_t(keylock_t &keylock, std::function<uint32_t(const std::string &)> id_fn,
+        std::string homedir);
 
   // Add or update an entry. relpath_id is computed via id_fn.
   void put(const relpath_t &relpath, time_t mtime);
@@ -70,7 +72,7 @@ public:
   // #files in the LRU.
   size_t size();
 
-  // statvfs() wrappers on the cwd (process is chdir'd into homedir).
+  // statvfs() wrappers on homedir_.
   int disk_usepct();
   double disk_used_gib();
   bool disk_error();
@@ -78,6 +80,7 @@ public:
 private:
   keylock_t &keylock_;
   std::function<uint32_t(const std::string &)> id_fn_;
+  std::string homedir_;
 
   // Guards map_ and cold_list_. All public methods acquire this before
   // touching either structure.

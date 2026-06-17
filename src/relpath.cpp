@@ -29,7 +29,3 @@ std::optional<relpath_t> compute_relpath(const std::string &bucket,
     return std::nullopt;
   return relpath_t{"cache/" + bucket + "/" + key};
 }
-
-std::string to_abs(const std::string &homedir, const std::string &relpath) {
-  return homedir + "/" + relpath;
-}

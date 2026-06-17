@@ -66,10 +66,12 @@ static rc_t errno_to_rc(const std::string &msg) {
   return rc_t::err(rc_errcode_t::io, msg);
 }
 
-cache_t::cache_t(keylock_t &keylock) : lru_(keylock, ring_t::compute_id) {}
+cache_t::cache_t(keylock_t &keylock, std::string homedir)
+    : homedir_(std::move(homedir)),
+      lru_(keylock, ring_t::compute_id, homedir_) {}
 
 std::string cache_t::abspath(const relpath_t &relpath) const {
-  return std::filesystem::absolute("./" + relpath.str());
+  return homedir_ + "/" + relpath.str();
 }
 
 bool cache_t::exists(const relpath_t &relpath) const {
@@ -135,7 +137,7 @@ rc_t cache_t::mkdirs(const relpath_t &relpath) {
 
 void cache_t::scan_cache(
     const std::function<void(const std::string &, time_t)> &cb) {
-  walk("./cache", "cache", cb);
+  walk(homedir_ + "/cache", "cache", cb);
 }
 
 void cache_t::batch_put(

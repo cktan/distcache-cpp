@@ -196,21 +196,23 @@ struct ClusterFixture {
     }
 
     // poll /ping until s3copy is ready (max 5 s)
+    bool s3copy_ready = false;
     for (int i = 0; i < 50; i++) {
-      fprintf(stderr, "s3copy: poll\n");
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
       httplib::Client cli("127.0.0.1", 7777);
       cli.set_connection_timeout(1);
       auto res = cli.Get("/ping");
-      if (res && res->status == 200)
+      if (res && res->status == 200) {
+        s3copy_ready = true;
         break;
+      }
     }
-    if (i == 50) {
-      // TODO: fail early!!
+    if (!s3copy_ready) {
+      kill(s3copy_pid, SIGKILL);
+      waitpid(s3copy_pid, nullptr, 0);
+      s3copy_pid = -1;
+      REQUIRE(s3copy_ready); // s3copy failed to start within 5s
     }
-    fprintf(stderr, "----\n");
-    fprintf(stderr, "s3copy: started\n");
-    fprintf(stderr, "----\n");
 
     // start initial n nodes
     add_nodes(0, n);

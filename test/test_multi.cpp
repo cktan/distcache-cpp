@@ -12,6 +12,7 @@
 #include "doctest.h"
 #include "node.h"
 #include "wire.h"
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstdint>
@@ -19,10 +20,12 @@
 #include <filesystem>
 #include <fstream>
 #include <httplib.h>
+#include <map>
 #include <signal.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
+#include <vector>
 
 // ── HTTP helpers
 // ──────────────────────────────────────────────────────────────
@@ -114,6 +117,15 @@ static uint64_t json_int(const std::string &json, const std::string &key) {
   return std::stoull(json.substr(pos + needle.size()));
 }
 
+// Query s3copy's objects_served counter via its /health endpoint.
+static uint64_t s3copy_served() {
+  httplib::Client cli("127.0.0.1", 7777);
+  cli.set_connection_timeout(2);
+  cli.set_read_timeout(5);
+  auto res = cli.Get("/health");
+  return res ? json_int(res->body, "objects_served") : 0;
+}
+
 // Count regular files under /tmp/dc_qa_{from..to-1}/cache.
 static int total_cache_files(int from, int to) {
   int count = 0;
@@ -135,7 +147,7 @@ static constexpr const char *PROJECT_ROOT = "/home/sprite/p/distcache-cpp";
 
 struct ClusterFixture {
   pid_t s3copy_pid = -1;
-  std::array<std::unique_ptr<node_t>, 5> nodes;
+  std::vector<std::unique_ptr<node_t>> nodes;
 
   explicit ClusterFixture(int n = 5) {
     // kill any stale s3copy from a previous run
@@ -145,8 +157,10 @@ struct ClusterFixture {
     // accelerate claim_sweep (default delay is 1–21 s, too slow for tests)
     setenv("DC_CLAIM_DELAY_MS", "500", 1);
 
-    // wipe all five homedirs upfront (add_nodes recreates dirs via node_t)
-    for (int i = 0; i < 5; i++) {
+    // wipe homedirs upfront; always cover at least 5 for tests that add_nodes
+    int cap = std::max(n, 5);
+    nodes.resize(cap);
+    for (int i = 0; i < cap; i++) {
       std::string hd = "/tmp/dc_qa_" + std::to_string(i);
       std::filesystem::remove_all(hd);
       std::filesystem::create_directories(hd);
@@ -181,6 +195,8 @@ struct ClusterFixture {
 
   // Construct and start nodes [from, to).
   void add_nodes(int from, int to) {
+    if (to > (int)nodes.size())
+      nodes.resize(to);
     for (int i = from; i < to; i++) {
       std::string hd = "/tmp/dc_qa_" + std::to_string(i);
       nodes[i] =
@@ -201,13 +217,13 @@ struct ClusterFixture {
   }
 
   // Poll every 500 ms until every live node's /_health reports node_count.
-  void wait_converged(int node_count, int timeout_s = 20) {
+  void wait_converged(int node_count, int timeout_s = 30) {
     std::string target = "\"nodes\":" + std::to_string(node_count);
     auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(timeout_s);
     while (std::chrono::steady_clock::now() < deadline) {
       bool all_ok = true;
-      for (int i = 0; i < 5; i++) {
+      for (int i = 0; i < (int)nodes.size(); i++) {
         if (!nodes[i])
           continue;
         httplib::Client cli("127.0.0.1", 4000 + i);
@@ -226,7 +242,7 @@ struct ClusterFixture {
   }
 
   ~ClusterFixture() {
-    for (int i = 0; i < 5; i++) {
+    for (int i = 0; i < (int)nodes.size(); i++) {
       if (nodes[i]) {
         nodes[i]->stop();
         nodes[i]->join();
@@ -532,3 +548,145 @@ TEST_CASE("TC9: local and delete modifiers") {
 // Requires OS-level disk setup (tmpfs or loop device). Cannot run in-process.
 // See QA.md §11 for the full procedure.
 // ─────────────────────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC11: nested key paths and /_health schema
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC11: nested key paths and health schema") {
+  // 1. Start 1-node cluster.
+  // 2. PUT /bucket/path/to/obj; verify FIN and body on GET.
+  // 3. GET /_health; verify all 15 expected JSON fields are present.
+  ClusterFixture cx(1);
+
+  // nested key: path segments separated by slashes
+  auto pr = url_put("127.0.0.1", 4000, "/bucket/path/to/obj", "payload");
+  CHECK(wire_check_fin(pr));
+  auto gr = url_get("127.0.0.1", 4000, "/bucket/path/to/obj");
+  CHECK(gr.find("payload") != std::string::npos);
+  CHECK(wire_check_fin(gr));
+
+  // /_health must contain every field the JSON schema promises
+  auto h = url_get("127.0.0.1", 4000, "/_health");
+  for (const char *f : {"addr", "lru_size", "disk_pct", "peers", "upsince",
+                        "upfor", "nodes", "used_gib", "df_error", "hits",
+                        "misses", "served", "redirects", "errors", "hint_pull"})
+    CHECK(h.find(std::string("\"") + f + "\"") != std::string::npos);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC12: SIGTERM exits cleanly
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC12: SIGTERM clean exit") {
+  // 1. Fork and exec the distcache binary on port 4010.
+  // 2. Poll /_health until ready.
+  // 3. Send SIGTERM; wait for process exit.
+  // 4. Verify exit status is 0.
+  std::string hd = "/tmp/dc_qa_sigterm";
+  std::filesystem::remove_all(hd);
+  std::filesystem::create_directories(hd);
+
+  std::string binary = std::string(PROJECT_ROOT) + "/src/distcache";
+  pid_t pid = fork();
+  if (pid == 0) {
+    execlp(binary.c_str(), "distcache", "-D", hd.c_str(),
+           "-N", "127.0.0.1:4010", nullptr);
+    _exit(1);
+  }
+  REQUIRE(pid > 0);
+
+  // poll /_health until the node is accepting requests (max 5 s)
+  bool ready = false;
+  for (int i = 0; i < 50 && !ready; i++) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    httplib::Client cli("127.0.0.1", 4010);
+    cli.set_connection_timeout(1);
+    auto res = cli.Get("/_health");
+    if (res && res->status == 200)
+      ready = true;
+  }
+  if (!ready) {
+    kill(pid, SIGKILL);
+    waitpid(pid, nullptr, 0);
+    std::filesystem::remove_all(hd);
+    REQUIRE(ready); // forces failure with clear message
+  }
+
+  kill(pid, SIGTERM);
+  int status = 0;
+  waitpid(pid, &status, 0);
+  std::filesystem::remove_all(hd);
+
+  CHECK(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC13: 10-node cluster — S3 warm, 2-node failure, re-fetch
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
+  // 1. Start 10-node cluster + fake S3.
+  // 2. GET moby/1..500 via follow_get; record which node owns each key.
+  // 3. Verify s3copy served >=500 objects during warm.
+  // 4. Kill the 2 nodes owning the most keys.
+  // 5. Wait for 8-node SWIM convergence.
+  // 6. GET all 500 keys from a surviving node; verify DATA: + FIN.
+  // 7. Verify s3copy served additional objects (dead nodes' keys re-fetched).
+  // 8. Verify aggregate hits + misses > 0 across surviving nodes.
+  ClusterFixture cx(10);
+
+  // warm: GET all 500 keys, track owner counts
+  std::map<std::string, int> owner_count;
+  for (int i = 1; i <= 500; i++) {
+    auto [addr, body] = follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
+    REQUIRE(!addr.empty());
+    CHECK(body.starts_with("DATA:"));
+    CHECK(wire_check_fin(body));
+    owner_count[addr]++;
+  }
+
+  uint64_t s3_warm = s3copy_served();
+  CHECK(s3_warm >= 500);
+
+  // rank nodes by key count; kill the top 2
+  std::vector<std::pair<int, std::string>> ranked;
+  for (auto &[addr, cnt] : owner_count)
+    ranked.push_back({cnt, addr});
+  std::sort(ranked.rbegin(), ranked.rend());
+  REQUIRE((int)ranked.size() >= 2);
+
+  for (int k = 0; k < 2; k++)
+    cx.stop_node(addr_to_idx(ranked[k].second));
+
+  cx.wait_converged(8, 40);
+
+  // pick any surviving node to start follow_get from
+  std::string start_addr;
+  for (int i = 0; i < (int)cx.nodes.size(); i++)
+    if (cx.nodes[i]) { start_addr = "127.0.0.1:" + std::to_string(4000 + i); break; }
+  REQUIRE(!start_addr.empty());
+
+  // verify all 500 keys still reachable (dead nodes' keys re-fetched from S3)
+  for (int i = 1; i <= 500; i++) {
+    auto [addr, body] = follow_get(start_addr, "/moby/" + std::to_string(i));
+    CHECK(!addr.empty());
+    CHECK(body.starts_with("DATA:"));
+    CHECK(wire_check_fin(body));
+  }
+
+  CHECK(s3copy_served() > s3_warm);
+
+  // aggregate hits + misses across survivors
+  uint64_t total_hits = 0, total_misses = 0;
+  for (int i = 0; i < (int)cx.nodes.size(); i++) {
+    if (!cx.nodes[i])
+      continue;
+    auto h = url_get("127.0.0.1", 4000 + i, "/_health");
+    total_hits   += json_int(h, "hits");
+    total_misses += json_int(h, "misses");
+  }
+  CHECK(total_hits > 0);
+  CHECK(total_misses > 0);
+}

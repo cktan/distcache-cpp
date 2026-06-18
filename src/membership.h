@@ -31,11 +31,14 @@
 //   An internal mutex (injected_mtx_) protects the map of manually injected
 //   nodes.
 
+#include <atomic>
+#include <condition_variable>
 #include <cstdint>
 #include <map>
 #include <mutex>
 #include <string>
 #include <swim.h>
+#include <thread>
 #include <vector>
 
 struct node_t;
@@ -64,4 +67,9 @@ private:
   std::mutex ring_mu_;
   std::mutex injected_mtx_;
   std::map<std::string, uint32_t> injected_;
+
+  std::mutex claim_mu_;
+  std::condition_variable claim_cv_;
+  std::atomic<bool> stopping_{false};
+  std::thread claim_thread_;
 };

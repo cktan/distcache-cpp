@@ -156,7 +156,7 @@ bool membership_t::start(const std::string &nodeid,
     fprintf(stderr, "%s\n", line.c_str());
   });
 
-  std::thread([this, nodeid]() {
+  claim_thread_ = std::thread([this, nodeid]() {
     srand(static_cast<unsigned>(time(nullptr)) ^
           static_cast<unsigned>(getpid()));
     int max_ms = 20000;
@@ -167,14 +167,29 @@ bool membership_t::start(const std::string &nodeid,
         max_ms = v;
     }
     int delay_ms = 1000 + (rand() % max_ms);
-    std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+    {
+      std::unique_lock<std::mutex> lk(claim_mu_);
+      // wait interruptibly so leave() can cancel the sweep
+      if (claim_cv_.wait_for(lk, std::chrono::milliseconds(delay_ms),
+                             [this] { return stopping_.load(); }))
+        return;
+    }
     node_.rebalancer.claim_sweep(nodeid);
-  }).detach();
+  });
 
   return true;
 }
 
 void membership_t::leave() {
+  // cancel and join the claim sweep thread before releasing node state
+  {
+    std::lock_guard<std::mutex> lk(claim_mu_);
+    stopping_ = true;
+    claim_cv_.notify_one();
+  }
+  if (claim_thread_.joinable())
+    claim_thread_.join();
+
   swim_t *tmp = nullptr;
   {
     std::lock_guard<std::mutex> lk(ring_mu_);

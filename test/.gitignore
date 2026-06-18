@@ -3,3 +3,5 @@ test_lru
 test_wire
 test_rebalance
 test_pidlock
+test_multi
+test_stream

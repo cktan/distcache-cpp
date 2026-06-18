@@ -24,6 +24,14 @@ $(SPDLOG_H):
 	mkdir -p $(HOME)/.local/include
 	cp -r /tmp/spdlog/include/spdlog $(HOME)/.local/include/
 
+JSMN_H := $(HOME)/.local/include/jsmn.h
+
+$(JSMN_H):
+	@echo copying jsmn.h to ~/.local/include
+	cd /tmp && git clone https://github.com/zserge/jsmn.git
+	mkdir -p $(dir $@)
+	cp /tmp/jsmn/jsmn.h $@
+
 SWIM_H   := $(HOME)/.local/include/swim.h
 SWIMC_A  := $(HOME)/.local/lib/libswimc17.a
 

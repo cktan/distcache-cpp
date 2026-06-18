@@ -4,7 +4,10 @@
 #include <cstdlib>
 #include <cstring>
 
-// Parse "http://host:port" into host and port.
+// Parse "http://host:port/base" into components.
+// base_path captures any path prefix after the host:port so that the sidecar
+// can be deployed behind a reverse proxy at a non-root path.
+// Falls back to port 80 when no port is specified.
 static bool parse_url(const std::string &url, std::string &host, int &port,
                       std::string &base_path) {
   const char *p = url.c_str();
@@ -16,14 +19,17 @@ static bool parse_url(const std::string &url, std::string &host, int &port,
   const char *slash = strchr(p, '/');
 
   if (colon && (!slash || colon < slash)) {
+    // host:port[/base]
     host = std::string(p, colon - p);
     port = atoi(colon + 1);
     base_path = slash ? std::string(slash) : "/";
   } else if (slash) {
+    // host/base  (no explicit port)
     host = std::string(p, slash - p);
     port = 80;
     base_path = std::string(slash);
   } else {
+    // bare host only
     host = std::string(p);
     port = 80;
     base_path = "/";
@@ -31,19 +37,28 @@ static bool parse_url(const std::string &url, std::string &host, int &port,
   return !host.empty() && port > 0;
 }
 
+// Ask the s3copy sidecar to download s3://bucket/key and write it to
+// dest_abspath on the local filesystem.
+//
+// The sidecar owns AWS credentials and does the actual S3 transfer; this
+// process just gives it a destination path and waits for the HTTP response.
+// S3COPY_URL defaults to http://localhost:7777 if unset.
 rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
                   const std::string &dest_abspath) {
+  // Read sidecar address from environment; fall back to local default.
   const char *env_url = getenv("S3COPY_URL");
   std::string url = env_url ? env_url : "http://localhost:7777";
 
   std::string host, base_path;
   int port = 7777;
   if (!parse_url(url, host, port, base_path)) {
+    // Malformed URL: use defaults so the request still attempts localhost.
     host = "localhost";
     port = 7777;
     base_path = "";
   }
 
+  // Escape " and \ so bucket/key/path are safe to embed in a JSON string.
   auto escape = [](const std::string &s) {
     std::string out;
     for (char c : s) {
@@ -54,10 +69,12 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
     return out;
   };
 
+  // Build the JSON request body: {"bucket":…,"key":…,"dest":…}
   std::string body = "{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" +
                      escape(key) + "\",\"dest\":\"" + escape(dest_abspath) +
                      "\"}";
 
+  // POST to sidecar and wait up to 60 s for the S3 transfer to complete.
   httplib::Client cli(host, port);
   cli.set_connection_timeout(5);
   cli.set_read_timeout(60);

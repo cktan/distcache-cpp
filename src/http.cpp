@@ -1,3 +1,4 @@
+#define JSMN_IMPLEMENTATION
 #include "http.h"
 #include "node.h"
 #include "relpath.h"
@@ -9,7 +10,9 @@
 #include <ctime>
 #include <functional>
 #include <httplib.h>
+#include <jsmn.h>
 #include <unistd.h>
+#include <vector>
 
 http_server_t::http_server_t(node_t &n) : node_(n) {}
 
@@ -36,13 +39,25 @@ static void send_raw(httplib::Response &res, std::string body) {
 }
 
 static std::string json_str(const std::string &body, const std::string &key) {
-  std::string needle = "\"" + key + "\":\"";
-  size_t pos = body.find(needle);
-  if (pos == std::string::npos)
+  jsmn_parser p;
+  jsmn_init(&p);
+  int n = jsmn_parse(&p, body.c_str(), body.size(), nullptr, 0);
+  if (n < 0)
     return "";
-  pos += needle.size();
-  size_t end = body.find('"', pos);
-  return end == std::string::npos ? "" : body.substr(pos, end - pos);
+  std::vector<jsmntok_t> toks(n);
+  jsmn_init(&p);
+  if (jsmn_parse(&p, body.c_str(), body.size(), toks.data(), n) < 0)
+    return "";
+  // toks[0] is the root object; pairs start at index 1
+  for (int i = 1; i + 1 < n; i += 2) {
+    if (toks[i].type != JSMN_STRING)
+      break;
+    std::string k(body.c_str() + toks[i].start, toks[i].end - toks[i].start);
+    if (k == key && toks[i + 1].type == JSMN_STRING)
+      return std::string(body.c_str() + toks[i + 1].start,
+                         toks[i + 1].end - toks[i + 1].start);
+  }
+  return "";
 }
 
 static int sink_writer(void *ctx, const char *buf, size_t n) {

@@ -3,7 +3,8 @@ include ../Makefile.global
 CXX ?= c++
 
 CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -pthread \
-            -I$(HOME)/.local/include -I../src
+            -I$(HOME)/.local/include -I../src \
+            -DDC_PROJECT_ROOT='"$(abspath ..)"'
 
 ifdef DEBUG
     CXXFLAGS += -O0 -g -fsanitize=address,undefined

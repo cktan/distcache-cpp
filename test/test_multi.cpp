@@ -143,7 +143,10 @@ static int total_cache_files(int from, int to) {
 // ── Cluster fixture
 // ───────────────────────────────────────────────────────────
 
-static constexpr const char *PROJECT_ROOT = "/home/sprite/p/distcache-cpp";
+#ifndef DC_PROJECT_ROOT
+#define DC_PROJECT_ROOT "/home/sprite/p/distcache-cpp"
+#endif
+static constexpr const char *PROJECT_ROOT = DC_PROJECT_ROOT;
 
 struct ClusterFixture {
   pid_t s3copy_pid = -1;

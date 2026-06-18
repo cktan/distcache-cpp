@@ -14,12 +14,15 @@
 #include <unistd.h>
 #include <vector>
 
+// Bind server to node_.
 http_server_t::http_server_t(node_t &n) : node_(n) {}
 
+// Default — httplib::Server cleanup is handled by unique_ptr.
 http_server_t::~http_server_t() = default;
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
+// Parse /bucket/key from path; return false if missing or malformed.
 static bool split_path(const std::string &path, std::string &bucket,
                        std::string &key) {
   if (path.empty() || path[0] != '/')
@@ -32,12 +35,15 @@ static bool split_path(const std::string &path, std::string &bucket,
   return !bucket.empty() && !key.empty();
 }
 
+// Send a 200 octet-stream response with body.
 static void send_raw(httplib::Response &res, std::string body) {
   res.status = 200;
   res.set_header("Content-Type", "application/octet-stream");
   res.body = std::move(body);
 }
 
+// Extract the string value of key from a flat JSON object body; return ""
+// if not found or malformed.
 static std::string json_str(const std::string &body, const std::string &key) {
   jsmn_parser p;
   jsmn_init(&p);
@@ -60,10 +66,13 @@ static std::string json_str(const std::string &body, const std::string &key) {
   return "";
 }
 
+// writer_fn adapter that writes into a chunked httplib DataSink.
 static int sink_writer(void *ctx, const char *buf, size_t n) {
   return static_cast<httplib::DataSink *>(ctx)->write(buf, n) ? 0 : -1;
 }
 
+// Read one chunk from fd and emit it as a DATA frame into sink.
+// Sends FIN on EOF or error and sets done=true.
 static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   char buf[4096];
   ssize_t n = ::read(fd.fd, buf, sizeof(buf));
@@ -79,6 +88,7 @@ static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   return true;
 }
 
+// Set up a chunked 200 response that streams fd as framed DATA/FIN chunks.
 static void serve_fd(fd_t &fd, httplib::Response &res) {
   struct StreamState {
     fd_t fd;
@@ -98,6 +108,7 @@ static void serve_fd(fd_t &fd, httplib::Response &res) {
 
 // ── Handlers ─────────────────────────────────────────────────────────────────
 
+// GET /{bucket}/{key}: redirect to owner, serve from cache, or fetch from S3.
 static void handle_get(node_t &node, const httplib::Request &req,
                        httplib::Response &res) {
   std::string bucket, key;
@@ -211,6 +222,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   serve_fd(fd2, res);
 }
 
+// GET /_health: return JSON with node stats, uptime, ring size, and peers.
 static void handle_health(node_t &node, const httplib::Request &,
                           httplib::Response &res, time_t start_time) {
   auto peers = node.membership.alive_peers();
@@ -252,6 +264,7 @@ static void handle_health(node_t &node, const httplib::Request &,
       node.stats.hint_pull.load(), peers_json);
 }
 
+// GET /_nodes: return JSON array of all known ring members.
 static void handle_nodes(node_t &node, const httplib::Request &,
                          httplib::Response &res) {
   auto peers = node.membership.raw_peers();
@@ -265,6 +278,7 @@ static void handle_nodes(node_t &node, const httplib::Request &,
   send_raw(res, wire_info(json));
 }
 
+// POST /_claim_keyspace: enqueue claim_scan for a joining node's keyspace.
 static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
                                   httplib::Response &res) {
   std::string nodeid = json_str(req.body, "nodeid");
@@ -278,6 +292,7 @@ static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
   send_raw(res, wire_fin());
 }
 
+// POST /_hint_pull: enqueue do_pull so this node fetches relpath from src.
 static void handle_hint_pull(node_t &node, const httplib::Request &req,
                              httplib::Response &res) {
   std::string src = json_str(req.body, "src");
@@ -294,6 +309,7 @@ static void handle_hint_pull(node_t &node, const httplib::Request &req,
   send_raw(res, wire_fin());
 }
 
+// PUT /{bucket}/{key}: stream request body into cache and trigger eviction.
 static void handle_put(node_t &node, const httplib::Request &req,
                        httplib::Response &res,
                        const httplib::ContentReader &content_reader) {
@@ -339,6 +355,7 @@ static void handle_put(node_t &node, const httplib::Request &req,
   send_raw(res, wire_fin());
 }
 
+// DELETE /{bucket}/{key}: drop entry from local cache.
 static void handle_delete(node_t &node, const httplib::Request &req,
                           httplib::Response &res) {
   std::string bucket, key;
@@ -359,6 +376,7 @@ static void handle_delete(node_t &node, const httplib::Request &req,
 // ── Server lifecycle
 // ──────────────────────────────────────────────────────────
 
+// Register all routes and start listening on nodeid's host:port (blocks).
 void http_server_t::start(const std::string &nodeid) {
   auto [addr, fid] = membership_t::parse_peer(nodeid);
   size_t colon = addr.rfind(':');
@@ -401,6 +419,7 @@ void http_server_t::start(const std::string &nodeid) {
   svr_->listen(host, port);
 }
 
+// Signal httplib server to stop accepting connections.
 void http_server_t::stop() {
   if (svr_)
     svr_->stop();

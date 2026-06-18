@@ -76,18 +76,6 @@ presenting severe lifetime risks:
 objects (e.g., using `std::jthread` or joining them in
 shutdown).
 
-### KeyLock Barging Window
-In `src/keylock.cpp`, `try_acquire` is called under `map_mtx_`.
-However, `acquire` waiting on `cv.wait` does not hold
-`map_mtx_` when it wakes up and sets `locked = true`.
-
-During this window, a concurrent `try_acquire` can barge in,
-acquire the lock, and force the woken waiter back to sleep.
-While this lock barging is correct (exclusivity is maintained
-and threads are not concurrent in the critical section), it is
-worth noting as it can trigger redundant S3 fetches if files
-are evicted while a waiter is sleeping.
-
 ---
 
 ## 3. Resource & Error Handling

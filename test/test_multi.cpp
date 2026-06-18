@@ -159,17 +159,13 @@ struct ClusterFixture {
   std::vector<std::unique_ptr<node_t>> nodes;
 
   explicit ClusterFixture(int n = 5) {
-    // kill any stale s3copy from a previous run
-    system("pkill -f 's3copy.py' 2>/dev/null; true");
-    // wait for port 7777 to be released before forking
-    for (int i = 0; i < 30; i++) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      httplib::Client cli("127.0.0.1", 7777);
-      cli.set_connection_timeout(1);
-      auto res = cli.Get("/ping");
-      if (!res)
-        break; // connection refused = port free
-    }
+    // start s3copy via helper script (kills stale, waits for port, writes PID)
+    std::string start_script = project_root() + "/test/s3copy_start.sh";
+    int rc = system(start_script.c_str());
+    REQUIRE(rc == 0); // s3copy failed to start
+    std::ifstream pidf("/tmp/test_env_s3copy/s3copy.pid");
+    if (pidf)
+      pidf >> s3copy_pid;
 
     // accelerate claim_sweep (default delay is 1–21 s, too slow for tests)
     setenv("DC_CLAIM_DELAY_MS", "500", 1);
@@ -181,37 +177,6 @@ struct ClusterFixture {
       std::string hd = "/tmp/dc_qa_" + std::to_string(i);
       std::filesystem::remove_all(hd);
       std::filesystem::create_directories(hd);
-    }
-
-    // start s3copy in fake-dir mode
-    std::filesystem::create_directories("/tmp/dc_qa_s3copy_log");
-    s3copy_pid = fork();
-    if (s3copy_pid == 0) {
-      std::string script = project_root() + "/s3copy/s3copy.py";
-      std::string fake = project_root() + "/testdata/";
-      execlp("python3", "python3", script.c_str(), "-L",
-             "/tmp/dc_qa_s3copy_log", "-F", fake.c_str(), "-p", "7777",
-             nullptr);
-      _exit(1);
-    }
-
-    // poll /ping until s3copy is ready (max 5 s)
-    bool s3copy_ready = false;
-    for (int i = 0; i < 50; i++) {
-      std::this_thread::sleep_for(std::chrono::milliseconds(100));
-      httplib::Client cli("127.0.0.1", 7777);
-      cli.set_connection_timeout(1);
-      auto res = cli.Get("/ping");
-      if (res && res->status == 200) {
-        s3copy_ready = true;
-        break;
-      }
-    }
-    if (!s3copy_ready) {
-      kill(s3copy_pid, SIGKILL);
-      waitpid(s3copy_pid, nullptr, 0);
-      s3copy_pid = -1;
-      REQUIRE(s3copy_ready); // s3copy failed to start within 5s
     }
 
     // start initial n nodes

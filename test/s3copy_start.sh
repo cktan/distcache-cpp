@@ -31,12 +31,13 @@ if port_open; then
     exit 1
 fi
 
-# start s3copy detached
+# start s3copy detached; record PID for callers
 nohup python3 "$ROOT/s3copy/s3copy.py" \
     -L "$LOGDIR" \
     -F "$ROOT/testdata/" \
     -p "$PORT" \
     >"$LOGDIR/stdout.log" 2>&1 &
+echo $! >"$LOGDIR/s3copy.pid"
 disown
 
 # wait for port to be in use (max 5s)

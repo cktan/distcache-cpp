@@ -590,8 +590,8 @@ TEST_CASE("TC12: SIGTERM clean exit") {
   std::string binary = std::string(PROJECT_ROOT) + "/src/distcache";
   pid_t pid = fork();
   if (pid == 0) {
-    execlp(binary.c_str(), "distcache", "-D", hd.c_str(),
-           "-N", "127.0.0.1:4010", nullptr);
+    execlp(binary.c_str(), "distcache", "-D", hd.c_str(), "-N",
+           "127.0.0.1:4010", nullptr);
     _exit(1);
   }
   REQUIRE(pid > 0);
@@ -640,7 +640,8 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
   // warm: GET all 500 keys, track owner counts
   std::map<std::string, int> owner_count;
   for (int i = 1; i <= 500; i++) {
-    auto [addr, body] = follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
+    auto [addr, body] =
+        follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
     REQUIRE(!addr.empty());
     CHECK(body.starts_with("DATA:"));
     CHECK(wire_check_fin(body));
@@ -665,7 +666,10 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
   // pick any surviving node to start follow_get from
   std::string start_addr;
   for (int i = 0; i < (int)cx.nodes.size(); i++)
-    if (cx.nodes[i]) { start_addr = "127.0.0.1:" + std::to_string(4000 + i); break; }
+    if (cx.nodes[i]) {
+      start_addr = "127.0.0.1:" + std::to_string(4000 + i);
+      break;
+    }
   REQUIRE(!start_addr.empty());
 
   // verify all 500 keys still reachable (dead nodes' keys re-fetched from S3)
@@ -684,7 +688,7 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
     if (!cx.nodes[i])
       continue;
     auto h = url_get("127.0.0.1", 4000 + i, "/_health");
-    total_hits   += json_int(h, "hits");
+    total_hits += json_int(h, "hits");
     total_misses += json_int(h, "misses");
   }
   CHECK(total_hits > 0);

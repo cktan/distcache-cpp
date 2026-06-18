@@ -5,3 +5,5 @@ test_rebalance
 test_pidlock
 test_multi
 test_stream
+test_rc
+test_relpath

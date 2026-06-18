@@ -12,8 +12,9 @@ port_open() {
 # kill any active s3copy
 pkill -f 's3copy.py' 2>/dev/null || true
 
-# clean log dir
-rm -rf "$LOGDIR"
+# rotate log dir
+rm -rf "$LOGDIR.old"
+[ -d "$LOGDIR" ] && mv "$LOGDIR" "$LOGDIR.old"
 mkdir -p "$LOGDIR"
 
 # wait for port to be free (max 3s)

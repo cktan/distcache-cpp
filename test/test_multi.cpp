@@ -143,10 +143,16 @@ static int total_cache_files(int from, int to) {
 // ── Cluster fixture
 // ───────────────────────────────────────────────────────────
 
-#ifndef DC_PROJECT_ROOT
-#define DC_PROJECT_ROOT "/home/sprite/p/distcache-cpp"
-#endif
-static constexpr const char *PROJECT_ROOT = DC_PROJECT_ROOT;
+// Resolve project root at runtime from the test binary's own location.
+// Binary lives in <root>/test/; project root is one level up.
+static std::string project_root() {
+  char buf[4096];
+  ssize_t n = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+  if (n <= 0)
+    return ".";
+  buf[n] = '\0';
+  return std::filesystem::path(buf).parent_path().parent_path().string();
+}
 
 struct ClusterFixture {
   pid_t s3copy_pid = -1;
@@ -173,8 +179,8 @@ struct ClusterFixture {
     std::filesystem::create_directories("/tmp/dc_qa_s3copy_log");
     s3copy_pid = fork();
     if (s3copy_pid == 0) {
-      std::string script = std::string(PROJECT_ROOT) + "/s3copy/s3copy.py";
-      std::string fake = std::string(PROJECT_ROOT) + "/testdata/";
+      std::string script = project_root() + "/s3copy/s3copy.py";
+      std::string fake = project_root() + "/testdata/";
       execlp("python3", "python3", script.c_str(), "-L",
              "/tmp/dc_qa_s3copy_log", "-F", fake.c_str(), "-p", "7777",
              nullptr);
@@ -590,7 +596,7 @@ TEST_CASE("TC12: SIGTERM clean exit") {
   std::filesystem::remove_all(hd);
   std::filesystem::create_directories(hd);
 
-  std::string binary = std::string(PROJECT_ROOT) + "/src/distcache";
+  std::string binary = project_root() + "/src/distcache";
   pid_t pid = fork();
   if (pid == 0) {
     execlp(binary.c_str(), "distcache", "-D", hd.c_str(), "-N",

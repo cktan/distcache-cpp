@@ -12,6 +12,13 @@
 // Records arrive as vector<string>; the first string is the event type.
 using feed_callback_t = std::function<void(std::vector<std::string>)>;
 
+// feed_t — SWIM feed queue utility
+//
+// Wraps a swim_feed_t handle and a background thread that drains it.
+// Call start() with a callback to begin receiving events; each invocation
+// delivers one batch of records as vector<string> where [0] is the event
+// type. Call stop() (or let the destructor do it) to shut down cleanly.
+// put() publishes a record into the feed for local consumers.
 class feed_t {
 public:
   feed_t();
@@ -23,7 +30,7 @@ public:
   // Signal shutdown and join consumer thread.
   void stop();
 
-  // Emit a record with 1..SWIM_FEED_MAX_ELEMENTS const char* args.
+  // Enqueue a record with 1..SWIM_FEED_MAX_ELEMENTS const char* args.
   template <typename... Args> bool put(Args &&...args) {
     return swim_feed_put(feed_, static_cast<int>(sizeof...(args)),
                          std::forward<Args>(args)...) == 0;

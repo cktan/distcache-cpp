@@ -2,8 +2,10 @@
 #include <cstdio>
 #include <ctime>
 
+// Create underlying swim feed handle.
 feed_t::feed_t() { feed_ = swim_feed_create(); }
 
+// Stop background thread (if running) and destroy the swim feed handle.
 feed_t::~feed_t() {
   if (running_)
     stop();
@@ -11,6 +13,8 @@ feed_t::~feed_t() {
     swim_feed_destroy(feed_);
 }
 
+// Spawn background thread that polls the swim feed and invokes callback
+// for each batch of records until stop() is called.
 void feed_t::start(feed_callback_t callback) {
   running_ = true;
   thread_ = std::thread([this, cb = std::move(callback)]() {
@@ -41,6 +45,7 @@ void feed_t::start(feed_callback_t callback) {
   });
 }
 
+// Signal background thread to exit, wake it from swim_feed_wait, and join.
 void feed_t::stop() {
   running_ = false;
   swim_feed_wakeall(feed_);

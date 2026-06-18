@@ -6,6 +6,8 @@
   stopping a service, acquiring a lock, chdir, logger setup,
   etc.), add a short comment naming the step, even if the
   call itself looks self-explanatory
+- every function in `.cpp` or `.c` files needs a doc comment
+  (one or two lines above the definition)
 
 
 

@@ -14,17 +14,22 @@ class rebalancer_t {
 public:
   explicit rebalancer_t(node_t &n);
 
+  // Spawn background thread that processes rebalance requests.
   void start();
+  // Signal background thread to stop and join it.
   void stop();
 
+  // Push all entries owned by nodeid to that node (called when it joins).
   void claim_sweep(const std::string &nodeid);
 
+  // Return all local entries whose consistent-hash owner is peer_nodeid.
   std::vector<std::pair<std::string, time_t>>
   scan_for_peer(const std::string &peer_nodeid);
 
+  // Fetch one entry from src_addr and store it locally.
   void pull_one(const std::string &src_addr, const std::string &relpath,
                 const std::string &mtime_str);
 
 private:
-  node_t &node_;
+  node_t &node_; // owning node; provides ring, LRU, and peer connections
 };

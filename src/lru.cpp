@@ -7,22 +7,26 @@ static constexpr int EVICT_MIN_AGE_S = 300;
 static constexpr int LOW_THRESHOLD = 70;
 static constexpr int HIGH_THRESHOLD = 90;
 
+// Construct LRU tracker bound to keylock_, id_fn_, and homedir_ for disk stats.
 lru_t::lru_t(keylock_t &keylock,
              std::function<uint32_t(const std::string &)> id_fn,
              std::string homedir)
     : keylock_(keylock), id_fn_(std::move(id_fn)),
       homedir_(std::move(homedir)) {}
 
+// Insert or update entry with given mtime and computed relpath_id.
 void lru_t::put(const relpath_t &relpath, time_t mtime) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.insert_or_assign(relpath.str(), LRUEntry{mtime, id_fn_(relpath.str())});
 }
 
+// Remove entry; no-op if not present.
 void lru_t::drop(const relpath_t &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.erase(relpath.str());
 }
 
+// Update mtime to now, keeping entry warm against eviction.
 void lru_t::touch(const relpath_t &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   auto it = map_.find(relpath.str());
@@ -30,6 +34,7 @@ void lru_t::touch(const relpath_t &relpath) {
     it->second.mtime = time(nullptr);
 }
 
+// Bulk-insert entries under a single lock acquisition.
 void lru_t::batch_put(
     const std::vector<std::pair<std::string, time_t>> &batch) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
@@ -37,11 +42,13 @@ void lru_t::batch_put(
     map_[relpath] = {mtime, id_fn_(relpath)};
 }
 
+// Return number of tracked entries.
 size_t lru_t::size() {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   return map_.size();
 }
 
+// Return disk usage as integer percent (0–100) of homedir_ filesystem.
 int lru_t::disk_usepct() {
   struct statvfs st;
   if (statvfs(homedir_.c_str(), &st) < 0)
@@ -53,6 +60,7 @@ int lru_t::disk_usepct() {
   return static_cast<int>(100 * (st.f_blocks - st.f_bavail) / st.f_blocks);
 }
 
+// Return used disk space in GiB on homedir_ filesystem.
 double lru_t::disk_used_gib() {
   struct statvfs st;
   if (statvfs(homedir_.c_str(), &st) < 0)
@@ -61,11 +69,13 @@ double lru_t::disk_used_gib() {
          (1024.0 * 1024.0 * 1024.0);
 }
 
+// Return true if statvfs fails, indicating a disk I/O or mount problem.
 bool lru_t::disk_error() {
   struct statvfs st;
   return statvfs("./", &st) < 0;
 }
 
+// Rebuild cold_list_ min-heap from map_; caller must hold map_mtx_.
 void lru_t::rebuild_cold_list_locked() {
   while (!cold_list_.empty())
     cold_list_.pop();
@@ -78,6 +88,8 @@ void lru_t::rebuild_cold_list_locked() {
   }
 }
 
+// Evict the coldest eligible entry; calls del_cb with its relpath. Returns
+// true if an entry was evicted, false if none qualified.
 bool lru_t::evict_one(const std::function<void(const std::string &)> &del_cb) {
   std::unique_lock<std::mutex> map_lock(map_mtx_);
 
@@ -136,6 +148,7 @@ bool lru_t::evict_one(const std::function<void(const std::string &)> &del_cb) {
   return false;
 }
 
+// Iterate all entries, calling cb(relpath, mtime, relpath_id) for each.
 void lru_t::scan(
     const std::function<void(const std::string &, time_t, uint32_t)> &cb) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
@@ -143,12 +156,15 @@ void lru_t::scan(
     cb(relpath, entry.mtime, entry.relpath_id);
 }
 
+// Return mtime for relpath, or 0 if not tracked.
 time_t lru_t::get_mtime(const relpath_t &relpath) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   auto it = map_.find(relpath.str());
   return it != map_.end() ? it->second.mtime : 0;
 }
 
+// Evict entries when disk exceeds LOW_THRESHOLD%; evicts two when above
+// HIGH_THRESHOLD%, otherwise evicts probabilistically to spread cluster load.
 void lru_t::maybe_evict(
     const std::function<void(const std::string &)> &del_cb) {
   int pct = disk_usepct();

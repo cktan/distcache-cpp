@@ -4,6 +4,7 @@
 #include <string.h>
 #include <unistd.h>
 
+/* Map frame_type_t enum to its wire name string. */
 static const char *frame_type_str(frame_type_t t) {
   switch (t) {
   case FRAME_INFO:
@@ -18,6 +19,8 @@ static const char *frame_type_str(frame_type_t t) {
   return "UNKNOWN";
 }
 
+/* Write one frame (header + payload) via wfn. Returns 0 on success, -1 on
+   error or if len exceeds the 8192-byte payload limit. */
 int stream_out(writer_fn wfn, void *ctx, frame_type_t type, const char *payload,
                size_t len) {
   if (len > 8192)
@@ -33,6 +36,9 @@ int stream_out(writer_fn wfn, void *ctx, frame_type_t type, const char *payload,
   return 0;
 }
 
+/* Read one frame via rfn into out. Returns 0 on success, 1 on clean EOF
+   before any bytes, -1 on error. Carry bytes from over-reads are preserved
+   in out->_carry for the next call. */
 int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
   char buf[50];
   size_t nr = 0;
@@ -165,6 +171,7 @@ int stream_in_push(push_frame_t *fp, const char *buf, size_t n) {
   return p - buf;
 }
 
+/* writer_fn adapter that writes n bytes to an fd, retrying on short writes. */
 static int fd_writer(void *ctx, const char *buf, size_t n) {
   int fd = *(int *)ctx;
   while (n > 0) {
@@ -177,15 +184,18 @@ static int fd_writer(void *ctx, const char *buf, size_t n) {
   return 0;
 }
 
+/* reader_fn adapter that reads from an fd via a single read(2) call. */
 static ssize_t fd_reader(void *ctx, char *buf, size_t n) {
   int fd = *(int *)ctx;
   return read(fd, buf, n);
 }
 
+/* Convenience wrapper: write one frame directly to fd. */
 int stream_out_fd(int fd, frame_type_t type, const char *payload, size_t len) {
   return stream_out(fd_writer, &fd, type, payload, len);
 }
 
+/* Convenience wrapper: read one frame directly from fd. */
 int stream_in_fd(int fd, frame_t *out) {
   return stream_in(fd_reader, &fd, out);
 }

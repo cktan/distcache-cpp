@@ -1,3 +1,14 @@
+/* stream.h — process a stream of serialized FRAMES 
+ *
+ * Frame format: "TYPE:LENGTH\n" header followed by LENGTH payload bytes.
+ * Frame types: INFO, DATA, ERROR, FIN. Max payload: 8192 bytes.
+ *
+ * Two read modes:
+ *   - pull (stream_in / stream_in_fd): blocking, carry-based, one frame
+ *     per call.
+ *   - push (stream_in_push / push_frame_t): non-blocking, caller feeds
+ *     byte slices; check p->complete after each push.
+ */
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>

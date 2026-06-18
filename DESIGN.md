@@ -60,7 +60,6 @@ extra coordination.
    starts rebalancer and membership, detaches the
    startup scan thread, spawns the http thread.
 8. `node.join()` — blocks until the http thread exits.
-9. Release PID lock.
 
 ### node_t::start / stop / join
 
@@ -91,10 +90,22 @@ cannot capture state.
 
 `homedir/dist_cache.lock` holds the OS PID as a plain
 integer via `O_CREAT|O_EXCL`. If the file already
-exists: read PID → `kill(pid, 0)`. If the process is
-alive, another instance owns this homedir — exit. If
-`ESRCH`, the lock is stale: `unlink` and retry once.
-Our own PID (crash recovery) is accepted immediately.
+exists: read PID, then:
+
+- **Same PID as us** — we already own it; return true.
+- **Same command name** — checked via `/proc/{pid}/comm`.
+  A live process with our command name owns the homedir;
+  return false.
+- **Different or unreadable command** — lock is stale
+  (dead process, or unreadable PID in file); `unlink`
+  and retry once.
+
+Liveness is determined by whether `/proc/{pid}/comm`
+matches our own command name, not by `kill(pid, 0)`.
+
+There is no explicit release: the lock file persists
+after exit and is cleaned up as a stale lock by the
+next startup.
 
 ---
 
@@ -528,6 +539,33 @@ does the atomic rename.
 | `http.h/.cpp` | class | cpp-httplib routes; `/_health` + GET/PUT/DELETE + 2 POST inter-node |
 | `rebalance.h/.cpp` | class | `Rebalancer`: scan_for_peer, pull_one, claim_sweep; drives `node.jobq` |
 | `client/distcache.h` | C API | client library: `dc_init`, `dc_get`, `dc_health`, `dc_housekeeping` |
+
+---
+
+## Dependencies
+
+All dependencies are header-only or statically linked.
+`make` fetches and installs them to `~/.local/` on first
+build; no package manager is required.
+
+| Dependency | Kind | Used for |
+|------------|------|----------|
+| [cpp-httplib](https://github.com/yhirose/cpp-httplib) | header-only | HTTP server and client (`httplib.h`) |
+| [swimc17](https://github.com/cktanx/swimc17) | static lib (`libswimc17.a`) | SWIM+INF+Susp membership and failure detection |
+| [spdlog](https://github.com/gabime/spdlog) | header-only | Structured file + console logging |
+| [jsmn](https://github.com/zserge/jsmn) | header-only | JSON parsing (s3copy responses) |
+| [doctest](https://github.com/doctest/doctest) | header-only | Unit test framework (`test/test_*.cpp`) |
+
+**swimc17** is built from source (`~/p/swimc17`) and
+installed to `~/.local/{include,lib}`. All other
+dependencies are cloned from GitHub and copied as
+headers to `~/.local/include/`.
+
+The **s3copy sidecar** is a runtime dependency: a
+co-located Python process that owns AWS credentials and
+handles all S3 I/O. It is not linked into the binary;
+the node communicates with it over HTTP on
+`localhost:7777` (see [s3copy sidecar](#s3copy-sidecar)).
 
 ---
 

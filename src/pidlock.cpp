@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <unistd.h>
 
+// get the command from /proc/{pid}/comm
 static std::string read_comm(pid_t pid) {
   char path[64];
   snprintf(path, sizeof(path), "/proc/%d/comm", pid);
@@ -21,6 +22,8 @@ static std::string read_comm(pid_t pid) {
   return buf;
 }
 
+// check if this process is running the same command
+// as other_pid.
 static bool same_command(pid_t other_pid) {
   std::string a = read_comm(other_pid);
   std::string b = read_comm(getpid());
@@ -30,12 +33,12 @@ static bool same_command(pid_t other_pid) {
 static bool try_acquire(const std::string &path) {
   int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
   if (fd >= 0) {
-    // File does not exist. Write our pid and acquire it.
+    // File does not exist: write our pid. Lock now belongs to us.
     char buf[32];
     int n = snprintf(buf, sizeof(buf), "%d\n", getpid());
     (void)write(fd, buf, n);
     close(fd);
-    return true; // success
+    return true; // we now owns this lock.
   }
 
   if (errno != EEXIST)
@@ -51,13 +54,13 @@ static bool try_acquire(const std::string &path) {
   int rc = fscanf(f, "%d", &other_pid);
   fclose(f);
   if (rc != 1) {
-    pidlock_release(path);
+    unlink(path.c_str());
     return false;
   }
 
   // we already own this lock!
   if (other_pid == getpid()) {
-    return true;
+    return true; // we (still) own this lock.
   }
 
   // block if another instance of the same command is running
@@ -65,8 +68,8 @@ static bool try_acquire(const std::string &path) {
     return false;
   }
 
-  // stale lock from a dead process
-  pidlock_release(path);
+  // stale lock from a dead process. Delete the file.
+  unlink(path.c_str());
   return false;
 }
 
@@ -76,5 +79,3 @@ bool pidlock_acquire(const std::string &path) {
   }
   return try_acquire(path);
 }
-
-void pidlock_release(const std::string &path) { unlink(path.c_str()); }

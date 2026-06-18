@@ -5,5 +5,4 @@
 // Returns true on success, false if a live process already owns it.
 bool pidlock_acquire(const std::string &path);
 
-// Release (unlink) the PID lock file.
-void pidlock_release(const std::string &path);
+// There is no release mechanism.

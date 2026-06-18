@@ -115,7 +115,6 @@ int main(int argc, char **argv) {
   signal(SIGINT, on_signal);
 
   if (!node.start()) {
-    pidlock_release(lockpath);
     return 1;
   }
 
@@ -129,6 +128,5 @@ int main(int argc, char **argv) {
   node.join();
 
   spdlog::info("distcache stopped");
-  pidlock_release(lockpath);
   return 0;
 }

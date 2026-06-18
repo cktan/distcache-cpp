@@ -33,7 +33,7 @@ TEST_SUITE("PidLock") {
     bool ok = pidlock_acquire(path);
     CHECK(ok);
     CHECK(access(path.c_str(), F_OK) == 0);
-    pidlock_release(path);
+    unlink(path.c_str());
   }
 
   TEST_CASE("lockfile contains own PID") {
@@ -47,10 +47,11 @@ TEST_SUITE("PidLock") {
     fscanf(f, "%d", &pid);
     fclose(f);
     CHECK(pid == getpid());
-    pidlock_release(path);
+    unlink(path.c_str());
 
     // acquire again should succeed
     CHECK(pidlock_acquire(path));
+    unlink(path.c_str());
   }
 
   TEST_CASE("stale lock from dead PID is removed and retried") {
@@ -74,11 +75,11 @@ TEST_SUITE("PidLock") {
     // Stale file must have been replaced with our PID.
     FILE *f = fopen(path.c_str(), "r");
     REQUIRE(f);
-    pid_t pid = 0;
-    fscanf(f, "%d", &pid);
+    pid_t got = 0;
+    fscanf(f, "%d", &got);
     fclose(f);
-    CHECK(pid == getpid());
-    pidlock_release(path);
+    CHECK(got == getpid());
+    unlink(path.c_str());
   }
 
   TEST_CASE("live foreign PID blocks acquire") {
@@ -91,13 +92,5 @@ TEST_SUITE("PidLock") {
     // acquire should succeed because pid 1 does not concern us
     CHECK(pidlock_acquire(path));
     unlink(path.c_str());
-  }
-
-  TEST_CASE("release removes lockfile") {
-    std::string path = tmp_lock();
-    unlink(path.c_str());
-    pidlock_acquire(path);
-    pidlock_release(path);
-    CHECK(access(path.c_str(), F_OK) == -1);
   }
 }

@@ -6,12 +6,7 @@ LOGDIR=/tmp/test_env_s3copy
 PORT=7777
 
 port_open() {
-    python3 -c "
-import socket, sys
-s = socket.socket()
-s.settimeout(0.5)
-sys.exit(0 if s.connect_ex(('127.0.0.1', $PORT)) == 0 else 1)
-"
+    lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1
 }
 
 # kill any active s3copy

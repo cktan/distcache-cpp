@@ -66,13 +66,14 @@ struct ClusterFixture {
 **Construction sequence:**
 
 1. Wipe and recreate `/tmp/dc_qa_{0..4}`.
-2. Fork `python3 s3copy/s3copy.py -F testdata/ -p 7777`;
+2. ps | grep s3copy | kill 
+3. Fork `python3 s3copy/s3copy.py -F testdata/ -p 7777`;
    poll `GET /ping` until it responds (max 5 s).
-3. For `i` in `0..n-1`: construct
+4. For `i` in `0..n-1`: construct
    `node_t("/tmp/dc_qa_<i>", "127.0.0.1:<4000+i>")`,
    set `seeds = {"127.0.0.1:4000"}` for `i > 0`,
    call `node.start()`.
-4. Call `wait_converged(n)`.
+5. Call `wait_converged(n)`.
 
 Every `TEST_CASE` below opens with
 `ClusterFixture cx;` to get a fresh 5-node cluster. TC7
@@ -100,6 +101,7 @@ TEST_CASE("TC1: SWIM cluster convergence") {
     ClusterFixture cx;
     for (int port = 4000; port <= 4004; port++) {
         auto body = url_get("127.0.0.1", port, "/_health");
+		// verify there are 5 nodes
         CHECK(body.find("\"nodes\":5") != npos);
     }
 }
@@ -119,6 +121,10 @@ fetch and stores the file locally.
 ```cpp
 TEST_CASE("TC2: cache miss triggers S3 fetch") {
     ClusterFixture cx;
+	
+	// TODO: make sure /moby/1 is not cached.
+	// do a for loop to delete /moby/1 from every node.
+	
     // Ask any node; follow one redirect if needed.
     auto resp = url_get("127.0.0.1", 4000, "/moby/1");
     std::string owner_addr = "127.0.0.1:4000";

@@ -250,6 +250,11 @@ an indirect ping. Persistent silence → suspect gossip →
 suspicion timer → dead. A suspect node auto-refutes by
 bumping its incarnation.
 
+**Port sharing:** SWIM binds the same port number as the
+HTTP listener, but on UDP. A node with nodeid
+`127.0.0.1:4000` listens for HTTP on TCP 4000 and for
+SWIM gossip on UDP 4000 simultaneously.
+
 **Authentication:** All UDP messages are HMAC'd with a
 cluster-wide SipHash-2-4 key. The `swim_start_opts_t.name`
 field supplies the key; every node must use the same string

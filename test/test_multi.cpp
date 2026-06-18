@@ -161,7 +161,15 @@ struct ClusterFixture {
   explicit ClusterFixture(int n = 5) {
     // kill any stale s3copy from a previous run
     system("pkill -f 's3copy.py' 2>/dev/null; true");
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    // wait for port 7777 to be released before forking
+    for (int i = 0; i < 30; i++) {
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+      httplib::Client cli("127.0.0.1", 7777);
+      cli.set_connection_timeout(1);
+      auto res = cli.Get("/ping");
+      if (!res)
+        break; // connection refused = port free
+    }
 
     // accelerate claim_sweep (default delay is 1–21 s, too slow for tests)
     setenv("DC_CLAIM_DELAY_MS", "500", 1);

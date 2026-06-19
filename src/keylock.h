@@ -55,3 +55,28 @@ private:
   // Must be called under map_mtx_.
   std::shared_ptr<Entry> alloc_entry();
 };
+
+// RAII guard: acquires keylock on construction, releases on destruction.
+// Call release() for early release; safe to call more than once.
+class keylock_guard_t {
+public:
+  keylock_guard_t(keylock_t &kl, const std::string &key) : kl_(kl), key_(key) {
+    kl_.acquire(key_);
+  }
+  ~keylock_guard_t() { release(); }
+
+  keylock_guard_t(const keylock_guard_t &) = delete;
+  keylock_guard_t &operator=(const keylock_guard_t &) = delete;
+
+  void release() {
+    if (!released_) {
+      released_ = true;
+      kl_.release(key_);
+    }
+  }
+
+private:
+  keylock_t &kl_;
+  std::string key_;
+  bool released_ = false;
+};

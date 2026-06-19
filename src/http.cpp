@@ -196,14 +196,14 @@ static void handle_get(node_t &node, const httplib::Request &req,
   }
 
   // Grab keylock before attempting to download from S3
-  node.keylock.acquire(relpath.str());
+  keylock_guard_t kl_guard(node.keylock, relpath.str());
 
   // Another thread may have fetched while we waited. Open under lock so the
   // fd keeps the inode alive, then release the lock before reading content.
   {
     fd_t fd;
     if (node.cache.read(relpath, fd).ok()) {
-      node.keylock.release(relpath.str());
+      kl_guard.release();
       node.stats.served++;
       serve_fd(fd, res);
       return;
@@ -220,7 +220,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (!rc.ok()) {
     remove(tmp_abs.c_str());
   }
-  node.keylock.release(relpath.str());
+  kl_guard.release();
 
   if (!rc.ok()) {
     node.stats.errors++;

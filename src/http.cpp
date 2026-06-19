@@ -122,7 +122,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     send_raw(res, wire_err("invalid path"));
     return;
   }
-  
+
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
     send_raw(res, wire_err("invalid bucket or key"));
@@ -138,7 +138,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
 
   if (!local_only && !no_redirect) {
     // The normal case! We need to redirect if this node is not dest.
-    
+
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
     if (!dest.empty() && dest != node.nodeid) {
@@ -148,18 +148,24 @@ static void handle_get(node_t &node, const httplib::Request &req,
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
       if (node.cache.exists(relpath)) {
-	// we have the file, but we are not dest!
-	//  -> hint dest to pull the file from us if it is alive
-        auto peers = node.membership.alive_peers();
-        bool dest_alive =
-            std::find(peers.begin(), peers.end(), dest_addr) != peers.end();
-        if (dest_alive) {
-          // Proactively migrate: ask dest to pull the locally-cached copy.
-          time_t mt = node.cache.get_mtime(relpath.str());
-          std::string mt_str = std::to_string(mt ? mt : time(nullptr));
-          node.jobq.put("hint_pull", dest_addr.c_str(), relpath.str().c_str(),
-                        mt_str.c_str());
+        // We have the file; serve it and let dest pull it from us.
+        fd_t fd;
+        if (!node.cache.read(relpath, fd).ok()) {
+          send_raw(res, wire_err("read error"));
+          return;
         }
+        if (delete_after) {
+          node.cache.drop(relpath);
+        }
+        time_t mt = node.cache.get_mtime(relpath.str());
+        std::string mt_str = std::to_string(mt ? mt : time(nullptr));
+        node.jobq.put("hint_pull", dest_addr.c_str(), relpath.str().c_str(),
+                      mt_str.c_str());
+        node.feed.put("cache.hit", relpath.str().c_str());
+        node.stats.hits++;
+        node.stats.served++;
+        serve_fd(fd, res);
+        return;
       }
       node.stats.redirects++;
       send_raw(res, wire_redirect(dest));

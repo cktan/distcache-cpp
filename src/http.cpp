@@ -115,6 +115,8 @@ static void serve_fd(fd_t &fd, httplib::Response &res) {
 // GET /{bucket}/{key}: redirect to owner, serve from cache, or fetch from S3.
 static void handle_get(node_t &node, const httplib::Request &req,
                        httplib::Response &res) {
+  fd_t fd;
+
   // Obtain bucket & key, form relpath, and compute relpath_id.
   // We need the relpath_id to interrogate ring for the responsible node.
   std::string bucket, key;
@@ -148,7 +150,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
 
-      fd_t fd;
       if (node.cache.read(relpath, fd).ok()) {
         // We have the file; serve it and let dest pull it from us.
         if (delete_after) {
@@ -172,7 +173,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
 
   // This node is dest (or is forced to be dest).
 
-  fd_t fd;
   if (node.cache.read(relpath, fd).ok()) {
     // Cache hit: open fd before optional drop so inode stays live after unlink.
     if (delete_after) {
@@ -200,14 +200,11 @@ static void handle_get(node_t &node, const httplib::Request &req,
 
   // Another thread may have fetched while we waited. Open under lock so the
   // fd keeps the inode alive, then release the lock before reading content.
-  {
-    fd_t fd;
-    if (node.cache.read(relpath, fd).ok()) {
-      kl_guard.release();
-      node.stats.served++;
-      serve_fd(fd, res);
-      return;
-    }
+  if (node.cache.read(relpath, fd).ok()) {
+    kl_guard.release();
+    node.stats.served++;
+    serve_fd(fd, res);
+    return;
   }
 
   // Set up to download from S3 into a temp file
@@ -222,6 +219,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   }
   kl_guard.release();
 
+  // If s3 copy failed ...
   if (!rc.ok()) {
     node.stats.errors++;
     node.feed.put("s3copy.err", relpath.str().c_str(), rc.errstr());
@@ -229,17 +227,18 @@ static void handle_get(node_t &node, const httplib::Request &req,
     return;
   }
 
+  // s3 copy succeeded.
   node.feed.put("s3copy.ok", relpath.str().c_str());
-  node.jobq.put("evict");
+  node.jobq.put("maybe_evict");
 
-  fd_t fd2;
-  if (!node.cache.read(relpath, fd2).ok()) {
+  // Open file and serve
+  if (!node.cache.read(relpath, fd).ok()) {
     node.stats.errors++;
     send_raw(res, wire_err("read after fetch failed"));
     return;
   }
   node.stats.served++;
-  serve_fd(fd2, res);
+  serve_fd(fd, res);
 }
 
 // GET /_health: return JSON with node stats, uptime, ring size, and peers.
@@ -371,7 +370,7 @@ static void handle_put(node_t &node, const httplib::Request &req,
     send_raw(res, wire_err("write failed"));
     return;
   }
-  node.jobq.put("evict");
+  node.jobq.put("maybe_evict");
   send_raw(res, wire_fin());
 }
 

@@ -113,7 +113,7 @@ void rebalancer_t::start() {
 
     // evict: queued by handle_put/pull_one/handle_get (after adding a file)
     // and by pull_one here. Runs the disk-pressure eviction sweep.
-    if (type == "evict") {
+    if (type == "maybe_evict") {
       node_.cache.maybe_evict(
           [this](const std::string &p) { node_.cache.drop(p); });
       return;
@@ -256,17 +256,15 @@ void rebalancer_t::pull_one(const std::string &src_addr,
     return;
 
   // lock relpath so a concurrent pull/fetch can't race this one
-  node_.keylock.acquire(relpath);
+  keylock_guard_t kl_guard(node_.keylock, relpath);
 
   if (node_.cache.exists(relpath)) {
-    node_.keylock.release(relpath);
     return;
   }
 
   std::string host;
   int port;
   if (!split_addr(src_addr, host, port)) {
-    node_.keylock.release(relpath);
     return;
   }
 
@@ -290,7 +288,7 @@ void rebalancer_t::pull_one(const std::string &src_addr,
     // remove partial/corrupt file written by a failed fetch
     node_.cache.drop(relpath);
   }
-  node_.keylock.release(relpath);
+  kl_guard.release();
 
   if (ok) {
     time_t mt = 0;
@@ -298,10 +296,9 @@ void rebalancer_t::pull_one(const std::string &src_addr,
       mt = (time_t)std::stoul(mtime_str);
     } catch (...) {
     }
-    if (mt == 0)
-      mt = time(nullptr);
+    mt = mt ? mt : time(nullptr);
     // trigger an async disk-pressure check now that a file was added
-    node_.jobq.put("evict");
+    node_.jobq.put("maybe_evict");
     node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
   }
 }

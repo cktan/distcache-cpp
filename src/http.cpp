@@ -213,7 +213,9 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (rc.ok()) {
     rc = node.cache.move(tmp_rel, relpath);
   }
-  remove(tmp_abs.c_str());
+  if (!rc.ok()) {
+    remove(tmp_abs.c_str());
+  }
   node.keylock.release(relpath.str());
 
   if (!rc.ok()) {

@@ -172,41 +172,45 @@ static void handle_get(node_t &node, const httplib::Request &req,
 
   // This node is dest (or is forced to be dest).
 
-  // Cache hit: open fd before optional drop so inode stays live after unlink.
+  fd_t fd;
+  if (node.cache.read(relpath, fd).ok()) {
+    // Cache hit: open fd before optional drop so inode stays live after unlink.
+    if (delete_after) {
+      node.cache.drop(relpath);
+    }
+    node.feed.put("cache.hit", relpath.str().c_str());
+    node.stats.hits++;
+    node.stats.served++;
+    serve_fd(fd, res);
+    return;
+  }
+
+  // Cache miss:
+  node.stats.misses++;
+  node.feed.put("cache.miss", relpath.str().c_str());
+
+  // If no download from S3, then done.
+  if (local_only) {
+    send_raw(res, wire_err("ERR_NOT_CACHED"));
+    return;
+  }
+
+  // Grab keylock before attempting to download from S3
+  node.keylock.acquire(relpath.str());
+
+  // Another thread may have fetched while we waited. Open under lock so the
+  // fd keeps the inode alive, then release the lock before reading content.
   {
     fd_t fd;
     if (node.cache.read(relpath, fd).ok()) {
-      if (delete_after) {
-        node.cache.drop(relpath);
-      }
-      node.feed.put("cache.hit", relpath.str().c_str());
-      node.stats.hits++;
+      node.keylock.release(relpath.str());
       node.stats.served++;
       serve_fd(fd, res);
       return;
     }
   }
 
-  if (local_only) {
-    send_raw(res, wire_err("ERR_NOT_CACHED"));
-    return;
-  }
-
-  node.stats.misses++;
-  node.feed.put("cache.miss", relpath.str().c_str());
-
-  node.keylock.acquire(relpath.str());
-
-  // Another thread may have fetched while we waited. Open under lock so the
-  // fd keeps the inode alive, then release the lock before reading content.
-  fd_t fd;
-  if (node.cache.read(relpath, fd).ok()) {
-    node.keylock.release(relpath.str());
-    node.stats.served++;
-    serve_fd(fd, res);
-    return;
-  }
-
+  // Set up to download from S3 into a temp file
   relpath_t tmp_rel = node.cache.tmp_relpath();
   std::string tmp_abs = node.cache.abspath(tmp_rel);
   rc_t rc = s3copy_fetch(bucket, key, tmp_abs);

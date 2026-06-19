@@ -1,10 +1,12 @@
 #include "node.h"
 #include "pidlock.h"
+#include <cerrno>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <semaphore.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
@@ -12,13 +14,9 @@
 
 #define DISTCACHE_VERSION "0.1.0"
 
-// Signal handlers can't capture state, so the node to stop is reached
-// through a global instead of being passed in.
-static node_t *g_node_signal = nullptr;
-static void on_signal(int) {
-  if (g_node_signal)
-    g_node_signal->stop();
-}
+static sem_t g_stop_sem;
+// Wake main thread; sem_post is async-signal-safe.
+static void on_signal(int) { sem_post(&g_stop_sem); }
 
 // Print a usage message
 static void usage(const char *prog) {
@@ -109,8 +107,8 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  // Set signal handlers
-  g_node_signal = &node;
+  // Initialize stop semaphore and set signal handlers
+  sem_init(&g_stop_sem, 0, 0);
   signal(SIGTERM, on_signal);
   signal(SIGINT, on_signal);
 
@@ -124,8 +122,12 @@ int main(int argc, char **argv) {
   // Starting here, write logs to file only
   spdlog::set_default_logger(file_logger);
 
-  // Block until the http thread exits (triggered by stop() on signal).
+  // Block until signaled, then stop all services.
+  while (sem_wait(&g_stop_sem) == -1 && errno == EINTR)
+    ;
+  node.stop();
   node.join();
+  sem_destroy(&g_stop_sem);
 
   spdlog::info("distcache stopped");
   return 0;

@@ -1,4 +1,4 @@
-/* stream.h — process a stream of serialized FRAMES 
+/* stream.h — process a stream of serialized FRAMES
  *
  * Frame format: "TYPE:LENGTH\n" header followed by LENGTH payload bytes.
  * Frame types: INFO, DATA, ERROR, FIN. Max payload: 8192 bytes.

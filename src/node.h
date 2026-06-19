@@ -41,7 +41,7 @@ struct node_t {
   // Returns false if a service fails to start.
   bool start();
 
-  // Signal all services to stop. Safe to call from a signal handler.
+  // Signal all services to stop.
   void stop();
 
   // Block until the http thread exits. Call after stop().

@@ -147,13 +147,10 @@ static void handle_get(node_t &node, const httplib::Request &req,
       node.membership.hint_alive(dest_addr);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
-      if (node.cache.exists(relpath)) {
+
+      fd_t fd;
+      if (node.cache.read(relpath, fd).ok()) {
         // We have the file; serve it and let dest pull it from us.
-        fd_t fd;
-        if (!node.cache.read(relpath, fd).ok()) {
-          send_raw(res, wire_err("read error"));
-          return;
-        }
         if (delete_after) {
           node.cache.drop(relpath);
         }
@@ -176,20 +173,18 @@ static void handle_get(node_t &node, const httplib::Request &req,
   // This node is dest (or is forced to be dest).
 
   // Cache hit: open fd before optional drop so inode stays live after unlink.
-  if (node.cache.exists(relpath)) {
+  {
     fd_t fd;
-    if (!node.cache.read(relpath, fd).ok()) {
-      send_raw(res, wire_err("read error"));
+    if (node.cache.read(relpath, fd).ok()) {
+      if (delete_after) {
+        node.cache.drop(relpath);
+      }
+      node.feed.put("cache.hit", relpath.str().c_str());
+      node.stats.hits++;
+      node.stats.served++;
+      serve_fd(fd, res);
       return;
     }
-    if (delete_after) {
-      node.cache.drop(relpath);
-    }
-    node.feed.put("cache.hit", relpath.str().c_str());
-    node.stats.hits++;
-    node.stats.served++;
-    serve_fd(fd, res);
-    return;
   }
 
   if (local_only) {
@@ -218,7 +213,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (rc.ok()) {
     rc = node.cache.move(tmp_rel, relpath);
   }
-  remove(tmp_abs.c_str()); // LATER: queue this to g_jobq?
+  remove(tmp_abs.c_str());
   node.keylock.release(relpath.str());
 
   if (!rc.ok()) {

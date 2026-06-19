@@ -76,12 +76,16 @@ static int sink_writer(void *ctx, const char *buf, size_t n) {
 static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   char buf[4096];
   ssize_t n = ::read(fd.fd, buf, sizeof(buf));
-  if (n > 0)
+  if (n > 0) {
+    // got a chunk
     return stream_out(sink_writer, &sink, FRAME_DATA, buf, (size_t)n) == 0;
+  }
   if (n < 0) {
+    // got error
     std::string err = wire_err(strerror(errno));
     sink.write(err.data(), err.size());
   }
+  // EOF - normal case - write a FIN frame
   stream_out(sink_writer, &sink, FRAME_FIN, nullptr, 0);
   sink.done();
   done = true;
@@ -111,12 +115,14 @@ static void serve_fd(fd_t &fd, httplib::Response &res) {
 // GET /{bucket}/{key}: redirect to owner, serve from cache, or fetch from S3.
 static void handle_get(node_t &node, const httplib::Request &req,
                        httplib::Response &res) {
+  // Obtain bucket & key, form relpath, and compute relpath_id.
+  // We need the relpath_id to interrogate ring for the responsible node.
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err("invalid path"));
     return;
   }
-
+  
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
     send_raw(res, wire_err("invalid bucket or key"));
@@ -125,11 +131,14 @@ static void handle_get(node_t &node, const httplib::Request &req,
   const relpath_t &relpath = *relpath_opt;
   uint32_t rp_id = ring_t::compute_id(relpath.str());
 
+  // Check for flags
   bool local_only = req.has_param("local");
   bool no_redirect = req.has_param("no_redirect");
   bool delete_after = req.has_param("delete");
 
   if (!local_only && !no_redirect) {
+    // The normal case! We need to redirect if this node is not dest.
+    
     auto ring = node.ring.load();
     std::string dest = ring->successor(rp_id);
     if (!dest.empty() && dest != node.nodeid) {
@@ -139,6 +148,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
                     dest.c_str());
       if (node.cache.exists(relpath)) {
+	// we have the file, but we are not dest!
+	//  -> hint dest to pull the file from us if it is alive
         auto peers = node.membership.alive_peers();
         bool dest_alive =
             std::find(peers.begin(), peers.end(), dest_addr) != peers.end();
@@ -155,6 +166,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
       return;
     }
   }
+
+  // This node is dest (or is forced to be dest).
 
   // Cache hit: open fd before optional drop so inode stays live after unlink.
   if (node.cache.exists(relpath)) {

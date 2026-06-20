@@ -212,21 +212,25 @@ static void handle_get(node_t &node, const httplib::Request &req,
   relpath_t tmp_rel = node.cache.tmp_relpath();
   std::string tmp_abs = node.cache.abspath(tmp_rel);
   rc_t rc = s3copy_fetch(bucket, key, tmp_abs);
-  if (rc.ok()) {
-    rc = node.cache.move(tmp_rel, relpath);
-  }
   if (!rc.ok()) {
     remove(tmp_abs.c_str());
-  }
-  kl_guard.release();
-
-  // If s3 copy failed ...
-  if (!rc.ok()) {
+    kl_guard.release();
     node.stats.errors++;
     node.feed.put("s3copy.err", relpath.str().c_str(), rc.errstr());
     send_raw(res, wire_err("ERR_S3_COPY", "s3copy failed") + WIRE_FIN);
     return;
   }
+
+  // Rename the temp file into cache
+  rc = node.cache.move(tmp_rel, relpath);
+  if (!rc.ok()) {
+    remove(tmp_abs.c_str());
+    kl_guard.release();
+    node.stats.errors++;
+    send_raw(res, wire_err("ERR_IO", "move failed") + WIRE_FIN);
+    return;
+  }
+  kl_guard.release();
 
   // s3 copy succeeded.
   node.feed.put("s3copy.ok", relpath.str().c_str());

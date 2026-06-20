@@ -47,7 +47,7 @@ public:
   rc_t move(const relpath_t &src_relpath, const relpath_t &dest_relpath);
 
   // Unlink relpath and drop from lru. ENOENT is not an error (idempotent).
-  rc_t drop(const relpath_t &relpath);
+  void drop(const relpath_t &relpath);
 
   // Generate a unique tmp relpath under tmp/.
   relpath_t tmp_relpath();

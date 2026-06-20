@@ -110,12 +110,10 @@ rc_t cache_t::move(const relpath_t &src_relpath,
   return {};
 }
 
-// TODO: drop() should be void. nobody cares if we can drop it.
-rc_t cache_t::drop(const relpath_t &relpath) {
-  if (unlink(abspath(relpath).c_str()) < 0 && errno != ENOENT)
-    return errno_to_rc(strerror(errno));
+// Unlink the file; ignore ENOENT (idempotent). Update lru regardless.
+void cache_t::drop(const relpath_t &relpath) {
+  unlink(abspath(relpath).c_str());
   lru_.drop(relpath);
-  return {};
 }
 
 relpath_t cache_t::tmp_relpath() {

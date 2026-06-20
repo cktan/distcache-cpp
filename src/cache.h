@@ -40,9 +40,6 @@ public:
   // keylock before reading; inode survives unlink while fd is open.
   rc_t read(const relpath_t &relpath, fd_t &fd);
 
-  // Create relpath with O_CREAT|O_EXCL|O_TRUNC, register in lru, return fd.
-  rc_t write(const relpath_t &relpath, fd_t &fd);
-
   // Atomic rename src→dest; creates dest parent dirs; registers dest in lru.
   rc_t move(const relpath_t &src_relpath, const relpath_t &dest_relpath);
 

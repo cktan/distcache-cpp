@@ -87,18 +87,6 @@ rc_t cache_t::read(const relpath_t &relpath, fd_t &out) {
   return {};
 }
 
-rc_t cache_t::write(const relpath_t &relpath, fd_t &out) {
-  rc_t rc = mkdirs(relpath);
-  if (!rc.ok())
-    return rc;
-  int fd = ::open(abspath(relpath).c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
-  if (fd < 0)
-    return errno_to_rc(strerror(errno));
-  out = fd_t(fd);
-  lru_.put(relpath, time(nullptr));
-  return {};
-}
-
 rc_t cache_t::move(const relpath_t &src_relpath,
                    const relpath_t &dest_relpath) {
   rc_t rc = mkdirs(dest_relpath);

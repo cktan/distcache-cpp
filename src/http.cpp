@@ -8,6 +8,7 @@
 #include <cerrno>
 #include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <functional>
 #include <httplib.h>
 #include <jsmn.h>
@@ -345,11 +346,14 @@ static void handle_put(node_t &node, const httplib::Request &req,
   }
   const relpath_t &relpath = *relpath_opt;
 
-  fd_t fd;
-  if (!node.cache.write(relpath, fd).ok()) {
+  relpath_t tmp_rel = node.cache.tmp_relpath();
+  int raw_fd = ::open(node.cache.abspath(tmp_rel).c_str(),
+                      O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (raw_fd < 0) {
     send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
     return;
   }
+  fd_t fd(raw_fd);
 
   bool ok = true;
   bool read_success = content_reader([&](const char *data, size_t data_length) {
@@ -367,7 +371,11 @@ static void handle_put(node_t &node, const httplib::Request &req,
   fd.close();
 
   if (!ok || !read_success) {
-    node.cache.drop(relpath);
+    node.cache.drop(tmp_rel);
+    send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
+    return;
+  }
+  if (!node.cache.move(tmp_rel, relpath).ok()) {
     send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
     return;
   }

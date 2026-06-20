@@ -7,3 +7,4 @@ test_multi
 test_stream
 test_rc
 test_relpath
+test_membership

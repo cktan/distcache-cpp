@@ -28,7 +28,6 @@ Connection lifecycle:
 from __future__ import annotations
 
 import http.client
-import json
 import random
 import threading
 import time
@@ -359,7 +358,7 @@ def _ring_update(names: list[str]) -> None:
 
 @dataclass
 class _Frame:
-    type:    str    # "INFO", "DATA", "ERROR", "FIN"
+    type:    str    # "DATA", "ERROR", "FIN", "NODES", "REDIRECT"
     payload: bytes
 
 
@@ -430,12 +429,6 @@ class _ChunkReader:
                 result["message"] = "\n".join(lines[1:]) if len(lines) > 1 else ""
             elif frame.type == "NODES":
                 result["_list"] = [l for l in frame.payload.decode("ascii").splitlines() if l]
-            elif frame.type == "INFO":
-                parsed = json.loads(frame.payload)
-                if isinstance(parsed, list):
-                    result["_list"] = parsed
-                else:
-                    result.update(parsed)
 
         if result.get("status") in ("error", "redirect"):
             return result

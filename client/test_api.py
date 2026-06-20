@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import http.client
 import io
-import json
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -46,9 +45,6 @@ def make_frame(frame_type: str, payload: bytes) -> bytes:
 def make_data(data: bytes) -> bytes:
     return make_frame("DATA", data)
 
-def make_info(obj: dict) -> bytes:
-    return make_frame("INFO", json.dumps(obj).encode())
-
 def make_error(error_type: str, message: str) -> bytes:
     return make_frame("ERROR", f"{error_type}\n{message}\n".encode())
 
@@ -78,12 +74,6 @@ class TestChunkProtocol(unittest.TestCase):
         self.assertEqual(frame.type, "DATA")
         self.assertEqual(frame.payload, b"hello")
 
-    def test_info_frame(self):
-        body = make_info({"status": "ok"}) + make_fin()
-        frame = self._reader(body).read_frame()
-        self.assertEqual(frame.type, "INFO")
-        self.assertEqual(json.loads(frame.payload)["status"], "ok")
-
     def test_error_frame(self):
         body = make_error("ERR_NOT_FOUND", "gone") + make_fin()
         frame = self._reader(body).read_frame()
@@ -100,11 +90,6 @@ class TestChunkProtocol(unittest.TestCase):
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["data"], b"hello world")
 
-    def test_read_response_info_then_data(self):
-        body = make_info({"status": "ok"}) + make_data(b"bytes") + make_fin()
-        result = self._reader(body).read_response()
-        self.assertEqual(result["data"], b"bytes")
-
     def test_read_response_error(self):
         body = make_error("ERR_NOT_FOUND", "nope") + make_fin()
         result = self._reader(body).read_response()
@@ -118,18 +103,6 @@ class TestChunkProtocol(unittest.TestCase):
         result = self._reader(body).read_response()
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["message"], "fail")
-
-    def test_read_response_redirect(self):
-        body = make_info({
-            "status": "redirect",
-            "membership": {
-                "alive":   [{"name": "a:1", "first_id": 1}],
-                "suspect": [{"name": "b:2", "first_id": 2}],
-            }
-        }) + make_fin()
-        result = self._reader(body).read_response()
-        self.assertEqual(result["status"], "redirect")
-        self.assertEqual(result["membership"]["alive"][0]["name"], "a:1")
 
     def test_read_response_streaming(self):
         """Streaming callback receives each DATA frame."""
@@ -146,11 +119,6 @@ class TestChunkProtocol(unittest.TestCase):
         body = make_data(b"hello") + make_fin()
         with self.assertRaises(ValueError):
             self._reader(body).read_response(on_data=bad_cb)
-
-    def test_empty_data_body(self):
-        body = make_info({"status": "ok"}) + make_fin()
-        result = self._reader(body).read_response()
-        self.assertEqual(result["data"], b"")
 
     def test_read_response_nodes_list(self):
         body = make_frame("NODES", b"a:1\nb:2\n") + make_fin()
@@ -291,21 +259,6 @@ class TestModuleAPI(unittest.TestCase):
         self.assertEqual(b"".join(chunks), b"hello")
 
     # ---- health ----
-
-    def test_health_parses_result(self):
-        payload = json.dumps({
-            "id": "node1:4001", "upsince": "2026-01-01T00:00:00Z",
-            "upfor": "1d 0h 0m", "served": 100, "hits": 80, "misses": 20,
-            "redirects": 5, "errors": 1, "nodes": 2,
-            "usepct": 42.5, "lru_size": 500, "used_gib": 1.25,
-        }).encode()
-        body = make_frame("INFO", payload) + make_fin()
-        with patch("distcache._do_request", side_effect=self._mock_request(body)):
-            h = dc.health("node1:4001")
-        self.assertEqual(h.id, "node1:4001")
-        self.assertEqual(h.hits, 80)
-        self.assertAlmostEqual(h.usepct, 42.5)
-        self.assertAlmostEqual(h.used_gib, 1.25)
 
     def test_health_unknown_node_raises(self):
         with self.assertRaises(DistCacheError) as ctx:

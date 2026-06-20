@@ -84,7 +84,25 @@ When your changes create orphans:
 
 The test: Every changed line should trace directly to the user's request.
 
-### 5. Goal-Driven Execution
+### 5. Test Structure
+
+**Every test gets a synopsis and numbered steps.**
+
+When writing any test (unit, integration, doctest, shell):
+- Open with a one-line comment summarising what the
+  test proves (the "why", not the "how").
+- Follow with a step-by-step comment block — one
+  sentence per step — before the corresponding code.
+
+Example:
+```cpp
+// Verify that a full cache evicts the LRU entry on insert.
+// 1. Fill the cache to capacity.
+// 2. Insert one more entry.
+// 3. Confirm the least-recently-used key is gone.
+```
+
+### 6. Goal-Driven Execution
 
 **Define success criteria. Loop until verified.**
 

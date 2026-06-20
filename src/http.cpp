@@ -82,7 +82,7 @@ static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   }
   if (n < 0) {
     // got error
-    std::string err = wire_err(strerror(errno));
+    std::string err = wire_err("ERR_IO", strerror(errno)) + WIRE_FIN;
     sink.write(err.data(), err.size());
   }
   // EOF - normal case - write a FIN frame
@@ -121,13 +121,14 @@ static void handle_get(node_t &node, const httplib::Request &req,
   // We need the relpath_id to interrogate ring for the responsible node.
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
-    send_raw(res, wire_err("invalid path"));
+    send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
     return;
   }
 
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
-    send_raw(res, wire_err("invalid bucket or key"));
+    send_raw(res,
+             wire_err("ERR_INVALID_PATH", "invalid bucket or key") + WIRE_FIN);
     return;
   }
   const relpath_t &relpath = *relpath_opt;
@@ -166,7 +167,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
         return;
       }
       node.stats.redirects++;
-      send_raw(res, wire_redirect(dest));
+      send_raw(res, wire_redirect(dest) + WIRE_FIN);
       return;
     }
   }
@@ -191,7 +192,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
 
   // If no download from S3, then done.
   if (local_only) {
-    send_raw(res, wire_err("ERR_NOT_CACHED"));
+    send_raw(res, wire_err("ERR_NOT_CACHED", "key not cached") + WIRE_FIN);
     return;
   }
 
@@ -223,7 +224,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (!rc.ok()) {
     node.stats.errors++;
     node.feed.put("s3copy.err", relpath.str().c_str(), rc.errstr());
-    send_raw(res, wire_err("s3copy failed"));
+    send_raw(res, wire_err("ERR_S3_COPY", "s3copy failed") + WIRE_FIN);
     return;
   }
 
@@ -234,7 +235,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
   // Open file and serve
   if (!node.cache.read(relpath, fd).ok()) {
     node.stats.errors++;
-    send_raw(res, wire_err("read after fetch failed"));
+    send_raw(res, wire_err("ERR_IO", "read after fetch failed") + WIRE_FIN);
     return;
   }
   node.stats.served++;
@@ -283,16 +284,11 @@ static void handle_health(node_t &node, const httplib::Request &,
       node.stats.hint_pull.load(), peers_json);
 }
 
-// GET /_nodes: return JSON array of all known ring members.
+// GET /_nodes: return all known ring members as a NODES frame.
 static void handle_nodes(node_t &node, const httplib::Request &,
                          httplib::Response &res) {
   auto peers = node.membership.raw_peers();
-  std::string json = "[";
-  for (size_t i = 0; i < peers.size(); ++i) {
-    json += (i ? ",\"" : "\"") + peers[i] + "\"";
-  }
-  json += "]";
-  send_raw(res, wire_info(json));
+  send_raw(res, wire_nodes(peers) + WIRE_FIN);
 }
 
 // POST /_claim_keyspace: enqueue claim_scan for a joining node's keyspace.
@@ -301,12 +297,12 @@ static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
   std::string nodeid = json_str(req.body, "nodeid");
 
   if (nodeid.empty()) {
-    send_raw(res, wire_err("missing nodeid"));
+    send_raw(res, wire_err("ERR_BAD_REQUEST", "missing nodeid") + WIRE_FIN);
     return;
   }
 
   node.jobq.put("claim_scan", nodeid.c_str());
-  send_raw(res, wire_fin());
+  send_raw(res, WIRE_FIN);
 }
 
 // POST /_hint_pull: enqueue do_pull so this node fetches relpath from src.
@@ -317,13 +313,14 @@ static void handle_hint_pull(node_t &node, const httplib::Request &req,
   std::string mtime = json_str(req.body, "mtime");
 
   if (src.empty() || relpath.empty()) {
-    send_raw(res, wire_err("missing src or relpath"));
+    send_raw(res,
+             wire_err("ERR_BAD_REQUEST", "missing src or relpath") + WIRE_FIN);
     return;
   }
 
   node.stats.hint_pull++;
   node.jobq.put("do_pull", src.c_str(), relpath.c_str(), mtime.c_str());
-  send_raw(res, wire_fin());
+  send_raw(res, WIRE_FIN);
 }
 
 // PUT /{bucket}/{key}: stream request body into cache and trigger eviction.
@@ -332,19 +329,20 @@ static void handle_put(node_t &node, const httplib::Request &req,
                        const httplib::ContentReader &content_reader) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
-    send_raw(res, wire_err("invalid path"));
+    send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
     return;
   }
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
-    send_raw(res, wire_err("invalid bucket or key"));
+    send_raw(res,
+             wire_err("ERR_INVALID_PATH", "invalid bucket or key") + WIRE_FIN);
     return;
   }
   const relpath_t &relpath = *relpath_opt;
 
   fd_t fd;
   if (!node.cache.write(relpath, fd).ok()) {
-    send_raw(res, wire_err("write failed"));
+    send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
     return;
   }
 
@@ -365,11 +363,11 @@ static void handle_put(node_t &node, const httplib::Request &req,
 
   if (!ok || !read_success) {
     node.cache.drop(relpath);
-    send_raw(res, wire_err("write failed"));
+    send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
     return;
   }
   node.jobq.put("maybe_evict");
-  send_raw(res, wire_fin());
+  send_raw(res, WIRE_FIN);
 }
 
 // DELETE /{bucket}/{key}: drop entry from local cache.
@@ -377,17 +375,18 @@ static void handle_delete(node_t &node, const httplib::Request &req,
                           httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
-    send_raw(res, wire_err("invalid path"));
+    send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
     return;
   }
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
-    send_raw(res, wire_err("invalid bucket or key"));
+    send_raw(res,
+             wire_err("ERR_INVALID_PATH", "invalid bucket or key") + WIRE_FIN);
     return;
   }
   const relpath_t &relpath = *relpath_opt;
   node.cache.drop(relpath);
-  send_raw(res, wire_fin());
+  send_raw(res, WIRE_FIN);
 }
 
 // ── Server lifecycle

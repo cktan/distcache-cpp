@@ -62,19 +62,16 @@ static std::string url_del(const std::string &host, int port,
   return url_request("DELETE", host, port, path);
 }
 
-// Parse "REDIRECT:N\n\"nodeid\"FIN:0\n" → "host:port".
+// Parse "REDIRECT:N\nhost:port/first_id\nFIN:0\n" → "host:port".
 // Strips the /first_id suffix that SWIM appends to nodeids.
 static std::string parse_redirect(const std::string &body) {
   auto nl = body.find('\n');
   if (nl == std::string::npos)
     return "";
-  auto q1 = body.find('"', nl);
-  if (q1 == std::string::npos)
+  auto nl2 = body.find('\n', nl + 1);
+  if (nl2 == std::string::npos)
     return "";
-  auto q2 = body.find('"', q1 + 1);
-  if (q2 == std::string::npos)
-    return "";
-  std::string nodeid = body.substr(q1 + 1, q2 - q1 - 1);
+  std::string nodeid = body.substr(nl + 1, nl2 - nl - 1);
   auto slash = nodeid.rfind('/');
   if (slash != std::string::npos)
     nodeid = nodeid.substr(0, slash);
@@ -281,7 +278,7 @@ TEST_CASE("TC2: cache miss triggers S3 fetch") {
   auto [owner_addr, resp] = follow_get("127.0.0.1:4000", "/moby/1");
   REQUIRE(!owner_addr.empty());
   CHECK(resp.starts_with("DATA:"));
-  CHECK(wire_check_fin(resp));
+  CHECK(resp.ends_with(WIRE_FIN));
 
   int idx = addr_to_idx(owner_addr);
   CHECK(std::filesystem::exists("/tmp/dc_qa_" + std::to_string(idx) +
@@ -315,7 +312,7 @@ TEST_CASE("TC3: redirect to ring owner") {
 
   REQUIRE(redir_key >= 0);
   CHECK(resp.starts_with("REDIRECT:"));
-  CHECK(wire_check_fin(resp));
+  CHECK(resp.ends_with(WIRE_FIN));
 
   auto h = url_get("127.0.0.1", 4000, "/_health");
   CHECK(json_int(h, "redirects") == 1);
@@ -366,7 +363,7 @@ TEST_CASE("TC5: PUT stores on node") {
   ClusterFixture cx;
 
   auto resp = url_put("127.0.0.1", 4000, "/moby/testput", "hello_qa_test");
-  CHECK(wire_check_fin(resp));
+  CHECK(resp.ends_with(WIRE_FIN));
   REQUIRE(std::filesystem::exists("/tmp/dc_qa_0/cache/moby/testput"));
 
   std::ifstream f("/tmp/dc_qa_0/cache/moby/testput");
@@ -391,7 +388,7 @@ TEST_CASE("TC6: DELETE removes cached key") {
   REQUIRE(std::filesystem::exists("/tmp/dc_qa_0/cache/moby/testdel"));
 
   auto del = url_del("127.0.0.1", 4000, "/moby/testdel");
-  CHECK(wire_check_fin(del));
+  CHECK(del.ends_with(WIRE_FIN));
   CHECK(!std::filesystem::exists("/tmp/dc_qa_0/cache/moby/testdel"));
 
   // ?local=1 suppresses redirect and S3 fetch; file gone → not-cached error.
@@ -399,7 +396,7 @@ TEST_CASE("TC6: DELETE removes cached key") {
   // "ERROR:".
   auto miss = url_get("127.0.0.1", 4000, "/moby/testdel?local=1");
   CHECK(miss.find("ERR_NOT_CACHED") != std::string::npos);
-  CHECK(wire_check_fin(miss));
+  CHECK(miss.ends_with(WIRE_FIN));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -489,7 +486,7 @@ TEST_CASE("TC8: node failure resilience") {
     auto [addr, body] = follow_get("127.0.0.1:4000", "/moby/" + key);
     CHECK(!addr.empty());
     CHECK(body.starts_with("DATA:"));
-    CHECK(wire_check_fin(body));
+    CHECK(body.ends_with(WIRE_FIN));
   }
 }
 
@@ -520,12 +517,12 @@ TEST_CASE("TC9: local and delete modifiers") {
   // wire_err emits "ERROR:..." — QA.md says "ERR:" but code says "ERROR:".
   auto miss = url_get("127.0.0.1", non_owner_port, "/moby/50?local=1");
   CHECK(miss.find("ERR_NOT_CACHED") != std::string::npos);
-  CHECK(wire_check_fin(miss));
+  CHECK(miss.ends_with(WIRE_FIN));
 
   // ?local=1 on owner: file is present → DATA
   auto hit = url_get(owner_host, owner_port, "/moby/50?local=1");
   CHECK(hit.starts_with("DATA:"));
-  CHECK(wire_check_fin(hit));
+  CHECK(hit.ends_with(WIRE_FIN));
 
   // ?delete=1 on owner: serves DATA then unlinks the file
   auto del = url_get(owner_host, owner_port, "/moby/50?delete=1");
@@ -552,10 +549,10 @@ TEST_CASE("TC11: nested key paths and health schema") {
 
   // nested key: path segments separated by slashes
   auto pr = url_put("127.0.0.1", 4000, "/bucket/path/to/obj", "payload");
-  CHECK(wire_check_fin(pr));
+  CHECK(pr.ends_with(WIRE_FIN));
   auto gr = url_get("127.0.0.1", 4000, "/bucket/path/to/obj");
   CHECK(gr.find("payload") != std::string::npos);
-  CHECK(wire_check_fin(gr));
+  CHECK(gr.ends_with(WIRE_FIN));
 
   // /_health must contain every field the JSON schema promises
   auto h = url_get("127.0.0.1", 4000, "/_health");
@@ -635,7 +632,7 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
         follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
     REQUIRE(!addr.empty());
     CHECK(body.starts_with("DATA:"));
-    CHECK(wire_check_fin(body));
+    CHECK(body.ends_with(WIRE_FIN));
     owner_count[addr]++;
   }
 
@@ -668,7 +665,7 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
     auto [addr, body] = follow_get(start_addr, "/moby/" + std::to_string(i));
     CHECK(!addr.empty());
     CHECK(body.starts_with("DATA:"));
-    CHECK(wire_check_fin(body));
+    CHECK(body.ends_with(WIRE_FIN));
   }
 
   CHECK(s3copy_served() > s3_warm);

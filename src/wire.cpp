@@ -2,45 +2,36 @@
 #include <cstdlib>
 #include <cstring>
 
-static const std::string FIN = "FIN:0\n";
-
-std::string wire_info(const std::string &json) {
-  std::string out;
-  out += "INFO:";
-  out += std::to_string(json.size());
-  out += "\n";
-  out += json;
-  out += "\n";
-  out += FIN;
-  return out;
-}
+const std::string WIRE_FIN = "FIN:0\n";
 
 std::string wire_redirect(const std::string &node) {
-  std::string json = "\"" + node + "\"";
+  std::string payload = node + "\n";
   std::string out;
   out += "REDIRECT:";
-  out += std::to_string(json.size());
+  out += std::to_string(payload.size());
   out += "\n";
-  out += json;
-  out += FIN;
+  out += payload;
   return out;
 }
 
-std::string wire_err(const std::string &msg) {
-  std::string json = "{\"type\":\"" + msg + "\",\"message\":\"" + msg + "\"}";
+std::string wire_err(const std::string &type, const std::string &msg) {
+  std::string payload = type + "\n" + msg + "\n";
   std::string out;
   out += "ERROR:";
-  out += std::to_string(json.size());
+  out += std::to_string(payload.size());
   out += "\n";
-  out += json;
-  out += FIN;
+  out += payload;
   return out;
 }
 
-std::string wire_fin() { return FIN; }
-
-bool wire_check_fin(const std::string &s) {
-  if (s.size() < FIN.size())
-    return false;
-  return s.compare(s.size() - FIN.size(), FIN.size(), FIN) == 0;
+std::string wire_nodes(const std::vector<std::string> &peers) {
+  std::string payload;
+  for (const auto &p : peers)
+    payload += p + "\n";
+  std::string out;
+  out += "NODES:";
+  out += std::to_string(payload.size());
+  out += "\n";
+  out += payload;
+  return out;
 }

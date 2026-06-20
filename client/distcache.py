@@ -50,6 +50,10 @@ DCERR_TIMEOUT          =   7
 DCERR_NOT_FOUND        =   8
 DCERR_S3_AUTH          =   9
 DCERR_CALLBACK_FAILED  =  10   # unused in Python (callback exceptions propagate directly)
+DCERR_INVALID_PATH     =  11
+DCERR_S3_COPY          =  12
+DCERR_IO               =  13
+DCERR_BAD_REQUEST      =  14
 DCERR_NETWORK          = 100   # connection or transfer failure
 DCERR_PROTOCOL         = 101   # truncated or malformed response
 DCERR_NOMEM            = 102   # (rare in Python)
@@ -65,6 +69,10 @@ _SERVER_ERRCODES: dict[str, int] = {
     "ERR_TIMEOUT":         DCERR_TIMEOUT,
     "ERR_NOT_FOUND":       DCERR_NOT_FOUND,
     "ERR_S3_AUTH":         DCERR_S3_AUTH,
+    "ERR_INVALID_PATH":    DCERR_INVALID_PATH,
+    "ERR_S3_COPY":         DCERR_S3_COPY,
+    "ERR_IO":              DCERR_IO,
+    "ERR_BAD_REQUEST":     DCERR_BAD_REQUEST,
 }
 
 
@@ -414,8 +422,15 @@ class _ChunkReader:
                     data_chunks.append(frame.payload)
             elif frame.type == "REDIRECT":
                 result["status"] = "redirect"
-                result["nodes"] = [json.loads(frame.payload)]
-            elif frame.type in ("INFO", "ERROR"):
+                result["nodes"] = [frame.payload.decode("ascii").rstrip("\n")]
+            elif frame.type == "ERROR":
+                lines = frame.payload.decode("ascii").splitlines()
+                result["status"]  = "error"
+                result["type"]    = lines[0] if lines else ""
+                result["message"] = "\n".join(lines[1:]) if len(lines) > 1 else ""
+            elif frame.type == "NODES":
+                result["_list"] = [l for l in frame.payload.decode("ascii").splitlines() if l]
+            elif frame.type == "INFO":
                 parsed = json.loads(frame.payload)
                 if isinstance(parsed, list):
                     result["_list"] = parsed

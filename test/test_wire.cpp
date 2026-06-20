@@ -7,86 +7,64 @@
 #include <string>
 
 /**
- * @test wire_info: correct framing
- * @brief Tests that formatting an INFO message framing wraps the JSON payload
- * correctly with the expected header prefix and trailing FIN indicator.
- *
- * Steps:
- * 1. Construct an INFO string using wire_info with a payload of {"size":42}.
- * 2. Verify that it matches "INFO:11\n{\"size\":42}\nFIN:0\n".
- * 3. Verify that wire_check_fin returns true for the generated message.
- */
-TEST_CASE("wire_info: correct framing") {
-  std::string s = wire_info("{\"size\":42}");
-  CHECK(s == "INFO:11\n{\"size\":42}\nFIN:0\n");
-  CHECK(wire_check_fin(s));
-}
-
-/**
  * @test wire_redirect: correct framing
- * @brief Tests that formatting a REDIRECT message framing wraps the target
- * address correctly with redirect header and trailing FIN.
+ * @brief Tests that wire_redirect emits a plain-text host:port/id line.
  *
  * Steps:
- * 1. Construct a REDIRECT string using wire_redirect with target
- * "127.0.0.1:4002/7".
- * 2. Verify it matches "REDIRECT:18\n\"127.0.0.1:4002/7\"FIN:0\n".
- * 3. Verify wire_check_fin returns true.
+ * 1. Construct a REDIRECT string for "127.0.0.1:4002/7".
+ * 2. Verify it matches "REDIRECT:17\n127.0.0.1:4002/7\n".
+ * 3. Verify appending WIRE_FIN produces the full response.
  */
 TEST_CASE("wire_redirect: correct framing") {
   std::string s = wire_redirect("127.0.0.1:4002/7");
-  CHECK(s == "REDIRECT:18\n\"127.0.0.1:4002/7\"FIN:0\n");
-  CHECK(wire_check_fin(s));
+  CHECK(s == "REDIRECT:17\n127.0.0.1:4002/7\n");
+  CHECK(s + WIRE_FIN == "REDIRECT:17\n127.0.0.1:4002/7\nFIN:0\n");
 }
 
 /**
  * @test wire_err: correct framing
- * @brief Tests that formatting an ERROR message framing structures the error
- * type and message as a JSON payload correctly within the error framing.
+ * @brief Tests that wire_err emits type and message as separate newline-
+ * terminated lines.
  *
  * Steps:
- * 1. Construct an ERROR string using wire_err with message "not found".
- * 2. Verify it matches "ERROR:42\n{\"type\":\"not found\",\"message\":\"not
- * found\"}FIN:0\n".
- * 3. Verify wire_check_fin returns true.
+ * 1. Construct an ERROR string with type "ERR_NOT_FOUND" and message "not
+ * found".
+ * 2. Verify it matches "ERROR:24\nERR_NOT_FOUND\nnot found\n".
+ * 3. Verify appending WIRE_FIN produces the full response.
  */
 TEST_CASE("wire_err: correct framing") {
-  std::string s = wire_err("not found");
-  CHECK(s ==
-        "ERROR:42\n{\"type\":\"not found\",\"message\":\"not found\"}FIN:0\n");
-  CHECK(wire_check_fin(s));
+  std::string s = wire_err("ERR_NOT_FOUND", "not found");
+  CHECK(s == "ERROR:24\nERR_NOT_FOUND\nnot found\n");
+  CHECK(s + WIRE_FIN == "ERROR:24\nERR_NOT_FOUND\nnot found\nFIN:0\n");
 }
 
 /**
- * @test wire_fin: bare FIN
- * @brief Tests that wire_fin constructs a correct standalone FIN frame.
+ * @test wire_nodes: correct framing
+ * @brief Tests that wire_nodes emits one host:port/id line per peer.
  *
  * Steps:
- * 1. Call wire_fin.
- * 2. Verify it returns "FIN:0\n".
- * 3. Verify wire_check_fin returns true.
+ * 1. Construct a NODES string for two peers.
+ * 2. Verify header length and newline-terminated lines.
+ * 3. Verify empty peer list produces NODES:0\n.
  */
-TEST_CASE("wire_fin: bare FIN") {
-  CHECK(wire_fin() == "FIN:0\n");
-  CHECK(wire_check_fin(wire_fin()));
+TEST_CASE("wire_nodes: correct framing") {
+  std::vector<std::string> peers = {"127.0.0.1:4001", "127.0.0.1:4002"};
+  std::string s = wire_nodes(peers);
+  CHECK(s == "NODES:30\n127.0.0.1:4001\n127.0.0.1:4002\n");
+  CHECK(s + WIRE_FIN == "NODES:30\n127.0.0.1:4001\n127.0.0.1:4002\nFIN:0\n");
+
+  std::string empty = wire_nodes({});
+  CHECK(empty == "NODES:0\n");
 }
 
 /**
- * @test wire_check_fin: detects missing FIN
- * @brief Tests that wire_check_fin returns false when a message lacks a valid
- * trailing FIN:0\n framing.
+ * @test WIRE_FIN: correct value
+ * @brief Tests that WIRE_FIN is the canonical FIN:0\n terminator.
  *
  * Steps:
- * 1. Verify wire_check_fin returns false for a raw data frame, an empty string,
- *    a FIN missing the trailing newline, and a FIN not at the very end of the
- * string.
+ * 1. Verify WIRE_FIN equals "FIN:0\n".
  */
-TEST_CASE("wire_check_fin: detects missing FIN") {
-  CHECK_FALSE(wire_check_fin("DATA:5\nhello"));
-  CHECK_FALSE(wire_check_fin(""));
-  CHECK_FALSE(wire_check_fin("FIN:0"));    // missing trailing \n
-  CHECK_FALSE(wire_check_fin("FIN:0\nX")); // FIN not at end
-}
+TEST_CASE("WIRE_FIN: correct value") { CHECK(WIRE_FIN == "FIN:0\n"); }
 
 // ── stream_out / stream_in
 // ────────────────────────────────────────────────────

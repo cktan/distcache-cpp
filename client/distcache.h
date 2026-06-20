@@ -124,6 +124,9 @@ int dc_health(const char *node, dc_health_t *out, char *errmsg, int errsz);
 
 /* ── Error codes ────────────────────────────────────────────────────────── */
 
+/* Maximum length of a node address string "host:port[/first_id]" + NUL. */
+#define DC_NODE_NAME_MAX 100
+
 /* Server-originated (mirror ERR_* strings from the server) */
 #define DCERR_UNKNOWN_COMMAND 1
 #define DCERR_BAD_OBJECT_NAME 2
@@ -135,6 +138,10 @@ int dc_health(const char *node, dc_health_t *out, char *errmsg, int errsz);
 #define DCERR_NOT_FOUND 8
 #define DCERR_S3_AUTH 9
 #define DCERR_CALLBACK_FAILED 10
+#define DCERR_INVALID_PATH 11
+#define DCERR_S3_COPY 12
+#define DCERR_IO 13
+#define DCERR_BAD_REQUEST 14
 
 /* Client-originated */
 #define DCERR_NETWORK 100       /* connection or transfer failure */

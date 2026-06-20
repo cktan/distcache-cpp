@@ -2,18 +2,15 @@
 #include "stream.h"
 #include <cstddef>
 #include <string>
+#include <vector>
 
-// Encode an INFO frame: "INFO:<n>\n<json>\nFIN:0\n"
-std::string wire_info(const std::string &json);
+extern const std::string WIRE_FIN;
 
-// Encode a REDIRECT frame: "REDIRECT:<n>\n\"host:port/first_id\"FIN:0\n"
+// Encode a REDIRECT frame: "REDIRECT:<n>\nhost:port/first_id\n"
 std::string wire_redirect(const std::string &node);
 
-// Encode an ERR and a FIN frame: "ERR:<msg>\nFIN:0\n"
-std::string wire_err(const std::string &msg);
+// Encode an ERROR frame: "ERROR:<n>\n<type>\n<message>\n"
+std::string wire_err(const std::string &type, const std::string &msg);
 
-// Encode a bare FIN: "FIN:0\n"
-std::string wire_fin();
-
-// Return true iff the string ends with "FIN:0\n"
-bool wire_check_fin(const std::string &s);
+// Encode a NODES frame: "NODES:<n>\nhost:port/id\n..."
+std::string wire_nodes(const std::vector<std::string> &peers);

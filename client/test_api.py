@@ -49,8 +49,8 @@ def make_data(data: bytes) -> bytes:
 def make_info(obj: dict) -> bytes:
     return make_frame("INFO", json.dumps(obj).encode())
 
-def make_error(obj: dict) -> bytes:
-    return make_frame("ERROR", json.dumps(obj).encode())
+def make_error(error_type: str, message: str) -> bytes:
+    return make_frame("ERROR", f"{error_type}\n{message}\n".encode())
 
 def make_fin() -> bytes:
     return b"FIN:0\n"
@@ -85,7 +85,7 @@ class TestChunkProtocol(unittest.TestCase):
         self.assertEqual(json.loads(frame.payload)["status"], "ok")
 
     def test_error_frame(self):
-        body = make_error({"status": "error", "type": "ERR_NOT_FOUND", "message": "gone"}) + make_fin()
+        body = make_error("ERR_NOT_FOUND", "gone") + make_fin()
         frame = self._reader(body).read_frame()
         self.assertEqual(frame.type, "ERROR")
 
@@ -106,14 +106,14 @@ class TestChunkProtocol(unittest.TestCase):
         self.assertEqual(result["data"], b"bytes")
 
     def test_read_response_error(self):
-        body = make_error({"status": "error", "type": "ERR_NOT_FOUND", "message": "nope"}) + make_fin()
+        body = make_error("ERR_NOT_FOUND", "nope") + make_fin()
         result = self._reader(body).read_response()
         self.assertEqual(result["status"], "error")
         self.assertEqual(result["message"], "nope")
 
     def test_read_response_error_mid_stream(self):
         body = (make_data(b"partial")
-                + make_error({"status": "error", "type": "ERR_DISK", "message": "fail"})
+                + make_error("ERR_DISK", "fail")
                 + make_fin())
         result = self._reader(body).read_response()
         self.assertEqual(result["status"], "error")
@@ -152,8 +152,8 @@ class TestChunkProtocol(unittest.TestCase):
         result = self._reader(body).read_response()
         self.assertEqual(result["data"], b"")
 
-    def test_read_response_info_list(self):
-        body = make_frame("INFO", json.dumps(["a:1", "b:2"]).encode()) + make_fin()
+    def test_read_response_nodes_list(self):
+        body = make_frame("NODES", b"a:1\nb:2\n") + make_fin()
         result = self._reader(body).read_response()
         self.assertEqual(result["_list"], ["a:1", "b:2"])
 
@@ -242,7 +242,7 @@ class TestModuleAPI(unittest.TestCase):
         self.assertIn("node1:4001", dc.get_nodes())
 
     def test_get_nodes_grows_on_redirect(self):
-        redirect_body = make_frame("REDIRECT", json.dumps(["node2:4002"]).encode()) + make_fin()
+        redirect_body = make_frame("REDIRECT", b"node2:4002\n") + make_fin()
         ok_body       = make_data(b"data") + make_fin()
 
         with patch("distcache._do_request", side_effect=self._mock_request(redirect_body, ok_body)):
@@ -261,9 +261,7 @@ class TestModuleAPI(unittest.TestCase):
         self.assertEqual(b"".join(chunks), b"hello world")
 
     def test_get_server_error_raises(self):
-        body = make_error({
-            "status": "error", "type": "ERR_NOT_FOUND", "message": "nope"
-        }) + make_fin()
+        body = make_error("ERR_NOT_FOUND", "nope") + make_fin()
         with patch("distcache._do_request", side_effect=self._mock_request(body)):
             with self.assertRaises(DistCacheError) as ctx:
                 dc.get("bucket", "key", None, lambda _ctx, d: None)

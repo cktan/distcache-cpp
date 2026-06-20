@@ -22,6 +22,13 @@
 extern uint32_t dc_test_fnv1a(uint32_t prev, const char *input);
 extern void dc_test_node_ids(const char *name, uint32_t ids[10]);
 extern uint32_t dc_test_dest_id(const char *bucket, const char *key);
+extern void dc_test_parse_error(const char *payload, int plen, char *type_out,
+                                size_t type_sz, char *msg_out, size_t msg_sz);
+extern int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
+                                  size_t name_sz);
+extern int dc_test_parse_nodes(const char *payload, int plen,
+                               char names[][DC_NODE_NAME_MAX], int max_names);
+extern int dc_test_server_errcode(const char *s);
 
 /* ── Minimal test harness ───────────────────────────────────────────────────
  */
@@ -169,6 +176,98 @@ static void test_lifecycle(void) {
   dc_final();
 }
 
+/* ── Wire parsing tests ─────────────────────────────────────────────────────
+ */
+
+static void test_wire_parsing(void) {
+  section("Wire protocol parsing (ERROR and REDIRECT frames)");
+
+  char type[64], msg[512];
+
+  /* ERROR: type on line 1, message on line 2 */
+  dc_test_parse_error("ERR_NOT_CACHED\nkey not cached\n", 30, type,
+                      sizeof(type), msg, sizeof(msg));
+  CHECK(strcmp(type, "ERR_NOT_CACHED") == 0, "ERROR: type parsed correctly");
+  CHECK(strcmp(msg, "key not cached") == 0, "ERROR: message parsed correctly");
+
+  dc_test_parse_error("ERR_IO\nwrite failed\n", 19, type, sizeof(type), msg,
+                      sizeof(msg));
+  CHECK(strcmp(type, "ERR_IO") == 0, "ERROR: ERR_IO type parsed");
+  CHECK(strcmp(msg, "write failed") == 0, "ERROR: write failed message parsed");
+
+  /* ERROR: missing message line */
+  dc_test_parse_error("ERR_IO\n", 7, type, sizeof(type), msg, sizeof(msg));
+  CHECK(strcmp(type, "ERR_IO") == 0, "ERROR: type-only payload parses type");
+  CHECK(msg[0] == '\0', "ERROR: type-only payload gives empty message");
+
+  /* ERROR: no newline at all */
+  dc_test_parse_error("ERR_IO", 6, type, sizeof(type), msg, sizeof(msg));
+  CHECK(type[0] == '\0', "ERROR: no newline gives empty type");
+
+  /* REDIRECT: single plain-text node line */
+  char name[DC_NODE_NAME_MAX];
+  int ok;
+  ok = dc_test_parse_redirect("127.0.0.1:4002/7\n", 17, name, sizeof(name));
+  CHECK(ok == 1, "REDIRECT: returns 1 on success");
+  CHECK(strcmp(name, "127.0.0.1:4002/7") == 0,
+        "REDIRECT: node name parsed correctly");
+
+  ok = dc_test_parse_redirect("node:4001\n", 10, name, sizeof(name));
+  CHECK(ok == 1, "REDIRECT: node without first_id parsed");
+  CHECK(strcmp(name, "node:4001") == 0, "REDIRECT: name without first_id");
+
+  /* REDIRECT: no trailing newline — still parses */
+  ok = dc_test_parse_redirect("node:4001", 9, name, sizeof(name));
+  CHECK(ok == 1, "REDIRECT: no trailing newline still parses");
+  CHECK(strcmp(name, "node:4001") == 0,
+        "REDIRECT: value correct without newline");
+}
+
+static void test_nodes_parsing(void) {
+  section("Wire protocol parsing (NODES frame)");
+
+  char names[64][DC_NODE_NAME_MAX];
+  int n;
+
+  /* Two nodes */
+  n = dc_test_parse_nodes("node1:4001\nnode2:4002\n", 21, names, 64);
+  CHECK(n == 2, "NODES: two-node payload gives count 2");
+  CHECK(strcmp(names[0], "node1:4001") == 0, "NODES: first node correct");
+  CHECK(strcmp(names[1], "node2:4002") == 0, "NODES: second node correct");
+
+  /* Single node with first_id */
+  n = dc_test_parse_nodes("node1:4001/12345\n", 17, names, 64);
+  CHECK(n == 1, "NODES: single node gives count 1");
+  CHECK(strcmp(names[0], "node1:4001/12345") == 0, "NODES: first_id preserved");
+
+  /* Empty payload */
+  n = dc_test_parse_nodes("", 0, names, 64);
+  CHECK(n == 0, "NODES: empty payload gives count 0");
+
+  /* max_names limit */
+  n = dc_test_parse_nodes("a:1\nb:2\nc:3\n", 12, names, 2);
+  CHECK(n == 2, "NODES: max_names cap respected");
+}
+
+static void test_server_errcode(void) {
+  section("server_errcode mapping");
+
+  CHECK(dc_test_server_errcode("ERR_NOT_CACHED") == DCERR_NOT_CACHED,
+        "ERR_NOT_CACHED -> DCERR_NOT_CACHED");
+  CHECK(dc_test_server_errcode("ERR_INVALID_PATH") == DCERR_INVALID_PATH,
+        "ERR_INVALID_PATH -> DCERR_INVALID_PATH");
+  CHECK(dc_test_server_errcode("ERR_S3_COPY") == DCERR_S3_COPY,
+        "ERR_S3_COPY -> DCERR_S3_COPY");
+  CHECK(dc_test_server_errcode("ERR_IO") == DCERR_IO, "ERR_IO -> DCERR_IO");
+  CHECK(dc_test_server_errcode("ERR_BAD_REQUEST") == DCERR_BAD_REQUEST,
+        "ERR_BAD_REQUEST -> DCERR_BAD_REQUEST");
+  CHECK(dc_test_server_errcode("ERR_S3") == DCERR_S3, "ERR_S3 -> DCERR_S3");
+  CHECK(dc_test_server_errcode("ERR_NOT_FOUND") == DCERR_NOT_FOUND,
+        "ERR_NOT_FOUND -> DCERR_NOT_FOUND");
+  CHECK(dc_test_server_errcode("ERR_UNKNOWN_JUNK") == DCERR_PROTOCOL,
+        "unknown type -> DCERR_PROTOCOL");
+}
+
 /* ── Integration test (requires live node at localhost:4001) ────────────────
  */
 
@@ -278,6 +377,9 @@ int main(void) {
   test_node_ids();
   test_dest_id();
   test_lifecycle();
+  test_wire_parsing();
+  test_nodes_parsing();
+  test_server_errcode();
   test_integration();
 
   printf("\n%d passed, %d failed\n", g_pass, g_fail);

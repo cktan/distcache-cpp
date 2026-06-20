@@ -32,7 +32,6 @@
 
 #define DC_IDS_PER_NODE 10
 #define DC_MAX_REDIRECTS 5
-#define DC_NODE_NAME_MAX 100 /* matches dc_node() buf[100] */
 #define DC_MAX_REDIR_NODES 64
 #define DC_POOL_SIZE 4          /* connection slots per node */
 #define DC_CONN_EXPIRE_SECS 300 /* 5 minutes */
@@ -389,6 +388,14 @@ static int server_errcode(const char *s) {
     return DCERR_NOT_FOUND;
   if (strcmp(s, "ERR_S3_AUTH") == 0)
     return DCERR_S3_AUTH;
+  if (strcmp(s, "ERR_INVALID_PATH") == 0)
+    return DCERR_INVALID_PATH;
+  if (strcmp(s, "ERR_S3_COPY") == 0)
+    return DCERR_S3_COPY;
+  if (strcmp(s, "ERR_IO") == 0)
+    return DCERR_IO;
+  if (strcmp(s, "ERR_BAD_REQUEST") == 0)
+    return DCERR_BAD_REQUEST;
   return DCERR_PROTOCOL;
 }
 
@@ -454,47 +461,57 @@ static int json_num_field(const char *json, size_t jlen, const char *key,
   return -1;
 }
 
-/* Parse a JSON string "..." into buf[bufsz]. Returns 1 on success, 0 on
- * failure (malformed or truncated). */
-static int parse_json_string(const char *json, size_t jlen, char *buf,
-                             size_t bufsz) {
-  const char *end = json + jlen;
-  const char *q = memchr(json, '"', jlen);
-  if (!q)
+/* Parse ERROR payload "type\nmessage\n" into separate buffers. */
+static void parse_error_payload(const char *payload, int plen, char *type_out,
+                                size_t type_sz, char *msg_out, size_t msg_sz) {
+  type_out[0] = msg_out[0] = '\0';
+  const char *nl = memchr(payload, '\n', (size_t)plen);
+  if (!nl)
+    return;
+  size_t tlen = (size_t)(nl - payload);
+  if (tlen < type_sz) {
+    memcpy(type_out, payload, tlen);
+    type_out[tlen] = '\0';
+  }
+  const char *ms = nl + 1;
+  size_t mrem = (size_t)plen - tlen - 1;
+  const char *mnl = memchr(ms, '\n', mrem);
+  size_t mlen = mnl ? (size_t)(mnl - ms) : mrem;
+  if (mlen < msg_sz) {
+    memcpy(msg_out, ms, mlen);
+    msg_out[mlen] = '\0';
+  }
+}
+
+/* Parse REDIRECT payload "host:port/id\n" into name_out. Returns 1 on
+ * success. */
+static int parse_redirect_payload(const char *payload, int plen, char *name_out,
+                                  size_t name_sz) {
+  const char *nl = memchr(payload, '\n', (size_t)plen);
+  size_t nlen = nl ? (size_t)(nl - payload) : (size_t)plen;
+  if (nlen == 0 || nlen >= name_sz)
     return 0;
-  const char *start = q + 1;
-  const char *r = memchr(start, '"', (size_t)(end - start));
-  if (!r)
-    return 0;
-  size_t len = (size_t)(r - start);
-  if (len == 0 || len >= bufsz)
-    return 0;
-  memcpy(buf, start, len);
-  buf[len] = '\0';
+  memcpy(name_out, payload, nlen);
+  name_out[nlen] = '\0';
   return 1;
 }
 
-/* Parse a JSON string array ["a","b",...] into names[]. Returns count. */
-static int parse_string_array(const char *json, size_t jlen,
-                              char names[][DC_NODE_NAME_MAX], int max_names) {
+/* Parse NODES payload (newline-terminated lines) into names[]. Returns
+ * count. */
+static int parse_nodes_payload(const char *payload, int plen,
+                               char names[][DC_NODE_NAME_MAX], int max_names) {
   int count = 0;
-  const char *p = json;
-  const char *end = json + jlen;
-  while (count < max_names && p < end) {
-    const char *q = memchr(p, '"', (size_t)(end - p));
-    if (!q)
-      break;
-    const char *start = q + 1;
-    const char *r = memchr(start, '"', (size_t)(end - start));
-    if (!r)
-      break;
-    size_t len = (size_t)(r - start);
-    if (len > 0 && len < DC_NODE_NAME_MAX) {
-      memcpy(names[count], start, len);
-      names[count][len] = '\0';
+  const char *p = payload;
+  const char *end = payload + plen;
+  while (p < end && count < max_names) {
+    const char *nl = memchr(p, '\n', (size_t)(end - p));
+    size_t nlen = nl ? (size_t)(nl - p) : (size_t)(end - p);
+    if (nlen > 0 && nlen < DC_NODE_NAME_MAX) {
+      memcpy(names[count], p, nlen);
+      names[count][nlen] = '\0';
       count++;
     }
-    p = r + 1;
+    p = nl ? nl + 1 : end;
   }
   return count;
 }
@@ -547,17 +564,12 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
       st->got_fin = 1;
     } else if (strncmp(st->fp.raw, "ERROR:", 6) == 0) {
       strncpy(st->status, "error", sizeof(st->status) - 1);
-      json_str_field(payload, (size_t)plen, "type", st->err_type,
-                     sizeof(st->err_type));
-      json_str_field(payload, (size_t)plen, "message", st->err_msg,
-                     sizeof(st->err_msg));
+      parse_error_payload(payload, plen, st->err_type, sizeof(st->err_type),
+                          st->err_msg, sizeof(st->err_msg));
     } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
       strncpy(st->status, "redirect", sizeof(st->status) - 1);
-      st->n_redir = parse_json_string(payload, (size_t)plen, st->redir_names[0],
-                                      DC_NODE_NAME_MAX);
-    } else if (strncmp(st->fp.raw, "INFO:", 5) == 0) {
-      json_str_field(payload, (size_t)plen, "status", st->status,
-                     sizeof(st->status));
+      st->n_redir = parse_redirect_payload(payload, plen, st->redir_names[0],
+                                           DC_NODE_NAME_MAX);
     }
 
     push_frame_init(&st->fp);
@@ -729,9 +741,8 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
 
     if (strncmp(fp.raw, "FIN:", 4) == 0)
       break;
-    if (strncmp(fp.raw, "INFO:", 5) == 0) {
-      *n_names =
-          parse_string_array(payload, (size_t)plen, names, DC_MAX_REDIR_NODES);
+    if (strncmp(fp.raw, "NODES:", 6) == 0) {
+      *n_names = parse_nodes_payload(payload, plen, names, DC_MAX_REDIR_NODES);
       found = 1;
       ret = 0;
     }
@@ -741,7 +752,7 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
   free(body.data);
 
   if (!found)
-    snprintf(errbuf, errsz, "no INFO frame in /_nodes from %s", node_name);
+    snprintf(errbuf, errsz, "no NODES frame in /_nodes from %s", node_name);
 
   return ret;
 }
@@ -1186,9 +1197,9 @@ int dc_health(const char *node_name, dc_health_t *out, char *errmsg,
       break;
 
     if (strncmp(fp.raw, "ERROR:", 6) == 0) {
-      char msg[256] = "";
-      json_str_field(payload, (size_t)plen, "message", msg, sizeof(msg));
-      snprintf(errmsg, errsz, "health error: %s", msg);
+      char type[64] = "", msg[256] = "";
+      parse_error_payload(payload, plen, type, sizeof(type), msg, sizeof(msg));
+      snprintf(errmsg, errsz, "health error: %s", msg[0] ? msg : type);
       rc = DCERR_PROTOCOL;
       goto done;
     }
@@ -1245,17 +1256,34 @@ done:
 uint32_t dc_test_fnv1a(uint32_t prev, const char *input);
 void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]);
 uint32_t dc_test_dest_id(const char *bucket, const char *key);
+void dc_test_parse_error(const char *payload, int plen, char *type_out,
+                         size_t type_sz, char *msg_out, size_t msg_sz);
+int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
+                           size_t name_sz);
+int dc_test_parse_nodes(const char *payload, int plen,
+                        char names[][DC_NODE_NAME_MAX], int max_names);
+int dc_test_server_errcode(const char *s);
 
-/* Test wrapper for ring_hash. */
 uint32_t dc_test_fnv1a(uint32_t prev, const char *input) {
   return ring_hash(prev, input);
 }
-/* Test wrapper for compute_node_ids. */
 void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]) {
   compute_node_ids(name, 0, ids);
 }
-/* Test wrapper for compute_dest_id. */
 uint32_t dc_test_dest_id(const char *bucket, const char *key) {
   return compute_dest_id(bucket, key);
 }
+void dc_test_parse_error(const char *payload, int plen, char *type_out,
+                         size_t type_sz, char *msg_out, size_t msg_sz) {
+  parse_error_payload(payload, plen, type_out, type_sz, msg_out, msg_sz);
+}
+int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
+                           size_t name_sz) {
+  return parse_redirect_payload(payload, plen, name_out, name_sz);
+}
+int dc_test_parse_nodes(const char *payload, int plen,
+                        char names[][DC_NODE_NAME_MAX], int max_names) {
+  return parse_nodes_payload(payload, plen, names, max_names);
+}
+int dc_test_server_errcode(const char *s) { return server_errcode(s); }
 #endif

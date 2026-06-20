@@ -2,6 +2,7 @@
 #include <string>
 #include <unistd.h>
 
+// Broad error categories returned by cache and S3 operations.
 enum class rc_errcode_t {
   not_found,
   permission,
@@ -11,6 +12,8 @@ enum class rc_errcode_t {
   s3_error,
 };
 
+// Return-code type. Default-constructed rc_t is success. Use rc_t::err() to
+// build a failure. Check with ok(); inspect the error with errcode()/errstr().
 class rc_t {
   bool ok_;
   rc_errcode_t errcode_;
@@ -26,9 +29,12 @@ public:
   bool ok() const { return ok_; }
   rc_errcode_t errcode() const { return errcode_; }
   const std::string &errmsg() const { return errmsg_; }
+  // Returns "ERRCODE: errmsg" as a C string; valid for the lifetime of this
+  // rc_t.
   const char *errstr() const;
 };
 
+// Move-only RAII wrapper for a POSIX file descriptor. Closes on destruction.
 struct fd_t {
   int fd = -1;
   fd_t() = default;

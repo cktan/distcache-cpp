@@ -101,6 +101,10 @@ def housekeeping() -> None: ...
 | `DCERR_TIMEOUT` | 7 | Server: timeout |
 | `DCERR_NOT_FOUND` | 8 | Server: not found in S3 |
 | `DCERR_S3_AUTH` | 9 | Server: S3 access denied |
+| `DCERR_INVALID_PATH` | 11 | Server: invalid path or bucket/key |
+| `DCERR_S3_COPY` | 12 | Server: S3 copy/fetch failed |
+| `DCERR_IO` | 13 | Server: local I/O failure |
+| `DCERR_BAD_REQUEST` | 14 | Server: missing or invalid request field |
 | `DCERR_NETWORK` | 100 | Connection or transfer failure |
 | `DCERR_PROTOCOL` | 101 | Truncated or malformed response |
 | `DCERR_REDIRECT_LOOP` | 103 | Too many redirect hops |
@@ -127,7 +131,7 @@ Integration tests are skipped automatically if no node is reachable.
 
 | Class | Requires server | Description |
 |-------|----------------|-------------|
-| `TestChunkProtocol` | no | Wire format framing, streaming, truncation |
+| `TestChunkProtocol` | no | Wire format framing (ERROR/REDIRECT/NODES/DATA), streaming, truncation |
 | `TestRingAlgorithm` | no | Chord ring math, successor lookup, FNV-1a |
 | `TestModuleAPI` | no | Module-level API with mocked HTTP |
 | `TestRestAPIIntegration` | **yes** | End-to-end against a live cluster |

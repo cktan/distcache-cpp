@@ -108,6 +108,10 @@ int dc_housekeeping(char *errbuf, int errsz);
 | `DCERR_NOT_FOUND` | 8 | Server: not found in S3 |
 | `DCERR_S3_AUTH` | 9 | Server: S3 access denied |
 | `DCERR_CALLBACK_FAILED` | 10 | Callback returned -1 |
+| `DCERR_INVALID_PATH` | 11 | Server: invalid path or bucket/key |
+| `DCERR_S3_COPY` | 12 | Server: S3 copy/fetch failed |
+| `DCERR_IO` | 13 | Server: local I/O failure |
+| `DCERR_BAD_REQUEST` | 14 | Server: missing or invalid request field |
 | `DCERR_NETWORK` | 100 | Connection or transfer failure |
 | `DCERR_PROTOCOL` | 101 | Truncated or malformed response |
 | `DCERR_NOMEM` | 102 | malloc failed |
@@ -120,5 +124,7 @@ cd client
 make check
 ```
 
-Tests are compiled with `-DDC_TESTING` to expose internal ring and hash
-functions. Expected values were cross-verified against the Python client.
+Tests are compiled with `-DDC_TESTING` to expose internal functions.
+Covers FNV-1a hash, ring IDs, dest ID, lifecycle, wire-protocol
+parsing (ERROR/REDIRECT/NODES frames), and `server_errcode` mapping.
+Expected hash values are cross-verified against the Python client.

@@ -14,18 +14,22 @@
 #include <vector>
 
 struct node_t {
-  std::string homedir;
-  std::string nodeid; // "host:port" or "host:port/first_id"
-  std::vector<std::string> seeds;
-  keylock_t keylock;
-  cache_t cache;
-  Stats stats;
-  std::atomic<std::shared_ptr<ring_t>> ring{std::make_shared<ring_t>()};
-  feed_t feed;
-  feed_t jobq;
-  membership_t membership;
-  rebalancer_t rebalancer;
-  http_server_t http;
+  std::string homedir;            // absolute root; all file ops use abspath()
+  std::string nodeid;             // "host:port" or "host:port/first_id"
+  std::vector<std::string> seeds; // SWIM bootstrap peers
+  keylock_t keylock;              // serialises concurrent S3 fetches per key
+  cache_t cache;                  // file cache; owns lru_t internally
+  Stats stats;                    // atomic hit/miss/redirect/error counters
+  std::atomic<std::shared_ptr<ring_t>> ring{
+      std::make_shared<ring_t>()}; // lock-free ring; swapped on membership
+                                   // change
+  feed_t feed; // SWIM events + app telemetry; drives membership_t consumer
+  feed_t jobq; // async job queue (hint_pull, do_pull, claim_scan, evict);
+               // drives rebalancer_t consumer
+  membership_t
+      membership; // SWIM lifecycle, ring rebuild, pre-convergence injection
+  rebalancer_t rebalancer; // pull_one, claim_scan, hint_pull jobs
+  http_server_t http;      // cpp-httplib thread-per-request server
 
   node_t(const std::string &homedir, const std::string &nodeid)
       : homedir(homedir), nodeid(nodeid), cache(keylock, homedir),

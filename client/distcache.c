@@ -1172,79 +1172,46 @@ int dc_health(const char *node_name, dc_health_t *out, char *errmsg,
     return DCERR_NETWORK;
   }
 
-  push_frame_t fp;
-  push_frame_init(&fp);
-  const char *rp = body.data;
-  size_t rrem = body.len;
+  /* /_health returns plain JSON — parse body directly, no frame parsing. */
   int rc = DCERR_PROTOCOL;
-
-  while (rrem > 0) {
-    int rc2 = stream_in_push(&fp, rp, rrem);
-    if (rc2 < 0)
-      break;
-    rp += rc2;
-    rrem -= (size_t)rc2;
-    if (!fp.complete) {
-      if (rc2 == 0)
-        break;
-      continue;
-    }
-
-    int plen = push_frame_length(&fp);
-    const char *payload = fp.newline + 1;
-
-    if (strncmp(fp.raw, "FIN:", 4) == 0)
-      break;
-
-    if (strncmp(fp.raw, "ERROR:", 6) == 0) {
-      char type[64] = "", msg[256] = "";
-      parse_error_payload(payload, plen, type, sizeof(type), msg, sizeof(msg));
-      snprintf(errmsg, errsz, "health error: %s", msg[0] ? msg : type);
-      rc = DCERR_PROTOCOL;
-      goto done;
-    }
-
-    if (strncmp(fp.raw, "INFO:", 5) == 0) {
-      memset(out, 0, sizeof(*out));
-      char num[32];
-      json_str_field(payload, (size_t)plen, "id", out->id, sizeof(out->id));
-      json_str_field(payload, (size_t)plen, "upsince", out->upsince,
-                     sizeof(out->upsince));
-      json_str_field(payload, (size_t)plen, "upfor", out->upfor,
-                     sizeof(out->upfor));
-      if (json_num_field(payload, (size_t)plen, "served", num, sizeof(num)) ==
-          0)
-        out->served = strtoll(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "hits", num, sizeof(num)) == 0)
-        out->hits = strtoll(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "misses", num, sizeof(num)) ==
-          0)
-        out->misses = strtoll(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "redirects", num,
-                         sizeof(num)) == 0)
-        out->redirects = strtoll(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "errors", num, sizeof(num)) ==
-          0)
-        out->errors = strtoll(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "nodes", num, sizeof(num)) == 0)
-        out->nodes = (int)strtol(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "usepct", num, sizeof(num)) ==
-          0)
-        out->usepct = strtod(num, NULL);
-      if (json_num_field(payload, (size_t)plen, "lru_size", num, sizeof(num)) ==
-          0)
-        out->lru_size = strtoll(num, NULL, 10);
-      if (json_num_field(payload, (size_t)plen, "used_gib", num, sizeof(num)) ==
-          0)
-        out->used_gib = strtod(num, NULL);
-      rc = 0;
-      goto done;
-    }
-    push_frame_init(&fp);
+  if (!body.data || body.len == 0) {
+    snprintf(errmsg, errsz, "empty health response from %s", node_name);
+    goto done;
   }
 
-  snprintf(errmsg, errsz, "no INFO frame in health response from %s",
-           node_name);
+  {
+    memset(out, 0, sizeof(*out));
+    char num[32];
+    /* server emits "addr" and "disk_pct" */
+    json_str_field(body.data, body.len, "addr", out->id, sizeof(out->id));
+    json_str_field(body.data, body.len, "upsince", out->upsince,
+                   sizeof(out->upsince));
+    json_str_field(body.data, body.len, "upfor", out->upfor,
+                   sizeof(out->upfor));
+    if (json_num_field(body.data, body.len, "served", num, sizeof(num)) == 0)
+      out->served = strtoll(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "hits", num, sizeof(num)) == 0)
+      out->hits = strtoll(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "misses", num, sizeof(num)) == 0)
+      out->misses = strtoll(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "redirects", num, sizeof(num)) == 0)
+      out->redirects = strtoll(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "errors", num, sizeof(num)) == 0)
+      out->errors = strtoll(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "nodes", num, sizeof(num)) == 0)
+      out->nodes = (int)strtol(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "disk_pct", num, sizeof(num)) == 0)
+      out->usepct = strtod(num, NULL);
+    if (json_num_field(body.data, body.len, "lru_size", num, sizeof(num)) == 0)
+      out->lru_size = strtoll(num, NULL, 10);
+    if (json_num_field(body.data, body.len, "used_gib", num, sizeof(num)) == 0)
+      out->used_gib = strtod(num, NULL);
+    if (out->id[0] == '\0') {
+      snprintf(errmsg, errsz, "malformed health response from %s", node_name);
+      goto done;
+    }
+    rc = 0;
+  }
 
 done:
   free(body.data);

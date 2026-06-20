@@ -324,6 +324,7 @@ static void handle_hint_pull(node_t &node, const httplib::Request &req,
 }
 
 // PUT /{bucket}/{key}: stream request body into cache and trigger eviction.
+// NOTE: this is used by tests only.
 static void handle_put(node_t &node, const httplib::Request &req,
                        httplib::Response &res,
                        const httplib::ContentReader &content_reader) {

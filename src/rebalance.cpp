@@ -190,6 +190,8 @@ struct StreamState {
 // that an ERROR+FIN response never creates a file at the cache path.
 static bool recv_file(const char *data, size_t datasz, StreamState &state,
                       fd_t &fd, const std::string &relpath, cache_t &cache) {
+  // TODO: this should first write to a temp file and then rename into dest.
+  // we should remove cache_t::write() eventually.
   const char *p = data;
   const char *q = data + datasz;
   while (p < q) {

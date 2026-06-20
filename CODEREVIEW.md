@@ -1,95 +1,177 @@
-# Code Review Report
+# DistCache C++ - Code Review Report
 
-This report provides a detailed technical code review of the
-DistCache C++ codebase, covering correctness, concurrency,
-resource management, and protocol compliance.
+This report presents a detailed code review of the
+DistCache C++ server (`src/`) and client libraries
+(`client/`), cross-referencing their implementation
+against `DESIGN.md`, `FRAME.md`, and `REST.md`.
 
 ---
 
-## 1. Test Failures & Protocol Mismatches
+## Critical Concurrency & Memory Bugs
 
-### Test Failure in test_integration.sh
-The integration test suite failed with:
-`FAIL: GET after delete should be ERR, got: ERROR:50 ...`
+### 1. C Client Use-After-Free Memory Crash
+In the C client implementation
+([distcache.c](file:///home/sprite/p/distcache-cpp/client/distcache.c)),
+a dangerous race condition exists between `dc_get()`
+and `dc_housekeeping()`.
 
-This is caused by a protocol mismatch:
-1. `test_integration.sh` checks if the response starts with
-   `ERR:` (e.g. `[[ "$resp" == ERR:* ]]`).
-2. However, the server's `wire_err` helper (defined in
-   `src/wire.cpp`) encodes error frames starting with the
-   `ERROR:` prefix.
-3. This mismatch causes GET requests after deletions to fail
-   validation in the test script, even though the server is
-   correctly returning a framed error message.
+**How it occurs:**
+1. A client thread calls `dc_get()`, locks `g_ring_mu`,
+   resolves the successor node pointer `dc_node_t *node`,
+   and unlocks `g_ring_mu`.
+2. Before the client thread calls `node_checkout()`,
+   a background housekeeping thread runs
+   `dc_housekeeping()`.
+3. Housekeeping updates the node ring, marks the target
+   node as dead, checks that its slots are not busy (busy
+   is 0 because the checkout hasn't happened yet),
+   unlinks/destroys the node, and frees the memory:
+   `free(g_nodes[i])`.
+4. The client thread resumes and attempts to call
+   `node_checkout()` on the freed `node` pointer.
 
-### Extra Newline in wire_info (Latent Bug)
-In `src/wire.cpp`, `wire_info` appends an extra newline before
-the final `FIN` frame:
+This results in a use-after-free crash or undefined
+memory corruption. This bug does not affect the Python
+client due to automatic reference counting, which keeps
+the `_Node` object alive as long as the local
+reference is held.
+
+---
+
+## Path Validation & Key Routing Bugs
+
+### 2. `lru_t::disk_error()` Violates Node Isolation
+In [lru.cpp](file:///home/sprite/p/distcache-cpp/src/lru.cpp#L73-L76),
+the `disk_error()` check is implemented using:
 ```cpp
-std::string wire_info(const std::string &json) {
-  std::string out;
-  out += "INFO:";
-  ...
-  out += json;
-  out += "\n"; // Extra newline
-  out += FIN;
-  return out;
+bool lru_t::disk_error() {
+  struct statvfs st;
+  return statvfs("./", &st) < 0;
 }
 ```
-If a client parses multiple frames in a single stream using
-`stream_in`, this extra newline is treated as the start of the
-next frame. This results in a zero-length header segment,
-causing `stream_in` to return `-1` (protocol error). Although
-`wire_info` responses are currently single-framed, this is a
-latent bug.
+This queries `./` (the process's CWD) instead of the
+node's configured directory (`homedir_`). This
+violates the isolation guarantees defined in
+`DESIGN.md`, which state that multiple nodes running in
+the same process must be isolated from the CWD.
+
+### 3. Leading Slash Key Routing Mismatch in Clients
+The client libraries in both languages
+([distcache.c](file:///home/sprite/p/distcache-cpp/client/distcache.c)
+and [distcache.py](file:///home/sprite/p/distcache-cpp/client/distcache.py))
+strip leading slashes when calculating the consistent
+hashing ring key (`key.lstrip('/')` or
+`while (*key == '/') key++`).
+
+However, they do not strip leading slashes when
+constructing the HTTP GET request path:
+```python
+path = f"/{_url_encode(bucket)}/{_url_encode(key)}"
+```
+If a client queries a key with a leading slash
+(e.g. `/foo`), it routes the request based on the
+hash of `foo`, but sends the request as
+`/bucket/%2Ffoo`. The server decodes this to `/foo`,
+which is rejected by `compute_relpath` as an invalid
+path with an empty segment, returning
+`ERR_INVALID_PATH`. The clients must strip leading
+slashes when constructing the GET path.
 
 ---
 
-## 2. Concurrency & Threading Issues
+## Architectural Isolation & Race Conditions
 
-### Unsafe Detached Threads (Lifetime Risks)
-The codebase uses `std::thread::detach()` in two places, both
-presenting severe lifetime risks:
+### 4. Race Condition on Concurrent Reads During Writes
+In `http.cpp` ([handle_put](file:///home/sprite/p/distcache-cpp/src/http.cpp#L327))
+and `rebalance.cpp` ([pull_one](file:///home/sprite/p/distcache-cpp/src/rebalance.cpp#L248)),
+the file cache uses `cache_t::write()` to open a file
+descriptor directly at the final target path
+(`O_CREAT | O_EXCL`) before the payload is fully
+written.
 
-1. **Startup Scan Thread (`src/main.cpp`):**
-   The thread captures a reference to the stack-allocated
-   `node` object:
-   ```cpp
-   std::thread scan_thread([&node]() { ... });
-   scan_thread.detach();
-   ```
-   If `node.http.start()` fails to bind or exits immediately,
-   the stack unwinds, destroying `node`. The detached thread
-   will then access invalid stack memory, resulting in
-   undefined behavior or a segmentation fault on exit.
+Since the file is created on disk immediately, any
+concurrent GET request for the same key will find that
+`cache_t::exists()` returns `true`. The server will
+then open the file descriptor `O_RDONLY` and stream
+whatever partial data is currently written, leading to
+silent client data corruption.
 
-2. **Claim Sweep Thread (`src/membership.cpp`):**
-   Spawns a detached thread that captures `this` by value:
-   ```cpp
-   std::thread([this, nodeid]() { ... }).detach();
-   ```
-   If the node is shut down before the claim delay expires,
-   the thread wakes up and accesses the destroyed
-   `membership_t` instance.
-
-**Remedy:** Avoid `detach()`. Keep thread handles in parent
-objects (e.g., using `std::jthread` or joining them in
-shutdown).
+PUT and Pull operations should write to a temporary
+file first (as S3 fetches do) and rename it
+atomically on success.
 
 ---
 
-## 3. Resource & Error Handling
+## Reliability & Network Concerns
 
-### s3copy Escape Limitations
-In `src/s3copy.cpp`, the custom JSON escaping function only
-handles double quotes and backslashes. It does not escape
-control characters or carriage returns. While S3 bucket and
-key names rarely contain these characters, using a proper
-JSON serializer would prevent malformed requests.
+### 5. Lack of Network & Read Timeouts in Clients
+The C client's `curl_handle_init`
+([distcache.c](file:///home/sprite/p/distcache-cpp/client/distcache.c))
+does not set connection or read timeouts on the libcurl
+handle. The Python client
+([distcache.py](file:///home/sprite/p/distcache-cpp/client/distcache.py))
+also constructs `HTTPConnection` without a timeout.
 
-### Shell/Process Signal Safety
-`g_http_signal` is a global pointer used by `on_signal` to shut
-down the HTTP server. It is safe because it is set before the
-signal handler is installed and only used for shutdown, but
-in general, invoking non-signal-safe functions inside signal
-handlers can lead to undefined behavior in POSIX systems.
+If a server node hangs, crashes, or encounters
+network issues, client threads will block indefinitely,
+causing thread and socket exhaustion.
+
+---
+
+## Documentation & Specification Discrepancies
+
+### 6. `REST.md` Out of Sync with Wire Protocol
+The REST specification
+([REST.md](file:///home/sprite/p/distcache-cpp/REST.md))
+claims that `GET /_nodes` returns a wire-framed `INFO`
+response containing a JSON array of nodes, and that
+`REDIRECT` payload contains a JSON string.
+
+In reality, the implementation (`wire.cpp`, C client,
+Python client) uses a `NODES` frame containing a
+newline-terminated list of addresses, and a
+`REDIRECT` frame containing a raw newline-terminated
+string. `INFO` frames are not implemented or used.
+`FRAME.md` correctly specifies the wire protocol.
+
+### 7. Signal Handling Divergence from `DESIGN.md`
+According to `DESIGN.md`, the server signal handler
+uses `g_node_signal->stop()` to initiate shutdown
+directly from the POSIX signal handler.
+
+In the implementation
+([main.cpp](file:///home/sprite/p/distcache-cpp/src/main.cpp)),
+the handler posts to a semaphore `g_stop_sem`, and the
+main thread wakes up to stop and join the server
+cleanly. This is a much safer design since calling
+complex shutdown routines directly inside POSIX signal
+handlers is unsafe.
+
+### 8. Job Naming Mismatch (`evict` vs `maybe_evict`)
+The consistent-hash job queue documentation in
+`DESIGN.md` lists the background eviction job type as
+`evict`. In the C++ code, the job queue uses
+`"maybe_evict"` exclusively.
+
+---
+
+## Summary & Recommendations
+
+1. **Fix C Client Concurrency**: Update `dc_get` to hold
+   the ring lock or use a reference counting system for
+   active node pointers to prevent use-after-free bugs.
+2. **Correct `disk_error()`**: Update
+   `lru_t::disk_error()` to query `homedir_` rather than
+   CWD (`./`).
+3. **Harmonize Key Normalization**: Ensure client
+   libraries strip leading slashes from keys in request
+   paths as they do in hashing.
+4. **Implement Write Buffering**: PUT and Pull
+   operations must write to temp files and rename
+   atomically to prevent reading partially written
+   cache files.
+5. **Add Client Timeouts**: Set reasonable connection
+   and read timeouts in both C and Python client
+   libraries.
+6. **Update `REST.md`**: Synchronize it with the actual
+   wire protocol implementation and `FRAME.md`.

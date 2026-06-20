@@ -289,9 +289,7 @@ static void handle_nodes(node_t &node, const httplib::Request &,
   auto peers = node.membership.raw_peers();
   std::string json = "[";
   for (size_t i = 0; i < peers.size(); ++i) {
-    if (i > 0)
-      json += ",";
-    json += "\"" + peers[i] + "\"";
+    json += (i ? "," : "") + "\"" + peers[i] + "\"";
   }
   json += "]";
   send_raw(res, wire_info(json));

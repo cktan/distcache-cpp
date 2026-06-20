@@ -6,6 +6,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <ctime>
+#include <fcntl.h>
 #include <queue>
 #include <string>
 #include <vector>
@@ -84,11 +85,10 @@ void rebalancer_t::start() {
     // do_pull: queued by handle_hint_pull (http.cpp) on receiving a
     // /_hint_pull POST from the peer that owns relpath. Fetches the object
     // from that peer into the local cache.
-    if (type == "do_pull" && rec.size() >= 4) {
+    if (type == "do_pull" && rec.size() >= 3) {
       const std::string &src_addr = rec[1];
       const std::string &relpath = rec[2];
-      const std::string &mtime_str = rec[3];
-      pull_one(src_addr, relpath, mtime_str);
+      pull_one(src_addr, relpath);
       return;
     }
 
@@ -181,65 +181,53 @@ rebalancer_t::scan_for_peer(const std::string &peer_nodeid) {
 
 struct StreamState {
   push_frame_t fp = {};
-  bool fd_opened = false;
+  fd_t fd;
   bool is_fin = false;
   bool ok = true;
 };
 
-// Parse one network chunk. fd is opened lazily on the first DATA frame so
-// that an ERROR+FIN response never creates a file at the cache path.
-static bool recv_file(const char *data, size_t datasz, StreamState &state,
-                      fd_t &fd, const std::string &relpath, cache_t &cache) {
-  // TODO: this should first write to a temp file and then rename into dest.
-  // we should remove cache_t::write() eventually.
+// Parse one network chunk and write DATA payload directly to state.fd.
+static bool recv_file(const char *data, size_t datasz, StreamState &state) {
   const char *p = data;
   const char *q = data + datasz;
   while (p < q) {
     int consumed = stream_in_push(&state.fp, p, q - p);
     if (consumed < 0) {
-      state.ok = false;
-      return false;
+      return (state.ok = false);
     }
     p += consumed;
     if (!state.fp.complete) {
       if (consumed == 0) {
-        state.ok = false;
-        return false;
+        return (state.ok = false);
       }
       continue;
     }
 
     int plen = push_frame_length(&state.fp);
-    const char *wp = state.fp.newline + 1;
+    const char *payload = state.fp.newline + 1;
 
     if (strncmp(state.fp.raw, "DATA:", 5) == 0) {
-      if (!state.fd_opened) {
-        // open cache file for write, lazily, on first DATA frame
-        if (!cache.write(relpath, fd).ok()) {
-          state.ok = false;
-          return false;
-        }
-        state.fd_opened = true;
-      }
       size_t left = (size_t)plen;
       while (left > 0) {
-        ssize_t n = ::write(fd.fd, wp, left);
+        ssize_t n = ::write(state.fd.fd, payload, left);
         if (n < 0) {
-          state.ok = false;
-          return false;
+          return (state.ok = false);
         }
-        wp += n;
+        payload += n;
         left -= (size_t)n;
       }
-    } else if (strncmp(state.fp.raw, "FIN:", 4) == 0) {
+      push_frame_init(&state.fp);
+      continue;
+    }
+    if (strncmp(state.fp.raw, "ERROR:", 6) == 0) {
+      return (state.ok = false);
+    }
+    if (strncmp(state.fp.raw, "FIN:", 4) == 0) {
       state.is_fin = true;
       return true;
-    } else if (strncmp(state.fp.raw, "ERROR:", 6) == 0) {
-      state.ok = false;
     }
-    // INFO or unknown: skip payload, continue
-
-    push_frame_init(&state.fp);
+    // unknown frame type
+    return (state.ok = false);
   }
   return true;
 }
@@ -248,22 +236,25 @@ static bool recv_file(const char *data, size_t datasz, StreamState &state,
 // into the local cache, guarding against duplicate concurrent fetches via
 // keylock and a double exists() check.
 void rebalancer_t::pull_one(const std::string &src_addr,
-                            const std::string &relpath,
-                            const std::string &mtime_str) {
+                            const std::string &relpath) {
+  // make sure it is valid bucket key
   std::string bucket, key;
   if (!relpath_to_bk(relpath, bucket, key))
     return;
 
+  // if file exists, don't pull
   if (node_.cache.exists(relpath))
     return;
 
   // lock relpath so a concurrent pull/fetch can't race this one
   keylock_guard_t kl_guard(node_.keylock, relpath);
 
+  // after getting keylock: if file exists, don't pull.
   if (node_.cache.exists(relpath)) {
     return;
   }
 
+  // prepare to issue HTTP call
   std::string host;
   int port;
   if (!split_addr(src_addr, host, port)) {
@@ -274,33 +265,38 @@ void rebalancer_t::pull_one(const std::string &src_addr,
   cli.set_connection_timeout(5);
   cli.set_read_timeout(30);
 
+  // send to me only if you have it locally. Also, delete after sending.
   std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
+
+  // stream into this temp file
+  relpath_t tmp_rel = node_.cache.tmp_relpath();
   StreamState state;
-  fd_t fd;
 
-  // stream-fetch the object from src_addr
+  int raw_fd = ::open(node_.cache.abspath(tmp_rel).c_str(),
+                      O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (raw_fd < 0) {
+    return;
+  }
+  state.fd = fd_t(raw_fd);
+
+  // stream-fetch the object from src_addr into a temp file
   auto resp = cli.Get(path.c_str(), [&](const char *data, size_t data_length) {
-    return recv_file(data, data_length, state, fd, relpath, node_.cache);
+    return recv_file(data, data_length, state);
   });
+  state.fd.close();
 
+  // commit to cache if ok. drop the temp file if not ok.
   bool ok = resp && resp->status == 200 && state.ok && state.is_fin;
-
-  fd.close();
+  if (ok) {
+    ok = node_.cache.move(tmp_rel, relpath_t(relpath)).ok();
+  }
   if (!ok) {
-    // remove partial/corrupt file written by a failed fetch
-    node_.cache.drop(relpath);
+    node_.cache.drop(tmp_rel);
+    return;
   }
   kl_guard.release();
 
-  if (ok) {
-    time_t mt = 0;
-    try {
-      mt = (time_t)std::stoul(mtime_str);
-    } catch (...) {
-    }
-    mt = mt ? mt : time(nullptr);
-    // trigger an async disk-pressure check now that a file was added
-    node_.jobq.put("maybe_evict");
-    node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
-  }
+  // trigger an async disk-pressure check now that a file was added
+  node_.jobq.put("maybe_evict");
+  node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
 }

@@ -27,8 +27,7 @@ public:
   scan_for_peer(const std::string &peer_nodeid);
 
   // Fetch one entry from src_addr and store it locally.
-  void pull_one(const std::string &src_addr, const std::string &relpath,
-                const std::string &mtime_str);
+  void pull_one(const std::string &src_addr, const std::string &relpath);
 
 private:
   node_t &node_; // owning node; provides ring, LRU, and peer connections

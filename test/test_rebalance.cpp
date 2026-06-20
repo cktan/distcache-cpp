@@ -160,6 +160,6 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
 
 TEST_CASE("pull_one returns early on bad relpath") {
   node_t node("./tmp_test", "127.0.0.1:9999");
-  node.rebalancer.pull_one("127.0.0.1:9999", "bad/relpath", "0");
-  node.rebalancer.pull_one("127.0.0.1:9999", "cache/only_bucket", "0");
+  node.rebalancer.pull_one("127.0.0.1:9999", "bad/relpath");
+  node.rebalancer.pull_one("127.0.0.1:9999", "cache/only_bucket");
 }

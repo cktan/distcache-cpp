@@ -99,7 +99,7 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
   char *pre = nl + 1;
   size_t pre_len = (size_t)((buf + nr) - pre);
 
-  out->type        = type;
+  out->type = type;
   out->payload_len = (size_t)len;
 
   if (len == 0) {
@@ -138,9 +138,9 @@ int stream_in(reader_fn rfn, void *ctx, frame_t *out) {
    the frame completed mid-buffer and buf[consumed..] belongs to the next
    frame. Zero-init p before first use; zero it again to start a new frame. */
 int stream_in_push(push_frame_t *fp, const char *buf, size_t n) {
-  const char* p = buf;
-  const char* q = buf + n;
-  
+  const char *p = buf;
+  const char *q = buf + n;
+
   /* Phase 1: accumulate header bytes until \n */
   while (!fp->newline && p < q && fp->top < 50) {
     char ch = *p++;
@@ -151,12 +151,15 @@ int stream_in_push(push_frame_t *fp, const char *buf, size_t n) {
       fp->newline = fp->raw + fp->top - 1;
   }
   if (!fp->newline) {
-    if (fp->top >= 50) return -1;
+    if (fp->top >= 50)
+      return -1;
     return p - buf;
   }
-  if (!fp->colon || fp->colon >= fp->newline) return -1;
+  if (!fp->colon || fp->colon >= fp->newline)
+    return -1;
   int plen = push_frame_length(fp);
-  if (plen < 0) return -1;
+  if (plen < 0)
+    return -1;
 
   /* Phase 2: accumulate payload */
   int have = &fp->raw[fp->top] - (fp->newline + 1);

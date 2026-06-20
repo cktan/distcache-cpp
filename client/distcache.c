@@ -17,6 +17,7 @@
 #define _GNU_SOURCE /* memmem */
 #include "distcache.h"
 #include "fnv.h"
+#include "ring.h"
 #include "stream.h"
 
 #include <curl/curl.h>
@@ -30,7 +31,7 @@
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 
-#define DC_IDS_PER_NODE 10
+#define DC_IDS_PER_NODE 10 /* must match ring.c */
 #define DC_MAX_REDIRECTS 5
 #define DC_MAX_REDIR_NODES 64
 #define DC_POOL_SIZE 4          /* connection slots per node */
@@ -55,13 +56,6 @@ typedef struct {
   dc_slot_t slots[DC_POOL_SIZE];
 } dc_node_t;
 
-/* ── Ring ───────────────────────────────────────────────────────────────── */
-
-typedef struct {
-  uint32_t id;
-  int node_idx;
-} dc_ring_pt_t;
-
 /* ── Checked-out connection ─────────────────────────────────────────────── */
 
 typedef struct {
@@ -76,8 +70,7 @@ static pthread_mutex_t g_ring_mu = PTHREAD_MUTEX_INITIALIZER;
 static pthread_mutex_t g_hk_mu = PTHREAD_MUTEX_INITIALIZER;
 static dc_node_t **g_nodes = NULL;
 static int g_n_nodes = 0;
-static dc_ring_pt_t *g_ring = NULL;
-static int g_n_ring = 0;
+static ring_t *g_ring = NULL;
 
 /* Split "host:port[/first_id]" into addr and first_id (0 if absent). */
 static void strip_nodeid(const char *raw, char *addr, size_t addr_sz,
@@ -99,110 +92,59 @@ static void strip_nodeid(const char *raw, char *addr, size_t addr_sz,
   }
 }
 
-/* Derive DC_IDS_PER_NODE ring positions for a node via chained FNV-1a hashes.
- */
-static void compute_node_ids(const char *name, uint32_t first_id,
-                             uint32_t ids[DC_IDS_PER_NODE]) {
-  uint32_t prev = 0;
-  for (int i = 0; i < DC_IDS_PER_NODE; i++) {
-    if (i == 0 && first_id != 0) {
-      ids[0] = first_id;
-      prev = first_id;
-    } else {
-      char input[512];
-      if (i == 0)
-        snprintf(input, sizeof(input), "%s", name);
-      else
-        snprintf(input, sizeof(input), "%s:%u", name, (unsigned)prev);
-      prev = ring_hash(prev, input);
-      ids[i] = prev;
-    }
-  }
-}
-
 /* Hash bucket/key to the ring position that owns the object. */
 static uint32_t compute_dest_id(const char *bucket, const char *key) {
   while (*key == '/')
     key++;
   char relpath[1024];
   snprintf(relpath, sizeof(relpath), "cache/%s/%s", bucket, key);
-  return ring_hash(0, relpath);
+  return ring_compute_id(relpath);
 }
 
 /* ── Ring management ────────────────────────────────────────────────────── */
 
-/* qsort comparator for dc_ring_pt_t, ordered by id ascending. */
-static int ring_pt_cmp(const void *a, const void *b) {
-  const dc_ring_pt_t *pa = a, *pb = b;
-  if (pa->id < pb->id)
-    return -1;
-  if (pa->id > pb->id)
-    return 1;
-  return 0;
+/* Build the full nodeid string ("host:port" or "host:port/first_id"). */
+static void node_nodeid(const dc_node_t *n, char *buf, size_t sz) {
+  if (n->first_id)
+    snprintf(buf, sz, "%s/%u", n->name, (unsigned)n->first_id);
+  else {
+    strncpy(buf, n->name, sz - 1);
+    buf[sz - 1] = '\0';
+  }
 }
 
 /* Rebuild the sorted ring from all non-dead nodes. Caller holds g_ring_mu. */
 static int ring_rebuild(void) {
-  int total = 0;
-  for (int i = 0; i < g_n_nodes; i++)
-    if (!g_nodes[i]->dead)
-      total += DC_IDS_PER_NODE;
-
-  if (total == 0) {
-    free(g_ring);
-    g_ring = NULL;
-    g_n_ring = 0;
-    return 0;
-  }
-
-  dc_ring_pt_t *ring = malloc((size_t)total * sizeof(dc_ring_pt_t));
-  if (!ring)
+  ring_t *r = ring_create();
+  if (!r)
     return -1;
-
-  int n = 0;
   for (int i = 0; i < g_n_nodes; i++) {
     if (g_nodes[i]->dead)
       continue;
-    uint32_t ids[DC_IDS_PER_NODE];
-    compute_node_ids(g_nodes[i]->name, g_nodes[i]->first_id, ids);
-    for (int j = 0; j < DC_IDS_PER_NODE; j++) {
-      ring[n].id = ids[j];
-      ring[n].node_idx = i;
-      n++;
-    }
+    char nodeid[DC_NODE_NAME_MAX];
+    node_nodeid(g_nodes[i], nodeid, sizeof(nodeid));
+    ring_add(r, nodeid);
   }
-  qsort(ring, (size_t)n, sizeof(dc_ring_pt_t), ring_pt_cmp);
-
-  /* Deduplicate: for same id keep the node with the smallest name. */
-  int w = 0;
-  for (int r = 0; r < n;) {
-    int end = r;
-    while (end + 1 < n && ring[end + 1].id == ring[r].id)
-      end++;
-    int best = r;
-    for (int k = r + 1; k <= end; k++) {
-      if (strcmp(g_nodes[ring[k].node_idx]->name,
-                 g_nodes[ring[best].node_idx]->name) < 0)
-        best = k;
-    }
-    ring[w++] = ring[best];
-    r = end + 1;
-  }
-
-  free(g_ring);
-  g_ring = ring;
-  g_n_ring = w;
+  ring_finalize(r);
+  ring_destroy(g_ring);
+  g_ring = r;
   return 0;
 }
 
 /* Returns -1 if ring is empty. Caller holds g_ring_mu. */
 static int find_successor(uint32_t target_id) {
-  for (int i = 0; i < g_n_ring; i++) {
-    if (g_ring[i].id >= target_id)
-      return g_ring[i].node_idx;
-  }
-  if (g_n_ring > 0)
-    return g_ring[0].node_idx; /* wrap */
+  char addr[DC_NODE_NAME_MAX];
+  uint32_t fid;
+  const char *nodeid;
+  if (!g_ring)
+    return -1;
+  nodeid = ring_successor(g_ring, target_id);
+  if (!nodeid)
+    return -1;
+  strip_nodeid(nodeid, addr, sizeof(addr), &fid);
+  for (int i = 0; i < g_n_nodes; i++)
+    if (!g_nodes[i]->dead && strcmp(g_nodes[i]->name, addr) == 0)
+      return i;
   return -1;
 }
 
@@ -983,11 +925,10 @@ int dc_init(int n, const char *const *node, char *errmsg, int errsz) {
     free(g_nodes[i]);
   }
   free(g_nodes);
-  free(g_ring);
+  ring_destroy(g_ring);
   g_nodes = nodes;
   g_n_nodes = n;
   g_ring = NULL;
-  g_n_ring = 0;
 
   if (ring_rebuild() != 0) {
     for (int i = 0; i < n; i++) {
@@ -1018,11 +959,10 @@ void dc_final(void) {
     free(g_nodes[i]);
   }
   free(g_nodes);
-  free(g_ring);
+  ring_destroy(g_ring);
   g_nodes = NULL;
   g_n_nodes = 0;
   g_ring = NULL;
-  g_n_ring = 0;
   pthread_mutex_unlock(&g_ring_mu);
 }
 
@@ -1235,7 +1175,7 @@ uint32_t dc_test_fnv1a(uint32_t prev, const char *input) {
   return ring_hash(prev, input);
 }
 void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]) {
-  compute_node_ids(name, 0, ids);
+  ring_compute_ids(name, ids);
 }
 uint32_t dc_test_dest_id(const char *bucket, const char *key) {
   return compute_dest_id(bucket, key);

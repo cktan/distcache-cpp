@@ -163,7 +163,8 @@ rebalancer_t::scan_for_peer(const std::string &peer_nodeid) {
       [&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
         if (mtime < cutoff)
           return;
-        if (ring->successor(rp_id) != peer_nodeid)
+        const char *s = ring_successor(ring.get(), rp_id);
+        if (!s || peer_nodeid != s)
           return;
         heap.push({mtime, relpath});
         if (heap.size() > 50)

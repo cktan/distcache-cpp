@@ -1,86 +1,82 @@
 #pragma once
-// ── Chord Consistent Hashing Ring ───────────────────────────────────────────
-//
-// Ring represents a distributed hash ring (Chord consistent hashing) used to
-// route cache keys to responsible nodes.
-//
-// Keyspace:
-//   The ring occupies a 32-bit integer keyspace: [0, 2^32).
-//
-// Node Placement (Virtual Nodes):
-//   To ensure even distribution, each physical node is assigned 10 virtual
-//   node IDs on the ring. These IDs are computed deterministically from the
-//   node's "host:port" identity using chaining FNV-1a-64 hashes.
-//   An optional first_id parameter can override the first virtual ID for
-//   surgical placement of nodes.
-//
-// Routing / Successor Lookup:
-//   Every cache key (represented by its relpath) is mapped to a 32-bit ID
-//   (relpath_id) using the FNV-1a-64 hash function.
-//   The node responsible for a key is the first node on the ring whose
-//   virtual ID is greater than or equal to the key's relpath_id. If no such
-//   virtual ID exists, the lookup wraps around to the first node on the ring.
-//
-// Collision Resolution:
-//   If two physical nodes share the same virtual ID, the node with the
-//   lexicographically smaller name wins.
-//
-// Thread Safety & Concurrency:
-//   The Ring object is immutable once constructed. Membership changes trigger
-//   a new Ring rebuild, which is atomically stored into a
-//   std::atomic<std::shared_ptr<Ring>> wrapper. This allows lock-free reads
-//   on the hot path (successors lookup) and atomic-swap updates.
+/* ── Chord Consistent Hashing Ring ─────────────────────────────────────────
+ *
+ * ring_t implements a Chord-style distributed hash ring for routing cache
+ * keys to responsible nodes.
+ *
+ * Keyspace: 32-bit unsigned integers [0, 2^32).
+ *
+ * Virtual nodes: each physical node gets 10 virtual IDs derived from its
+ * "host:port" identity via chaining FNV-1a-64 hashes.
+ *
+ * Routing: map a relpath to its relpath_id via ring_compute_id, then call
+ * ring_successor to find the responsible node (first entry whose id >=
+ * relpath_id, wrapping to the first entry if none exists).
+ *
+ * Collision resolution: if two nodes share a virtual ID the one with the
+ * lexicographically smaller name wins.
+ *
+ * Thread safety: ring_t is immutable after ring_finalize. Membership changes
+ * build a new ring_t that is atomically swapped into node_t::ring via
+ * std::atomic<std::shared_ptr<ring_t>>.
+ */
+#include <stddef.h>
+#include <stdint.h>
 
-#include <atomic>
-#include <cstdint>
-#include <map>
-#include <memory>
-#include <string>
-#include <string_view>
-#include <vector>
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-struct RingEntry {
+typedef struct {
   uint32_t id;
-  std::string node;
-};
+  char *node; /* heap-allocated via strdup */
+} ring_entry_t;
 
-class ring_t {
-public:
-  ring_t() = default;
-  explicit ring_t(std::vector<RingEntry> entries);
+typedef struct {
+  ring_entry_t *entries; /* sorted ascending by id after ring_finalize */
+  size_t top;
+  size_t max; /* internal; do not read */
+} ring_t;
 
-  // Chord successor of target_id. Returns "" if ring is empty.
-  std::string successor(uint32_t target_id) const;
+/* Allocate an empty ring. */
+ring_t *ring_create(void);
 
-  // Chord successor skipping any node in excluded.
-  std::string next_after(const std::vector<std::string> &excluded,
-                         uint32_t target_id) const;
+/* Free ring and all owned strings. */
+void ring_destroy(ring_t *r);
 
-  size_t size() const { return entries_.size(); }
-  bool empty() const { return entries_.empty(); }
-  size_t node_count() const;
+/* Add a node; derives 10 virtual IDs from node ("host:port" or
+ * "host:port/first_id"). Duplicates resolved in ring_finalize. */
+void ring_add(ring_t *r, const char *node);
 
-  // Build ring from membership map {node -> [ids]}.
-  // Collision resolution: lexicographically smaller node name wins.
-  static ring_t
-  build(const std::map<std::string, std::vector<uint32_t>> &membership);
+/* Add a node with caller-supplied virtual IDs (for testing). */
+void ring_add_ex(ring_t *r, const char *node, const uint32_t ids[],
+                 size_t nids);
 
-  // Compute 10 ring IDs for node_name.
-  // first_id == 0 means derive id[0] from hash; non-zero overrides it.
-  static std::vector<uint32_t> compute_ids(std::string_view node_name,
-                                           uint32_t first_id = 0);
+/* Sort entries by id and deduplicate (smaller node name wins on tie).
+ * Must be called exactly once after all ring_add calls. */
+void ring_finalize(ring_t *r);
 
-  // relpath_id = ring_hash(0, str) — same formula as relpath_id in Elixir.
-  static uint32_t compute_id(const std::string &str);
+/* Chord successor of target_id. Returns NULL if the ring is empty. */
+const char *ring_successor(const ring_t *r, uint32_t target_id);
 
-private:
-  std::vector<RingEntry> entries_; // sorted ascending by id
+/* Successor skipping nodes in excluded[0..excl_n-1].
+ * Returns NULL if the ring is empty or all nodes are excluded. */
+const char *ring_next_after(const ring_t *r, const char **excluded,
+                            size_t excl_n, uint32_t target_id);
 
-  // Returns first index where entries_[i].id >= target, or size() if none.
-  size_t bisect_left(uint32_t target) const;
-};
+/* Number of virtual-node entries. */
+size_t ring_size(const ring_t *r);
 
-// g_ring is written only by the SWIM event consumer thread (via
-// g_ring.store()) and read lock-free by all other threads (via
-// g_ring.load()). std::atomic<shared_ptr> provides acquire/release
-// semantics on load/store, so readers always see a consistent Ring.
+/* Number of distinct physical nodes. */
+size_t ring_node_count(const ring_t *r);
+
+/* Fill ids[10] with virtual-node IDs for nodeid ("host:port" or
+ * "host:port/first_id"). When first_id is present it becomes ids[0]. */
+void ring_compute_ids(const char *nodeid, uint32_t ids[10]);
+
+/* Compute the ring ID for a relpath string. */
+uint32_t ring_compute_id(const char *str);
+
+#ifdef __cplusplus
+} /* extern "C" */
+#endif

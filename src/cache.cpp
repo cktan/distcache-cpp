@@ -72,7 +72,10 @@ static rc_t errno_to_rc(const std::string &msg) {
 // Initialize cache rooted at homedir; keylock is shared with the lru.
 cache_t::cache_t(keylock_t &keylock, std::string homedir)
     : homedir_(std::move(homedir)),
-      lru_(keylock, ring_t::compute_id, homedir_) {}
+      lru_(
+          keylock,
+          [](const std::string &s) { return ring_compute_id(s.c_str()); },
+          homedir_) {}
 
 // Resolve relpath to an absolute filesystem path under homedir.
 std::string cache_t::abspath(const relpath_t &relpath) const {

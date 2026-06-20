@@ -3,9 +3,22 @@
 #include "doctest.h"
 #include "node.h"
 #include "relpath.h"
+#include "ring.h"
 #include <atomic>
 #include <cstring>
+#include <initializer_list>
+#include <memory>
+#include <string>
 #include <thread>
+
+static std::shared_ptr<ring_t>
+make_ring(std::initializer_list<std::string> nodes) {
+  ring_t *r = ring_create();
+  for (const auto &n : nodes)
+    ring_add(r, n.c_str());
+  ring_finalize(r);
+  return std::shared_ptr<ring_t>(r, ring_destroy);
+}
 
 // ── LRU::scan / get_mtime
 // ─────────────────────────────────────────────────────
@@ -53,20 +66,11 @@ TEST_CASE("lru get_mtime updates after touch") {
 
 TEST_CASE("inject_node adds node to ring") {
   node_t node("./tmp_test", "127.0.0.1:9999");
-  std::map<std::string, std::vector<uint32_t>> m;
-  m["127.0.0.1:4001"] = ring_t::compute_ids("127.0.0.1:4001", 0);
-  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
+  node.ring.store(make_ring({"127.0.0.1:4001"}));
+  CHECK(ring_size(node.ring.load().get()) == 10);
 
-  auto ring_before = node.ring.load();
-  CHECK(ring_before->size() == 10);
-
-  std::map<std::string, std::vector<uint32_t>> m2;
-  m2["127.0.0.1:4001"] = ring_t::compute_ids("127.0.0.1:4001", 0);
-  m2["127.0.0.1:4002"] = ring_t::compute_ids("127.0.0.1:4002", 0);
-  node.ring.store(std::make_shared<ring_t>(ring_t::build(m2)));
-
-  auto ring_after = node.ring.load();
-  CHECK(ring_after->size() == 20);
+  node.ring.store(make_ring({"127.0.0.1:4001", "127.0.0.1:4002"}));
+  CHECK(ring_size(node.ring.load().get()) == 20);
 }
 
 // ── scan_for_peer
@@ -76,11 +80,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   node_t node("./tmp_test", "127.0.0.1:9999");
   std::string node_a = "127.0.0.1:4001";
   std::string node_b = "127.0.0.1:4002";
-  std::map<std::string, std::vector<uint32_t>> m;
-  m[node_a] = ring_t::compute_ids(node_a, 0);
-  m[node_b] = ring_t::compute_ids(node_b, 0);
-  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
-
+  node.ring.store(make_ring({node_a, node_b}));
   auto ring = node.ring.load();
 
   time_t now = time(nullptr);
@@ -88,10 +88,9 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   std::vector<std::pair<std::string, time_t>> batch;
   for (int i = 0; i < 20; i++) {
     std::string rp = "cache/bucket/key" + std::to_string(i);
-    uint32_t rp_id = ring_t::compute_id(rp);
-    std::string owner = ring->successor(rp_id);
+    const char *owner = ring_successor(ring.get(), ring_compute_id(rp.c_str()));
     batch.push_back({rp, now - i * 3600});
-    if (owner == node_b)
+    if (owner && node_b == owner)
       b_relpaths.push_back(rp);
   }
   node.cache.batch_put(batch);
@@ -99,8 +98,9 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   auto result = node.rebalancer.scan_for_peer(node_b);
 
   for (const auto &[rp, mt] : result) {
-    uint32_t rp_id = ring_t::compute_id(rp);
-    CHECK(ring->successor(rp_id) == node_b);
+    const char *s = ring_successor(ring.get(), ring_compute_id(rp.c_str()));
+    CHECK(s != nullptr);
+    CHECK(node_b == s);
   }
   CHECK(result.size() == b_relpaths.size());
 }
@@ -109,19 +109,15 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
   node_t node("./tmp_test", "127.0.0.1:9999");
   std::string node_a = "127.0.0.1:5001";
   std::string node_b = "127.0.0.1:5002";
-  std::map<std::string, std::vector<uint32_t>> m;
-  m[node_a] = ring_t::compute_ids(node_a, 0);
-  m[node_b] = ring_t::compute_ids(node_b, 0);
-  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
-
+  node.ring.store(make_ring({node_a, node_b}));
   auto ring = node.ring.load();
   time_t now = time(nullptr);
 
   std::string old_rp;
   for (int i = 0; i < 100; i++) {
     std::string rp = "cache/old/key" + std::to_string(i);
-    uint32_t rp_id = ring_t::compute_id(rp);
-    if (ring->successor(rp_id) == node_b) {
+    const char *s = ring_successor(ring.get(), ring_compute_id(rp.c_str()));
+    if (s && node_b == s) {
       old_rp = rp;
       node.cache.batch_put({{rp, now - 6 * 86400}});
       break;
@@ -139,10 +135,7 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
   node_t node("./tmp_test", "127.0.0.1:9999");
   std::string node_a = "127.0.0.1:6001";
   std::string node_b = "127.0.0.1:6002";
-  std::map<std::string, std::vector<uint32_t>> m;
-  m[node_a] = ring_t::compute_ids(node_a, 0);
-  m[node_b] = ring_t::compute_ids(node_b, 0);
-  node.ring.store(std::make_shared<ring_t>(ring_t::build(m)));
+  node.ring.store(make_ring({node_a, node_b}));
 
   time_t now = time(nullptr);
   std::vector<std::pair<std::string, time_t>> batch;

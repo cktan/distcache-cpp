@@ -133,7 +133,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     return;
   }
   const relpath_t &relpath = *relpath_opt;
-  uint32_t rp_id = ring_t::compute_id(relpath.str());
+  uint32_t rp_id = ring_compute_id(relpath.str().c_str());
 
   // Check for flags
   bool local_only = req.has_param("local");
@@ -144,7 +144,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
     // The normal case! We need to redirect if this node is not dest.
 
     auto ring = node.ring.load();
-    std::string dest = ring->successor(rp_id);
+    const char *dest_c = ring_successor(ring.get(), rp_id);
+    std::string dest = dest_c ? dest_c : "";
     if (!dest.empty() && dest != node.nodeid) {
       // Key belongs to another ring node; update membership and redirect.
       std::string dest_addr = membership_t::parse_peer(dest).first;
@@ -271,7 +272,7 @@ static void handle_health(node_t &node, const httplib::Request &,
                       std::to_string(m) + "m";
 
   auto ring = node.ring.load();
-  size_t nodes = ring->node_count();
+  size_t nodes = ring_node_count(ring.get());
 
   char used_gib_buf[32];
   snprintf(used_gib_buf, sizeof(used_gib_buf), "%.2f",

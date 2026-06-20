@@ -20,9 +20,9 @@ struct node_t {
   keylock_t keylock;              // serialises concurrent S3 fetches per key
   cache_t cache;                  // file cache; owns lru_t internally
   Stats stats;                    // atomic hit/miss/redirect/error counters
-  std::atomic<std::shared_ptr<ring_t>> ring{
-      std::make_shared<ring_t>()}; // lock-free ring; swapped on membership
-                                   // change
+  std::atomic<std::shared_ptr<ring_t>> ring{std::shared_ptr<ring_t>(
+      ring_create(),
+      ring_destroy)}; // lock-free ring; swapped on membership change
   feed_t feed; // SWIM events + app telemetry; drives membership_t consumer
   feed_t jobq; // async job queue (hint_pull, do_pull, claim_scan, evict);
                // drives rebalancer_t consumer

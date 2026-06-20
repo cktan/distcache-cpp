@@ -40,20 +40,23 @@ void membership_t::rebuild_ring() {
   if (n < 0)
     return;
 
-  std::map<std::string, std::vector<uint32_t>> membership;
-
   auto make_nodeid = [](const std::string &addr, uint32_t fid) {
     return fid ? addr + "/" + std::to_string(fid) : addr;
   };
 
-  membership[make_nodeid(self_addr_, first_id_)] =
-      ring_t::compute_ids(self_addr_, first_id_);
+  ring_t *r = ring_create();
+
+  auto add_node = [&](const std::string &addr, uint32_t fid) {
+    ring_add(r, make_nodeid(addr, fid).c_str());
+  };
+
+  add_node(self_addr_, first_id_);
 
   if (buf && n > 0) {
     const char *p = buf;
     for (int i = 0; i < n; i++) {
       auto [addr, fid] = parse_peer(std::string(p));
-      membership[make_nodeid(addr, fid)] = ring_t::compute_ids(addr, fid);
+      add_node(addr, fid);
       p += strlen(p) + 1;
     }
   }
@@ -61,18 +64,16 @@ void membership_t::rebuild_ring() {
 
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
-    for (const auto &[addr, fid] : injected_) {
-      std::string nodeid = make_nodeid(addr, fid);
-      if (membership.find(nodeid) == membership.end())
-        membership[nodeid] = ring_t::compute_ids(addr, fid);
-    }
+    for (const auto &[addr, fid] : injected_)
+      add_node(addr, fid);
   }
 
-  auto new_ring = std::make_shared<ring_t>(ring_t::build(membership));
+  ring_finalize(r);
+  auto new_ring = std::shared_ptr<ring_t>(r, ring_destroy);
   node_.ring.store(new_ring);
 
-  fprintf(stderr, "ring rebuilt: %zu entries, %zu nodes\n", new_ring->size(),
-          membership.size());
+  fprintf(stderr, "ring rebuilt: %zu entries, %zu nodes\n",
+          ring_size(new_ring.get()), ring_node_count(new_ring.get()));
 }
 
 void membership_t::inject_node(const std::string &nodeid) {

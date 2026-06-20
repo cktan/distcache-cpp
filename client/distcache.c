@@ -16,6 +16,7 @@
 
 #define _GNU_SOURCE /* memmem */
 #include "distcache.h"
+#include "fnv.h"
 #include "stream.h"
 
 #include <curl/curl.h>
@@ -79,26 +80,7 @@ static int g_n_nodes = 0;
 static dc_ring_pt_t *g_ring = NULL;
 static int g_n_ring = 0;
 
-/* ── FNV-1a 64-bit ──────────────────────────────────────────────────────── */
-/* Must produce the same values as the Elixir and Python implementations. */
-
-static uint32_t fnv1a_ring(uint32_t prev, const char *input) {
-  uint64_t h = UINT64_C(14695981039346656037);
-  char prev_str[12];
-  snprintf(prev_str, sizeof(prev_str), "%u", (unsigned)prev);
-  for (const uint8_t *p = (const uint8_t *)prev_str; *p; p++) {
-    h ^= (uint64_t)*p;
-    h *= UINT64_C(1099511628211);
-  }
-  h ^= (uint64_t)':';
-  h *= UINT64_C(1099511628211);
-  for (const uint8_t *p = (const uint8_t *)input; *p; p++) {
-    h ^= (uint64_t)*p;
-    h *= UINT64_C(1099511628211);
-  }
-  return (uint32_t)(h % UINT64_C(0x100000000));
-}
-
+/* Split "host:port[/first_id]" into addr and first_id (0 if absent). */
 static void strip_nodeid(const char *raw, char *addr, size_t addr_sz,
                          uint32_t *first_id) {
   const char *slash = strchr(raw, '/');
@@ -118,6 +100,8 @@ static void strip_nodeid(const char *raw, char *addr, size_t addr_sz,
   }
 }
 
+/* Derive DC_IDS_PER_NODE ring positions for a node via chained FNV-1a hashes.
+ */
 static void compute_node_ids(const char *name, uint32_t first_id,
                              uint32_t ids[DC_IDS_PER_NODE]) {
   uint32_t prev = 0;
@@ -131,22 +115,24 @@ static void compute_node_ids(const char *name, uint32_t first_id,
         snprintf(input, sizeof(input), "%s", name);
       else
         snprintf(input, sizeof(input), "%s:%u", name, (unsigned)prev);
-      prev = fnv1a_ring(prev, input);
+      prev = ring_hash(prev, input);
       ids[i] = prev;
     }
   }
 }
 
+/* Hash bucket/key to the ring position that owns the object. */
 static uint32_t compute_dest_id(const char *bucket, const char *key) {
   while (*key == '/')
     key++;
   char relpath[1024];
   snprintf(relpath, sizeof(relpath), "cache/%s/%s", bucket, key);
-  return fnv1a_ring(0, relpath);
+  return ring_hash(0, relpath);
 }
 
 /* ── Ring management ────────────────────────────────────────────────────── */
 
+/* qsort comparator for dc_ring_pt_t, ordered by id ascending. */
 static int ring_pt_cmp(const void *a, const void *b) {
   const dc_ring_pt_t *pa = a, *pb = b;
   if (pa->id < pb->id)
@@ -223,6 +209,7 @@ static int find_successor(uint32_t target_id) {
 
 /* ── Node management ────────────────────────────────────────────────────── */
 
+/* Allocate a libcurl easy handle with keep-alive, no redirects, HTTP/1.1. */
 static CURL *curl_handle_init(void) {
   CURL *h = curl_easy_init();
   if (!h)
@@ -233,6 +220,7 @@ static CURL *curl_handle_init(void) {
   return h;
 }
 
+/* Initialize node n from raw_name ("host:port[/first_id]"). */
 static void node_init(dc_node_t *n, const char *raw_name) {
   memset(n, 0, sizeof(*n));
   strip_nodeid(raw_name, n->name, DC_NODE_NAME_MAX, &n->first_id);
@@ -240,6 +228,7 @@ static void node_init(dc_node_t *n, const char *raw_name) {
   pthread_cond_init(&n->cv, NULL);
 }
 
+/* Close all pool handles and destroy the node's mutex and condvar. */
 static void node_destroy(dc_node_t *n) {
   for (int i = 0; i < DC_POOL_SIZE; i++) {
     if (n->slots[i].handle) {
@@ -362,6 +351,7 @@ static int ring_add_nodes(const char names[][DC_NODE_NAME_MAX], int n) {
 
 /* ── URL encoding ───────────────────────────────────────────────────────── */
 
+/* Percent-encode src into dst, leaving URL-safe characters unescaped. */
 static void url_encode(const char *src, char *dst, size_t dst_sz) {
   static const char safe[] =
       "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/";
@@ -379,6 +369,7 @@ static void url_encode(const char *src, char *dst, size_t dst_sz) {
 
 /* ── Server error code mapping ──────────────────────────────────────────── */
 
+/* Map a server error-type string to the corresponding DCERR_* constant. */
 static int server_errcode(const char *s) {
   if (strcmp(s, "ERR_UNKNOWN_COMMAND") == 0)
     return DCERR_UNKNOWN_COMMAND;
@@ -403,6 +394,7 @@ static int server_errcode(const char *s) {
 
 /* ── JSON helpers ───────────────────────────────────────────────────────── */
 
+/* Find key in json and copy its string value into val. Returns 0 on success. */
 static int json_str_field(const char *json, size_t jlen, const char *key,
                           char *val, size_t val_sz) {
   char needle[64];
@@ -431,6 +423,8 @@ static int json_str_field(const char *json, size_t jlen, const char *key,
   return -1;
 }
 
+/* Find key in json and copy its numeric value (as text) into val. Returns 0 on
+ * success. */
 static int json_num_field(const char *json, size_t jlen, const char *key,
                           char *val, size_t val_sz) {
   char needle[64];
@@ -521,6 +515,8 @@ typedef struct {
   int cb_failed;
 } stream_state_t;
 
+/* libcurl write callback: parse incoming stream frames and dispatch to st->cb.
+ */
 static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
   stream_state_t *st = ud;
   size_t n = sz * nmemb;
@@ -578,6 +574,7 @@ typedef struct {
   size_t cap;
 } growbuf_t;
 
+/* libcurl write callback: append bytes to a growbuf, resizing as needed. */
 static size_t growbuf_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
   growbuf_t *buf = ud;
   size_t n = sz * nmemb;
@@ -751,6 +748,8 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
 
 /* ── dc_housekeeping ────────────────────────────────────────────────────── */
 
+/* Refresh ring from /_nodes, mark dead nodes, compact tombstones, reap expired
+ * connections. */
 int dc_housekeeping(char *errbuf, int errsz) {
   pthread_mutex_lock(&g_hk_mu);
   int hk_rc = 0;
@@ -940,6 +939,7 @@ int dc_housekeeping(char *errbuf, int errsz) {
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
+/* Initialize the client with n seed nodes; tears down any prior state. */
 int dc_init(int n, const char *const *node, char *errmsg, int errsz) {
   if (n <= 0 || !node) {
     snprintf(errmsg, errsz, "invalid arguments");
@@ -999,6 +999,7 @@ int dc_init(int n, const char *const *node, char *errmsg, int errsz) {
   return 0;
 }
 
+/* Release all resources; must be called with no in-flight dc_get requests. */
 void dc_final(void) {
   pthread_mutex_lock(&g_ring_mu);
   for (int i = 0; i < g_n_nodes; i++) {
@@ -1014,6 +1015,7 @@ void dc_final(void) {
   pthread_mutex_unlock(&g_ring_mu);
 }
 
+/* Fetch the object at bucket/key, streaming DATA payload bytes to cb. */
 int dc_get(const char *bucket, const char *key, void *ctx,
            int (*cb)(void *ctx, const char *buf, int bufsz), char *errmsg,
            int errsz) {
@@ -1082,6 +1084,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   return DCERR_REDIRECT_LOOP;
 }
 
+/* Write live node names into *buf (newline-separated); caller frees *buf. */
 int dc_node(char **buf, int *n) {
   pthread_mutex_lock(&g_ring_mu);
 
@@ -1119,6 +1122,7 @@ int dc_node(char **buf, int *n) {
   return 0;
 }
 
+/* Fetch health stats from node_name and populate out. */
 int dc_health(const char *node_name, dc_health_t *out, char *errmsg,
               int errsz) {
   pthread_mutex_lock(&g_ring_mu);
@@ -1242,12 +1246,15 @@ uint32_t dc_test_fnv1a(uint32_t prev, const char *input);
 void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]);
 uint32_t dc_test_dest_id(const char *bucket, const char *key);
 
+/* Test wrapper for ring_hash. */
 uint32_t dc_test_fnv1a(uint32_t prev, const char *input) {
-  return fnv1a_ring(prev, input);
+  return ring_hash(prev, input);
 }
+/* Test wrapper for compute_node_ids. */
 void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]) {
   compute_node_ids(name, 0, ids);
 }
+/* Test wrapper for compute_dest_id. */
 uint32_t dc_test_dest_id(const char *bucket, const char *key) {
   return compute_dest_id(bucket, key);
 }

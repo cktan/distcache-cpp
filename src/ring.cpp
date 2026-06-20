@@ -64,9 +64,9 @@ std::vector<uint32_t> ring_t::compute_ids(std::string_view node_name,
     if (i == 0 && first_id != 0) {
       id = first_id;
     } else if (i == 0) {
-      id = ring_hash(0, std::string(node_name));
+      id = ring_hash(0, std::string(node_name).c_str());
     } else {
-      id = ring_hash(prev, std::format("{}:{}", node_name, prev));
+      id = ring_hash(prev, std::format("{}:{}", node_name, prev).c_str());
     }
     ids.push_back(id);
     prev = id;
@@ -75,7 +75,7 @@ std::vector<uint32_t> ring_t::compute_ids(std::string_view node_name,
 }
 
 uint32_t ring_t::compute_id(const std::string &str) {
-  return ring_hash(0, str);
+  return ring_hash(0, str.c_str());
 }
 
 ring_t

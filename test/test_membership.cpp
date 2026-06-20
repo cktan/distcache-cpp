@@ -2,24 +2,26 @@
 #include "doctest.h"
 #include "membership.h"
 #include "unique.h"
+#include <mutex>
 #include <regex>
+#include <set>
 #include <string>
 #include <thread>
 #include <vector>
-#include <set>
-#include <mutex>
 
 TEST_SUITE("membership_t") {
   /**
    * @test parse_peer: valid formats
    * @brief Verifies that membership_t::parse_peer correctly parses peer strings
    *        containing valid addresses and optional numeric placement IDs.
-   * 
+   *
    * Steps:
    * 1. Call parse_peer with address-only string "127.0.0.1:4001".
    * 2. Verify that it returns the address with a placement ID of 0.
-   * 3. Call parse_peer with a string containing a slash and a placement ID "127.0.0.1:4001/12345".
-   * 4. Verify that it returns the address "127.0.0.1:4001" and placement ID 12345.
+   * 3. Call parse_peer with a string containing a slash and a placement ID
+   * "127.0.0.1:4001/12345".
+   * 4. Verify that it returns the address "127.0.0.1:4001" and placement ID
+   * 12345.
    * 5. Call parse_peer with placement ID 0.
    * 6. Verify that it returns the address and placement ID 0.
    */
@@ -39,9 +41,10 @@ TEST_SUITE("membership_t") {
 
   /**
    * @test parse_peer: invalid and edge cases
-   * @brief Verifies that membership_t::parse_peer fallback behaves correctly (returns ID 0)
-   *        when given invalid, malformed, or empty placement ID suffixes.
-   * 
+   * @brief Verifies that membership_t::parse_peer fallback behaves correctly
+   * (returns ID 0) when given invalid, malformed, or empty placement ID
+   * suffixes.
+   *
    * Steps:
    * 1. Call parse_peer with trailing slash but no ID.
    * 2. Verify that placement ID is parsed as 0.
@@ -66,12 +69,14 @@ TEST_SUITE("membership_t") {
 
   /**
    * @test timestamp format
-   * @brief Verifies that membership_t::timestamp() returns a valid ISO 8601 UTC timestamp format.
-   * 
+   * @brief Verifies that membership_t::timestamp() returns a valid ISO 8601 UTC
+   * timestamp format.
+   *
    * Steps:
    * 1. Call membership_t::timestamp() to generate a timestamp string.
    * 2. Verify that its length is 20 characters.
-   * 3. Match the timestamp against a regular expression for UTC ISO 8601 formatting: YYYY-MM-DDTHH:MM:SSZ.
+   * 3. Match the timestamp against a regular expression for UTC ISO 8601
+   * formatting: YYYY-MM-DDTHH:MM:SSZ.
    */
   TEST_CASE("timestamp format") {
     std::string ts = membership_t::timestamp();
@@ -85,8 +90,9 @@ TEST_SUITE("membership_t") {
 TEST_SUITE("unique_get") {
   /**
    * @test unique_get sequence
-   * @brief Tests that unique_get returns monotonically increasing and unique IDs on successive calls.
-   * 
+   * @brief Tests that unique_get returns monotonically increasing and unique
+   * IDs on successive calls.
+   *
    * Steps:
    * 1. Retrieve first ID using unique_get.
    * 2. Retrieve second ID.
@@ -100,8 +106,9 @@ TEST_SUITE("unique_get") {
 
   /**
    * @test unique_get concurrency
-   * @brief Verifies that unique_get behaves correctly and remains thread-safe under concurrent usage.
-   * 
+   * @brief Verifies that unique_get behaves correctly and remains thread-safe
+   * under concurrent usage.
+   *
    * Steps:
    * 1. Spawn multiple threads that call unique_get concurrently.
    * 2. Collect all retrieved values into a thread-safe set.
@@ -132,7 +139,8 @@ TEST_SUITE("unique_get") {
       t.join();
     }
 
-    // Verify all generated IDs are unique (set size must equal total generated IDs)
+    // Verify all generated IDs are unique (set size must equal total generated
+    // IDs)
     CHECK(ids.size() == num_threads * iterations_per_thread);
   }
 }

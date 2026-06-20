@@ -43,15 +43,16 @@ static int push_chunked(push_frame_t *p, const char *buf, size_t n,
 
 /**
  * @test single push: complete DATA frame
- * @brief Tests that pushing a complete "DATA" frame with a payload of 5 bytes in a single call
- *        to stream_in_push completes successfully and parses the frame type and payload correctly.
- * 
+ * @brief Tests that pushing a complete "DATA" frame with a payload of 5 bytes
+ * in a single call to stream_in_push completes successfully and parses the
+ * frame type and payload correctly.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Define a complete frame string "DATA:5\nhello".
  * 3. Push the entire frame data.
- * 4. Verify that 12 bytes are consumed, the frame parser marks the frame as complete,
- *    the frame type is "DATA", and the frame payload is "hello".
+ * 4. Verify that 12 bytes are consumed, the frame parser marks the frame as
+ * complete, the frame type is "DATA", and the frame payload is "hello".
  */
 TEST_CASE("single push: complete DATA frame") {
   push_frame_t p = mkframe();
@@ -65,15 +66,15 @@ TEST_CASE("single push: complete DATA frame") {
 
 /**
  * @test single push: zero-length payload
- * @brief Tests that pushing a complete "FIN" frame with a zero-length payload in a single push
- *        is parsed correctly and completes successfully.
- * 
+ * @brief Tests that pushing a complete "FIN" frame with a zero-length payload
+ * in a single push is parsed correctly and completes successfully.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Define a zero-payload frame "FIN:0\n".
  * 3. Push the entire frame data.
- * 4. Verify that 6 bytes are consumed, the frame parser marks the frame as complete,
- *    the frame type is "FIN", and the payload length is 0.
+ * 4. Verify that 6 bytes are consumed, the frame parser marks the frame as
+ * complete, the frame type is "FIN", and the payload length is 0.
  */
 TEST_CASE("single push: zero-length payload") {
   push_frame_t p = mkframe();
@@ -87,12 +88,13 @@ TEST_CASE("single push: zero-length payload") {
 
 /**
  * @test all frame type prefixes accepted
- * @brief Tests that the parser successfully accepts all four valid frame type prefixes:
- *        "INFO", "DATA", "ERROR", and "FIN".
- * 
+ * @brief Tests that the parser successfully accepts all four valid frame type
+ * prefixes: "INFO", "DATA", "ERROR", and "FIN".
+ *
  * Steps:
  * 1. Loop through a set of test frames representing each type prefix.
- * 2. For each frame, initialize a push_frame_t structure and push the frame data.
+ * 2. For each frame, initialize a push_frame_t structure and push the frame
+ * data.
  * 3. Verify that the frame parser successfully parses and completes each type,
  *    matching the expected frame type string.
  */
@@ -109,9 +111,9 @@ TEST_CASE("all frame type prefixes accepted") {
 
 /**
  * @test split header: arrives in two pushes
- * @brief Tests that the parser can correctly assemble and parse a frame when the header
- *        is split and pushed across two separate calls.
- * 
+ * @brief Tests that the parser can correctly assemble and parse a frame when
+ * the header is split and pushed across two separate calls.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Push the first part of the header ("DA").
@@ -135,15 +137,17 @@ TEST_CASE("split header: arrives in two pushes") {
 
 /**
  * @test split payload: arrives in two pushes
- * @brief Tests that the parser can correctly assemble and parse a frame when the payload
- *        is split across two separate pushes.
- * 
+ * @brief Tests that the parser can correctly assemble and parse a frame when
+ * the payload is split across two separate pushes.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
- * 2. Push the first part containing the complete header and a partial payload ("DATA:5\nhe").
+ * 2. Push the first part containing the complete header and a partial payload
+ * ("DATA:5\nhe").
  * 3. Verify that the frame is not complete.
  * 4. Push the second part containing the rest of the payload ("llo").
- * 5. Verify that the frame is complete and the payload is successfully reconstructed as "hello".
+ * 5. Verify that the frame is complete and the payload is successfully
+ * reconstructed as "hello".
  */
 TEST_CASE("split payload: arrives in two pushes") {
   push_frame_t p = mkframe();
@@ -158,14 +162,15 @@ TEST_CASE("split payload: arrives in two pushes") {
 
 /**
  * @test byte-by-byte push
- * @brief Tests that the parser functions correctly when feeding data byte-by-byte
- *        (chunks of 1 byte) via push_chunked.
- * 
+ * @brief Tests that the parser functions correctly when feeding data
+ * byte-by-byte (chunks of 1 byte) via push_chunked.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Define a frame "DATA:3\nabc".
  * 3. Feed the frame byte-by-byte using push_chunked.
- * 4. Verify that the parser marks the frame as complete and the payload is correctly parsed as "abc".
+ * 4. Verify that the parser marks the frame as complete and the payload is
+ * correctly parsed as "abc".
  */
 TEST_CASE("byte-by-byte push") {
   push_frame_t p = mkframe();
@@ -177,16 +182,18 @@ TEST_CASE("byte-by-byte push") {
 
 /**
  * @test multi-frame buffer: consumed < n on second frame boundary
- * @brief Tests that when a buffer contains multiple frames back-to-back, stream_in_push
- *        stops consuming data exactly at the boundary of the first frame and returns
- *        the consumed count, allowing the caller to re-initialize and parse the next frame.
- * 
+ * @brief Tests that when a buffer contains multiple frames back-to-back,
+ * stream_in_push stops consuming data exactly at the boundary of the first
+ * frame and returns the consumed count, allowing the caller to re-initialize
+ * and parse the next frame.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
- * 2. Define a buffer containing two back-to-back frames ("DATA:3\nfooINFO:3\nbar").
+ * 2. Define a buffer containing two back-to-back frames
+ * ("DATA:3\nfooINFO:3\nbar").
  * 3. Call stream_in_push with the entire buffer.
- * 4. Verify that the first frame completes with payload "foo", and the consumed byte count
- *    is less than the total buffer length.
+ * 4. Verify that the first frame completes with payload "foo", and the consumed
+ * byte count is less than the total buffer length.
  * 5. Re-initialize the push_frame_t structure.
  * 6. Push the remaining buffer starting from the offset of the consumed bytes.
  * 7. Verify that the second frame completes with payload "bar".
@@ -211,16 +218,16 @@ TEST_CASE("multi-frame buffer: consumed < n on second frame boundary") {
 
 /**
  * @test max-size payload (8192 bytes)
- * @brief Tests that the parser can successfully process a frame with the maximum
- *        allowed payload size (8192 bytes) fed in 256-byte chunks.
- * 
+ * @brief Tests that the parser can successfully process a frame with the
+ * maximum allowed payload size (8192 bytes) fed in 256-byte chunks.
+ *
  * Steps:
- * 1. Construct a frame containing the maximum payload size of 8192 characters 'x'
- *    preceded by the header "DATA:8192\n".
+ * 1. Construct a frame containing the maximum payload size of 8192 characters
+ * 'x' preceded by the header "DATA:8192\n".
  * 2. Initialize a push_frame_t structure.
  * 3. Feed the frame in 256-byte chunks.
- * 4. Verify that all bytes are processed, the parser marks the frame as complete,
- *    and the parsed payload length/data match the original 8192 'x's.
+ * 4. Verify that all bytes are processed, the parser marks the frame as
+ * complete, and the parsed payload length/data match the original 8192 'x's.
  */
 TEST_CASE("max-size payload (8192 bytes)") {
   std::string frame = "DATA:8192\n" + std::string(8192, 'x');
@@ -237,13 +244,13 @@ TEST_CASE("max-size payload (8192 bytes)") {
  * @brief Tests that calling push_frame_init correctly resets all parsing state
  *        (completeness flags, internal pointers, and byte counters) so the
  *        structure can be reused for a new frame.
- * 
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Push a complete frame ("FIN:0\n") and verify completeness.
  * 3. Call push_frame_init on the structure.
- * 4. Verify that the structure state is fully reset (not complete, pointers are null,
- *    and the write offset top is zero).
+ * 4. Verify that the structure state is fully reset (not complete, pointers are
+ * null, and the write offset top is zero).
  */
 TEST_CASE("push_frame_init resets state between frames") {
   push_frame_t p = mkframe();
@@ -261,8 +268,9 @@ TEST_CASE("push_frame_init resets state between frames") {
 /**
  * @test header exceeds 50 bytes: error
  * @brief Tests that the parser returns an error (-1) if a frame's header
- *        (before the newline character) exceeds the maximum allowed header size limit of 50 bytes.
- * 
+ *        (before the newline character) exceeds the maximum allowed header size
+ * limit of 50 bytes.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Construct a header of 51 bytes without a colon, ending with a newline.
@@ -279,7 +287,7 @@ TEST_CASE("header exceeds 50 bytes: error") {
  * @test invalid length field: error
  * @brief Tests that the parser returns an error (-1) when the length field
  *        in the header is not a valid number.
- * 
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Define a frame header with a non-numeric length field ("DATA:abc\n").
@@ -295,11 +303,13 @@ TEST_CASE("invalid length field: error") {
 /**
  * @test length > 8192: error
  * @brief Tests that the parser returns an error (-1) if the length field
- *        in the header specifies a payload size greater than the maximum allowed limit of 8192 bytes.
- * 
+ *        in the header specifies a payload size greater than the maximum
+ * allowed limit of 8192 bytes.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
- * 2. Define a frame header specifying an excessive length of 8193 bytes ("DATA:8193\n").
+ * 2. Define a frame header specifying an excessive length of 8193 bytes
+ * ("DATA:8193\n").
  * 3. Push the header data.
  * 4. Verify that stream_in_push returns -1 to reject the oversized frame.
  */
@@ -311,9 +321,10 @@ TEST_CASE("length > 8192: error") {
 
 /**
  * @test no colon in header: error
- * @brief Tests that the parser returns an error (-1) if a newline is encountered
- *        in the header before finding a colon, indicating an invalid header format.
- * 
+ * @brief Tests that the parser returns an error (-1) if a newline is
+ * encountered in the header before finding a colon, indicating an invalid
+ * header format.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Define an invalid header that lacks a colon ("DATA\n").
@@ -328,9 +339,9 @@ TEST_CASE("no colon in header: error") {
 
 /**
  * @test empty push does nothing
- * @brief Tests that calling stream_in_push with zero bytes of data has no effect
- *        on the parser state and returns 0.
- * 
+ * @brief Tests that calling stream_in_push with zero bytes of data has no
+ * effect on the parser state and returns 0.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Push an empty buffer (size 0).
@@ -346,8 +357,9 @@ TEST_CASE("empty push does nothing") {
 /**
  * @test push_frame_length returns -1 before header complete
  * @brief Tests that push_frame_length returns -1 when queried before the header
- *        parsing is complete (i.e. before the newline character has been reached).
- * 
+ *        parsing is complete (i.e. before the newline character has been
+ * reached).
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
  * 2. Push a partial header containing only the frame type ("DATA").
@@ -362,11 +374,13 @@ TEST_CASE("push_frame_length returns -1 before header complete") {
 /**
  * @test push_frame_is_complete false mid-payload
  * @brief Tests that the frame is not marked complete and the payload length
- *        is correctly parsed even if only a portion of the payload has been pushed.
- * 
+ *        is correctly parsed even if only a portion of the payload has been
+ * pushed.
+ *
  * Steps:
  * 1. Initialize a push_frame_t structure.
- * 2. Push a buffer containing the complete header and only a partial payload ("DATA:5\nhe").
+ * 2. Push a buffer containing the complete header and only a partial payload
+ * ("DATA:5\nhe").
  * 3. Verify that the frame is not complete.
  * 4. Verify that the parsed payload length is still correctly returned as 5.
  */

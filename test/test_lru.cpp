@@ -16,12 +16,13 @@ TEST_SUITE("LRU") {
    * @test insert and size
    * @brief Tests basic insertion into the LRU cache using put and verifies that
    *        the cache size correctly reflects the number of items inserted.
-   * 
+   *
    * Steps:
-   * 1. Initialize a keylock_t and an lru_t instance using a dummy ID function (no_id)
-   *    and test directory path.
+   * 1. Initialize a keylock_t and an lru_t instance using a dummy ID function
+   * (no_id) and test directory path.
    * 2. Verify that the initial size of the LRU cache is 0.
-   * 3. Insert two entries ("cache/b/k1" and "cache/b/k2") with a timestamp in the past.
+   * 3. Insert two entries ("cache/b/k1" and "cache/b/k2") with a timestamp in
+   * the past.
    * 4. Verify that the LRU cache size is now 2.
    */
   TEST_CASE("insert and size") {
@@ -35,9 +36,10 @@ TEST_SUITE("LRU") {
 
   /**
    * @test remove shrinks map
-   * @brief Tests removing items from the LRU cache using drop and verifies that the cache
-   *        size shrinks accordingly, and dropping non-existent items has no adverse effect.
-   * 
+   * @brief Tests removing items from the LRU cache using drop and verifies that
+   * the cache size shrinks accordingly, and dropping non-existent items has no
+   * adverse effect.
+   *
    * Steps:
    * 1. Initialize a keylock_t and lru_t instance.
    * 2. Insert two entries into the cache.
@@ -59,16 +61,17 @@ TEST_SUITE("LRU") {
 
   /**
    * @test evict_one picks oldest eligible entry
-   * @brief Tests that eviction (evict_one) correctly identifies and evicts the oldest entry
-   *        that is older than the eligibility threshold (e.g. 5 minutes).
-   * 
+   * @brief Tests that eviction (evict_one) correctly identifies and evicts the
+   * oldest entry that is older than the eligibility threshold (e.g. 5 minutes).
+   *
    * Steps:
    * 1. Initialize a keylock_t and lru_t instance.
-   * 2. Insert an old entry ("cache/b/old", timestamp: 600s ago) and a newer entry
+   * 2. Insert an old entry ("cache/b/old", timestamp: 600s ago) and a newer
+   * entry
    *    ("cache/b/new", timestamp: 100s ago).
    * 3. Call evict_one with a callback that records the evicted entry path.
-   * 4. Verify that evict_one returns true, the evicted entry is the old one, and the cache
-   *    size decreases to 1.
+   * 4. Verify that evict_one returns true, the evicted entry is the old one,
+   * and the cache size decreases to 1.
    */
   TEST_CASE("evict_one picks oldest eligible entry") {
     keylock_t keylock;
@@ -89,14 +92,15 @@ TEST_SUITE("LRU") {
 
   /**
    * @test evict_one skips entries younger than 5 min
-   * @brief Tests that evict_one refuses to evict entries that are younger than 5 minutes,
-   *        even if they are the only entries in the cache.
-   * 
+   * @brief Tests that evict_one refuses to evict entries that are younger than
+   * 5 minutes, even if they are the only entries in the cache.
+   *
    * Steps:
    * 1. Initialize a keylock_t and lru_t instance.
    * 2. Insert a fresh entry ("cache/b/fresh", timestamp: 60s ago).
    * 3. Call evict_one with a callback.
-   * 4. Verify that evict_one returns false, no entry is evicted, and the cache size remains 1.
+   * 4. Verify that evict_one returns false, no entry is evicted, and the cache
+   * size remains 1.
    */
   TEST_CASE("evict_one skips entries younger than 5 min") {
     keylock_t keylock;
@@ -115,12 +119,14 @@ TEST_SUITE("LRU") {
 
   /**
    * @test cold_list rebuilt when exhausted
-   * @brief Tests that when multiple eligible entries are inserted, successive calls to
-   *        evict_one successfully evict all of them, rebuilding the internal cold list as needed.
-   * 
+   * @brief Tests that when multiple eligible entries are inserted, successive
+   * calls to evict_one successfully evict all of them, rebuilding the internal
+   * cold list as needed.
+   *
    * Steps:
    * 1. Initialize a keylock_t and lru_t instance.
-   * 2. Insert three old entries ("cache/b/a", "cache/b/b", and "cache/b/c", all > 5 minutes old).
+   * 2. Insert three old entries ("cache/b/a", "cache/b/b", and "cache/b/c", all
+   * > 5 minutes old).
    * 3. Call evict_one three times, verifying each call returns true.
    * 4. Verify that all 3 entries were evicted and the cache size becomes 0.
    */
@@ -144,9 +150,9 @@ TEST_SUITE("LRU") {
 
   /**
    * @test scan_insert batch populates map
-   * @brief Tests that a batch of entries can be successfully inserted into the LRU cache at once
-   *        using batch_put.
-   * 
+   * @brief Tests that a batch of entries can be successfully inserted into the
+   * LRU cache at once using batch_put.
+   *
    * Steps:
    * 1. Initialize a keylock_t and lru_t instance.
    * 2. Define a batch list of pairs mapping key paths to timestamps.
@@ -170,7 +176,7 @@ TEST_SUITE("KeyLock") {
   /**
    * @test acquire and release
    * @brief Tests basic acquisition and release of a lock for a specific key.
-   * 
+   *
    * Steps:
    * 1. Initialize a keylock_t instance.
    * 2. Call acquire on a key path ("cache/b/k").
@@ -184,15 +190,18 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test second acquirer blocks until release
-   * @brief Tests that when a key lock is already acquired, a second thread attempting to
-   *        acquire the same lock blocks until the first thread releases it.
-   * 
+   * @brief Tests that when a key lock is already acquired, a second thread
+   * attempting to acquire the same lock blocks until the first thread releases
+   * it.
+   *
    * Steps:
-   * 1. Initialize a keylock_t instance and an atomic boolean tracker (waiter_ran).
+   * 1. Initialize a keylock_t instance and an atomic boolean tracker
+   * (waiter_ran).
    * 2. Acquire the lock for key "cache/b/k" on the main thread.
-   * 3. Spawn a worker thread that attempts to acquire the same lock, set waiter_ran to true,
-   *    and release it.
-   * 4. Sleep for 50 milliseconds and verify that the worker thread hasn't proceeded (waiter_ran is false).
+   * 3. Spawn a worker thread that attempts to acquire the same lock, set
+   * waiter_ran to true, and release it.
+   * 4. Sleep for 50 milliseconds and verify that the worker thread hasn't
+   * proceeded (waiter_ran is false).
    * 5. Release the lock from the main thread.
    * 6. Join the worker thread and verify that waiter_ran is now true.
    */
@@ -218,17 +227,18 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test multiple waiters all proceed after release
-   * @brief Tests that multiple threads waiting on the same key lock are all eventually
-   *        unblocked in sequence after the lock is released.
-   * 
+   * @brief Tests that multiple threads waiting on the same key lock are all
+   * eventually unblocked in sequence after the lock is released.
+   *
    * Steps:
    * 1. Initialize a keylock_t instance and an atomic count (done_count).
    * 2. Acquire the lock for key "cache/b/k" on the main thread.
-   * 3. Spawn 4 worker threads, each attempting to acquire the lock, increment done_count,
-   *    and release the lock.
+   * 3. Spawn 4 worker threads, each attempting to acquire the lock, increment
+   * done_count, and release the lock.
    * 4. Sleep for 50 milliseconds to ensure workers are blocked.
    * 5. Release the lock from the main thread.
-   * 6. Join all threads and verify that all 4 workers completed their execution (done_count is 4).
+   * 6. Join all threads and verify that all 4 workers completed their execution
+   * (done_count is 4).
    */
   TEST_CASE("multiple waiters all proceed after release") {
     keylock_t kl;
@@ -256,9 +266,9 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test different keys do not interfere
-   * @brief Tests that acquiring a lock on one key does not block or interfere with acquiring
-   *        a lock on a different key.
-   * 
+   * @brief Tests that acquiring a lock on one key does not block or interfere
+   * with acquiring a lock on a different key.
+   *
    * Steps:
    * 1. Initialize a keylock_t instance.
    * 2. Acquire the lock for "cache/b/k1".
@@ -275,8 +285,9 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test try_acquire succeeds when idle
-   * @brief Tests that try_acquire returns true and acquires the lock when the key lock is currently unlocked.
-   * 
+   * @brief Tests that try_acquire returns true and acquires the lock when the
+   * key lock is currently unlocked.
+   *
    * Steps:
    * 1. Initialize a keylock_t instance.
    * 2. Call try_acquire on a key and verify it returns true.
@@ -290,8 +301,9 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test try_acquire fails immediately when locked
-   * @brief Tests that try_acquire returns false immediately without blocking when the key lock is already held.
-   * 
+   * @brief Tests that try_acquire returns false immediately without blocking
+   * when the key lock is already held.
+   *
    * Steps:
    * 1. Initialize a keylock_t instance.
    * 2. Call try_acquire to lock the key successfully.
@@ -307,8 +319,9 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test try_acquire succeeds again after release
-   * @brief Tests that a previously locked key becomes lockable via try_acquire again after it has been released.
-   * 
+   * @brief Tests that a previously locked key becomes lockable via try_acquire
+   * again after it has been released.
+   *
    * Steps:
    * 1. Initialize a keylock_t instance.
    * 2. Call try_acquire to lock the key.
@@ -326,13 +339,14 @@ TEST_SUITE("KeyLock") {
 
   /**
    * @test try_acquire does not block
-   * @brief Tests that try_acquire on an already locked key in a separate thread returns false
-   *        and exits immediately without blocking.
-   * 
+   * @brief Tests that try_acquire on an already locked key in a separate thread
+   * returns false and exits immediately without blocking.
+   *
    * Steps:
    * 1. Initialize a keylock_t instance.
    * 2. Acquire the key lock on the main thread.
-   * 3. Spawn a worker thread that performs a try_acquire on the same key, checks that it returned false, and finishes.
+   * 3. Spawn a worker thread that performs a try_acquire on the same key,
+   * checks that it returned false, and finishes.
    * 4. Join the worker thread and verify it finished without blocking.
    * 5. Release the key lock on the main thread.
    */

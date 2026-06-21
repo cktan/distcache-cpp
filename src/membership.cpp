@@ -9,8 +9,10 @@
 #include <thread>
 #include <unistd.h>
 
+// Bind membership to a node; swim instance starts null until start() is called.
 membership_t::membership_t(node_t &n) : node_(n) {}
 
+// Parse "addr/cookie" peer string; returns {addr, 0} if cookie is absent or invalid.
 std::pair<std::string, uint32_t>
 membership_t::parse_peer(const std::string &s) {
   size_t slash = s.find('/');
@@ -30,6 +32,7 @@ membership_t::parse_peer(const std::string &s) {
   return {addr, static_cast<uint32_t>(val)};
 }
 
+// Rebuild consistent hash ring from live SWIM peers and injected nodes; atomically replaces node_.ring.
 void membership_t::rebuild_ring() {
   std::lock_guard<std::mutex> lk(ring_mu_);
   if (!inst_)
@@ -45,12 +48,16 @@ void membership_t::rebuild_ring() {
   };
 
   ring_t *r = ring_create();
+  if (!r) {
+    free(buf);
+    return;
+  }
 
   auto add_node = [&](const std::string &addr, uint32_t fid) {
     ring_add(r, make_nodeid(addr, fid).c_str());
   };
 
-  add_node(self_addr_, first_id_);
+  ring_add(r, node_.nodeid.c_str());
 
   if (buf && n > 0) {
     const char *p = buf;
@@ -76,6 +83,7 @@ void membership_t::rebuild_ring() {
           ring_size(new_ring.get()), ring_node_count(new_ring.get()));
 }
 
+// Inject a node into the ring outside of SWIM (e.g. for testing or forced membership).
 void membership_t::inject_node(const std::string &nodeid) {
   auto [addr, fid] = parse_peer(nodeid);
   {
@@ -85,6 +93,7 @@ void membership_t::inject_node(const std::string &nodeid) {
   rebuild_ring();
 }
 
+// Start SWIM membership on the given nodeid, seeding from peers; spawns claim sweep thread.
 bool membership_t::start(const std::string &nodeid,
                          const std::vector<std::string> &seeds) {
   auto [addr, fid] = parse_peer(nodeid);
@@ -98,9 +107,6 @@ bool membership_t::start(const std::string &nodeid,
     return false;
   }
   uint16_t port = static_cast<uint16_t>(p);
-
-  self_addr_ = addr;
-  first_id_ = fid;
 
   std::string cookie = fid ? std::to_string(fid) : "";
 
@@ -181,6 +187,7 @@ bool membership_t::start(const std::string &nodeid,
   return true;
 }
 
+// Gracefully leave the SWIM cluster; cancels claim thread and calls swim_leave.
 void membership_t::leave() {
   // cancel and join the claim sweep thread before releasing node state
   {
@@ -201,11 +208,13 @@ void membership_t::leave() {
     swim_leave(tmp);
 }
 
+// Hint to SWIM that a peer is alive; used to accelerate convergence after a redirect.
 void membership_t::hint_alive(const std::string &peer_addr) {
   if (inst_)
     swim_hint_alive(inst_, peer_addr.c_str());
 }
 
+// Return addresses of all SWIM-alive peers (excludes self).
 std::vector<std::string> membership_t::alive_peers() {
   swim_t *inst = nullptr;
   {
@@ -234,18 +243,15 @@ std::vector<std::string> membership_t::alive_peers() {
   return result;
 }
 
+// Return raw nodeids of all known peers including self, preserving cookie suffixes.
 std::vector<std::string> membership_t::raw_peers() {
   swim_t *inst = nullptr;
   std::vector<std::string> result;
   {
     std::lock_guard<std::mutex> lk(ring_mu_);
     inst = inst_;
-    if (!self_addr_.empty()) {
-      std::string self_nodeid = self_addr_;
-      if (first_id_)
-        self_nodeid += "/" + std::to_string(first_id_);
-      result.push_back(self_nodeid);
-    }
+    if (inst)
+      result.push_back(node_.nodeid);
   }
   if (!inst)
     return result;
@@ -263,6 +269,7 @@ std::vector<std::string> membership_t::raw_peers() {
   return result;
 }
 
+// Format current UTC time as ISO 8601 string for log lines.
 std::string membership_t::timestamp() {
   time_t now = time(nullptr);
   struct tm tm;

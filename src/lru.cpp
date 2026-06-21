@@ -72,7 +72,7 @@ double lru_t::disk_used_gib() {
 // Return true if statvfs fails, indicating a disk I/O or mount problem.
 bool lru_t::disk_error() {
   struct statvfs st;
-  return statvfs("./", &st) < 0;
+  return statvfs(homedir_.c_str(), &st) < 0;
 }
 
 // Rebuild cold_list_ min-heap from map_; caller must hold map_mtx_.

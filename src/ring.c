@@ -8,13 +8,10 @@
 /* Allocate a zeroed ring_t on the heap. */
 ring_t *ring_create(void) { return calloc(1, sizeof(ring_t)); }
 
-/* Free all owned strings and the entries array, then the ring itself. */
+/* Free all owned resources and the entries array, then the ring itself. */
 void ring_destroy(ring_t *r) {
-  size_t i;
   if (!r)
     return;
-  for (i = 0; i < r->top; i++)
-    free(r->entries[i].node);
   free(r->entries);
   free(r);
 }
@@ -31,22 +28,25 @@ static void ensure_cap(ring_t *r, size_t need) {
   r->max = cap;
 }
 
-/* Append (id, strdup(node)) pairs for each of the nids IDs. */
-void ring_add_ex(ring_t *r, const char *node, const uint32_t ids[],
+/* Append (id, node) pairs for each of the nids IDs. */
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
                  size_t nids) {
   size_t i;
   ensure_cap(r, r->top + nids);
   for (i = 0; i < nids; i++) {
     r->entries[r->top].id = ids[i];
-    r->entries[r->top].node = strdup(node);
+    r->entries[r->top].node = node;
     r->top++;
   }
 }
 
-/* Derive 10 virtual IDs from node ("host:port" or "host:port/first_id"). */
-void ring_add(ring_t *r, const char *node) {
+/* Derive 10 virtual IDs from node. */
+void ring_add(ring_t *r, nodeid_idx_t node) {
+  const char *node_str = nodeid_lookup(node);
+  if (!node_str)
+    return;
   uint32_t ids[10];
-  ring_compute_ids(node, ids);
+  ring_compute_ids(node_str, ids);
   ring_add_ex(r, node, ids, 10);
 }
 
@@ -57,7 +57,13 @@ static int entry_cmp(const void *a, const void *b) {
     return -1;
   if (ea->id > eb->id)
     return 1;
-  return strcmp(ea->node, eb->node);
+  const char *sa = nodeid_lookup(ea->node);
+  const char *sb = nodeid_lookup(eb->node);
+  if (!sa)
+    return sb ? 1 : 0;
+  if (!sb)
+    return -1;
+  return strcmp(sa, sb);
 }
 
 /* Sort then deduplicate: keep the first (smallest-name) entry per id. */
@@ -72,11 +78,18 @@ void ring_finalize(ring_t *r) {
       if (i != out)
         r->entries[out] = r->entries[i];
       out++;
-    } else {
-      free(r->entries[i].node);
     }
   }
   r->top = out;
+
+  /* Initialize and populate Bloom filter */
+  nodeid_bloom_init(&r->bloom);
+  for (i = 0; i < r->top; i++) {
+    const char *node_str = nodeid_lookup(r->entries[i].node);
+    if (node_str) {
+      nodeid_bloom_add(&r->bloom, node_str);
+    }
+  }
 }
 
 /* First index where entries[i].id >= target, or n if none. */
@@ -93,10 +106,10 @@ static size_t bisect_left(const ring_t *r, uint32_t target) {
 }
 
 /* Return the successor node for target_id, wrapping around if needed. */
-const char *ring_successor(const ring_t *r, uint32_t target_id) {
+nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id) {
   size_t idx;
   if (r->top == 0)
-    return NULL;
+    return NODEID_NONE;
   idx = bisect_left(r, target_id);
   if (idx == r->top)
     idx = 0;
@@ -104,25 +117,25 @@ const char *ring_successor(const ring_t *r, uint32_t target_id) {
 }
 
 /* Return first successor not in the excluded list. */
-const char *ring_next_after(const ring_t *r, const char **excluded,
-                            size_t excl_n, uint32_t target_id) {
+nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
+                             size_t excl_n, uint32_t target_id) {
   size_t i, j, start;
   if (r->top == 0)
-    return NULL;
+    return NODEID_NONE;
   if (excl_n == 0)
     return ring_successor(r, target_id);
   start = bisect_left(r, target_id);
   if (start == r->top)
     start = 0;
   for (i = 0; i < r->top; i++) {
-    const char *node = r->entries[(start + i) % r->top].node;
+    nodeid_idx_t node = r->entries[(start + i) % r->top].node;
     for (j = 0; j < excl_n; j++)
-      if (strcmp(node, excluded[j]) == 0)
+      if (nodeid_eq(node, excluded[j]))
         break;
     if (j == excl_n)
       return node;
   }
-  return NULL;
+  return NODEID_NONE;
 }
 
 /* Number of virtual-node entries. */
@@ -133,7 +146,7 @@ size_t ring_node_count(const ring_t *r) {
   size_t i, j, unique = 0;
   for (i = 0; i < r->top; i++) {
     for (j = 0; j < i; j++)
-      if (strcmp(r->entries[i].node, r->entries[j].node) == 0)
+      if (nodeid_eq(r->entries[i].node, r->entries[j].node))
         break;
     if (j == i)
       unique++;

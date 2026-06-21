@@ -29,6 +29,7 @@ extern int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
 extern int dc_test_parse_nodes(const char *payload, int plen,
                                char names[][DC_NODE_NAME_MAX], int max_names);
 extern int dc_test_server_errcode(const char *s);
+extern int dc_test_fin_callback(void);
 
 /* ── Minimal test harness ───────────────────────────────────────────────────
  */
@@ -141,13 +142,13 @@ static void test_dest_id(void) {
 /* ── Lifecycle tests ────────────────────────────────────────────────────────
  */
 
+/* Unit tests for the client lifecycle functions (dc_init, dc_final, dc_node).
+ */
 static void test_lifecycle(void) {
   section("Lifecycle (dc_init / dc_final / dc_node)");
 
-  char errmsg[256];
-
   const char *nodes[] = {"node1:4001", "node2:4002"};
-  int rc = dc_init(2, nodes, errmsg, sizeof(errmsg));
+  int rc = dc_init(2, nodes);
   CHECK(rc == 0, "dc_init with two nodes returns 0");
 
   char *buf = NULL;
@@ -160,12 +161,11 @@ static void test_lifecycle(void) {
   CHECK(buf[strlen(buf)] == '\0', "buf is null-terminated");
   free(buf);
 
-  dc_final();
-  CHECK(1, "dc_final does not crash");
+  CHECK(dc_final() == 0, "dc_final returns 0");
 
   /* single node */
   const char *one[] = {"127.0.0.1:4001"};
-  rc = dc_init(1, one, errmsg, sizeof(errmsg));
+  rc = dc_init(1, one);
   CHECK(rc == 0, "dc_init with one node returns 0");
   buf = NULL;
   n = 0;
@@ -173,7 +173,7 @@ static void test_lifecycle(void) {
   CHECK(n == 1, "dc_node reports 1 node");
   CHECK(strstr(buf, "127.0.0.1:4001\n") != NULL, "buf contains seed node");
   free(buf);
-  dc_final();
+  CHECK(dc_final() == 0, "dc_final returns 0");
 }
 
 /* ── Wire parsing tests ─────────────────────────────────────────────────────
@@ -221,6 +221,9 @@ static void test_wire_parsing(void) {
   CHECK(ok == 1, "REDIRECT: no trailing newline still parses");
   CHECK(strcmp(name, "node:4001") == 0,
         "REDIRECT: value correct without newline");
+
+  CHECK(dc_test_fin_callback() == 0,
+        "FIN: callback invoked with bufsz == 0 on EOF");
 }
 
 static void test_nodes_parsing(void) {
@@ -312,6 +315,7 @@ static int abort_cb(void *ctx, const char *buf, int n) {
   return -1;
 }
 
+/* Integration tests using a live local server instance. */
 static void test_integration(void) {
   section("Integration (requires live node at localhost:4001)");
 
@@ -320,48 +324,50 @@ static void test_integration(void) {
     return;
   }
 
-  char errmsg[256];
   const char *nodes[] = {"localhost:4001"};
-  int rc = dc_init(1, nodes, errmsg, sizeof(errmsg));
+  int rc = dc_init(1, nodes);
   CHECK(rc == 0, "dc_init for live node");
   if (rc != 0) {
-    printf("       errmsg: %s\n", errmsg);
+    printf("       errmsg: %s\n", dc_errmsg());
     return;
   }
 
   /* dc_health */
-  dc_health_t h = {0};
-  rc = dc_health("localhost:4001", &h, errmsg, sizeof(errmsg));
+  char *h_buf = NULL;
+  rc = dc_health("localhost:4001", &h_buf);
   CHECK(rc == 0, "dc_health returns 0");
   if (rc == 0) {
-    CHECK(h.id[0] != '\0', "health id field non-empty");
-    CHECK(h.nodes > 0, "health nodes > 0");
+    CHECK(h_buf != NULL, "health buffer is not NULL");
+    CHECK(strstr(h_buf, "addr") != NULL, "health JSON contains 'addr'");
+    free(h_buf);
   } else {
-    printf("       errmsg: %s\n", errmsg);
+    printf("       errmsg: %s\n", dc_errmsg());
   }
 
   /* dc_health on unknown node */
-  rc = dc_health("nohost:9999", &h, errmsg, sizeof(errmsg));
-  CHECK(rc == DCERR_NO_NODE, "dc_health on unknown node returns DCERR_NO_NODE");
+  char *h_buf2 = NULL;
+  rc = dc_health("nohost:9999", &h_buf2);
+  CHECK(rc == -1, "dc_health on unknown node returns -1");
+  CHECK(dc_errno() == DCERR_NO_NODE, "dc_errno() is DCERR_NO_NODE");
+  CHECK(h_buf2 == NULL, "health buffer is NULL on error");
 
   /* dc_get on missing key — expect a server error, not a crash */
   tbuf_t data = {0};
-  rc = dc_get("no-such-bucket", "no-such-key", &data, tbuf_cb, errmsg,
-              sizeof(errmsg));
-  CHECK(rc != 0, "dc_get on missing key returns non-zero");
-  CHECK(errmsg[0] != '\0', "errmsg set on missing key");
+  rc = dc_get("no-such-bucket", "no-such-key", &data, tbuf_cb);
+  CHECK(rc == -1, "dc_get on missing key returns -1");
+  CHECK(dc_errno() != 0, "dc_errno() set on missing key");
+  CHECK(dc_errmsg()[0] != '\0', "dc_errmsg() set on missing key");
   free(data.data);
 
   /* callback abort */
   tbuf_t data2 = {0};
-  rc = dc_get("no-such-bucket", "no-such-key", &data2, abort_cb, errmsg,
-              sizeof(errmsg));
+  rc = dc_get("no-such-bucket", "no-such-key", &data2, abort_cb);
   /* either DCERR_CALLBACK_FAILED (if DATA was delivered) or a server error */
-  CHECK(rc != 0, "dc_get with aborting callback returns non-zero");
+  CHECK(rc == -1, "dc_get with aborting callback returns -1");
+  CHECK(dc_errno() != 0, "dc_errno() set on aborting callback");
   free(data2.data);
 
-  dc_final();
-  CHECK(1, "dc_final after integration tests");
+  CHECK(dc_final() == 0, "dc_final after integration tests");
 }
 
 /* ── Main ───────────────────────────────────────────────────────────────────

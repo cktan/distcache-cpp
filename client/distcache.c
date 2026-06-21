@@ -1,17 +1,16 @@
 /*
  * DistCache C client implementation.
  *
- * Global ring protected by g_ring_mu.
- * Each node owns its lock, dead flag, and per-slot connection pool.
- * Ring lock is released before any network I/O or callback invocations.
+ * Global state lives in g_dctab (mutex, dynamic nodes array, ring).
+ * Connection pool lives in a global ring-buffer connection pool (g_curl_pool).
+ * g_dctab.mutex is released before any network I/O or callback invocations.
  *
  * Connection lifecycle:
- *   - Each slot has an expire_time (now + DC_CONN_EXPIRE_SECS at lazy init).
- *   - Expired idle slots are reaped at checkout and by dc_housekeeping.
- *   - Dead nodes (removed from the server's ring) are marked in-place;
- *     their idle connections are closed immediately and busy connections are
- *     closed at checkin. The dc_node_t tombstone stays in g_nodes until
- *     the next dc_housekeeping call compacts it (if fully drained).
+ *   - The global pool caches up to CURL_POOL_CAP connections with keep-alive.
+ *   - Each slot has an expire_time (now + DC_CONN_EXPIRE_SECS).
+ *   - Expired idle slots are reaped at checkout.
+ *   - Connections to dead nodes (removed from the server's ring) are pruned
+ *     immediately by dc_housekeeping calling curl_pool_gc.
  */
 
 #define _GNU_SOURCE /* memmem */
@@ -19,6 +18,8 @@
 #include "fnv.h"
 #include "ring.h"
 #include "stream.h"
+
+#include "nodeid.h"
 
 #include <curl/curl.h>
 #include <pthread.h>
@@ -34,63 +35,29 @@
 #define DC_IDS_PER_NODE 10 /* must match ring.c */
 #define DC_MAX_REDIRECTS 5
 #define DC_MAX_REDIR_NODES 64
-#define DC_POOL_SIZE 4          /* connection slots per node */
 #define DC_CONN_EXPIRE_SECS 300 /* 5 minutes */
-
-/* ── Per-connection slot ────────────────────────────────────────────────── */
-
-typedef struct {
-  CURL *handle;
-  int busy;
-  time_t expire_time; /* 0 = uninitialized; >0 = absolute expiry deadline */
-} dc_slot_t;
-
-/* ── Node (owns lock, dead flag, and all connection slots) ──────────────── */
-
-typedef struct {
-  char name[DC_NODE_NAME_MAX];
-  uint32_t first_id;
-  int dead;
-  pthread_mutex_t mu;
-  pthread_cond_t cv;
-  dc_slot_t slots[DC_POOL_SIZE];
-} dc_node_t;
 
 /* ── Checked-out connection ─────────────────────────────────────────────── */
 
 typedef struct {
-  dc_node_t *node;
-  int idx;
-  CURL *curl;
+  nodeid_idx_t nodeid; /* identifies the node this connection belongs to */
+  CURL *curl;          /* handle fetched from curl pool or freshly created */
 } dc_conn_t;
 
 /* ── Global state ───────────────────────────────────────────────────────── */
 
-static pthread_mutex_t g_ring_mu = PTHREAD_MUTEX_INITIALIZER;
-static pthread_mutex_t g_hk_mu = PTHREAD_MUTEX_INITIALIZER;
-static dc_node_t **g_nodes = NULL;
-static int g_n_nodes = 0;
-static ring_t *g_ring = NULL;
+static struct {
+  pthread_mutex_t
+      mutex;           /* guards nodes[], n_nodes, ring; released during I/O */
+  nodeid_idx_t *nodes; /* dynamic array of known node indices */
+  int n_nodes;
+  ring_t *ring;
+} g_dctab = {
+    .mutex = PTHREAD_MUTEX_INITIALIZER,
+};
 
-/* Split "host:port[/first_id]" into addr and first_id (0 if absent). */
-static void strip_nodeid(const char *raw, char *addr, size_t addr_sz,
-                         uint32_t *first_id) {
-  const char *slash = strchr(raw, '/');
-  if (slash) {
-    size_t alen = (size_t)(slash - raw);
-    if (alen >= addr_sz)
-      alen = addr_sz - 1;
-    memcpy(addr, raw, alen);
-    addr[alen] = '\0';
-    char *end;
-    unsigned long val = strtoul(slash + 1, &end, 10);
-    *first_id = (end != slash + 1 && *end == '\0') ? (uint32_t)val : 0;
-  } else {
-    strncpy(addr, raw, addr_sz - 1);
-    addr[addr_sz - 1] = '\0';
-    *first_id = 0;
-  }
-}
+static __thread int myerrno;
+static __thread char myerrmsg[200];
 
 /* Hash bucket/key to the ring position that owns the object. */
 static uint32_t compute_dest_id(const char *bucket, const char *key) {
@@ -103,48 +70,32 @@ static uint32_t compute_dest_id(const char *bucket, const char *key) {
 
 /* ── Ring management ────────────────────────────────────────────────────── */
 
-/* Build the full nodeid string ("host:port" or "host:port/first_id"). */
-static void node_nodeid(const dc_node_t *n, char *buf, size_t sz) {
-  if (n->first_id)
-    snprintf(buf, sz, "%s/%u", n->name, (unsigned)n->first_id);
-  else {
-    strncpy(buf, n->name, sz - 1);
-    buf[sz - 1] = '\0';
-  }
-}
-
-/* Rebuild the sorted ring from all non-dead nodes. Caller holds g_ring_mu. */
+/* Rebuild the sorted ring from all non-dead nodes. Caller holds g_dctab.mutex.
+ */
 static int ring_rebuild(void) {
   ring_t *r = ring_create();
   if (!r)
     return -1;
-  for (int i = 0; i < g_n_nodes; i++) {
-    if (g_nodes[i]->dead)
-      continue;
-    char nodeid[DC_NODE_NAME_MAX];
-    node_nodeid(g_nodes[i], nodeid, sizeof(nodeid));
-    ring_add(r, nodeid);
-  }
+  for (int i = 0; i < g_dctab.n_nodes; i++)
+    ring_add(r, g_dctab.nodes[i]);
   ring_finalize(r);
-  ring_destroy(g_ring);
-  g_ring = r;
+  ring_destroy(g_dctab.ring);
+  g_dctab.ring = r;
   return 0;
 }
 
-/* Returns -1 if ring is empty. Caller holds g_ring_mu. */
+/* Return index into g_dctab.node[] whose ring position is the successor of
+ * target_id. Returns -1 if the ring is empty. Caller holds g_dctab.mutex. */
 static int find_successor(uint32_t target_id) {
-  char addr[DC_NODE_NAME_MAX];
-  uint32_t fid;
-  const char *nodeid;
-  if (!g_ring)
+  if (!g_dctab.ring)
     return -1;
-  nodeid = ring_successor(g_ring, target_id);
-  if (!nodeid)
+  nodeid_idx_t succ_idx = ring_successor(g_dctab.ring, target_id);
+  if (!nodeid_valid(succ_idx))
     return -1;
-  strip_nodeid(nodeid, addr, sizeof(addr), &fid);
-  for (int i = 0; i < g_n_nodes; i++)
-    if (!g_nodes[i]->dead && strcmp(g_nodes[i]->name, addr) == 0)
+  for (int i = 0; i < g_dctab.n_nodes; i++) {
+    if (nodeid_eq(g_dctab.nodes[i], succ_idx))
       return i;
+  }
   return -1;
 }
 
@@ -161,131 +112,51 @@ static CURL *curl_handle_init(void) {
   return h;
 }
 
-/* Initialize node n from raw_name ("host:port[/first_id]"). */
-static void node_init(dc_node_t *n, const char *raw_name) {
-  memset(n, 0, sizeof(*n));
-  strip_nodeid(raw_name, n->name, DC_NODE_NAME_MAX, &n->first_id);
-  pthread_mutex_init(&n->mu, NULL);
-  pthread_cond_init(&n->cv, NULL);
+static void curl_pool_init(void);
+static void curl_pool_final(void);
+static CURL *curl_pool_get(nodeid_idx_t idx);
+static void curl_pool_put(CURL *handle, nodeid_idx_t idx);
+static void curl_pool_gc(const nodeid_bloom_t *bf);
+
+/* Fetch a connection handle from the pool or create a fresh one. */
+static void node_checkout(nodeid_idx_t idx, dc_conn_t *conn) {
+  conn->nodeid = idx;
+  conn->curl = curl_pool_get(idx);
+  if (!conn->curl)
+    conn->curl = curl_handle_init();
 }
 
-/* Close all pool handles and destroy the node's mutex and condvar. */
-static void node_destroy(dc_node_t *n) {
-  for (int i = 0; i < DC_POOL_SIZE; i++) {
-    if (n->slots[i].handle) {
-      curl_easy_cleanup(n->slots[i].handle);
-      n->slots[i].handle = NULL;
-    }
-  }
-  pthread_mutex_destroy(&n->mu);
-  pthread_cond_destroy(&n->cv);
-}
-
-/* Block until a free slot is available; check expiry and lazy-init handle. */
-static void node_checkout(dc_node_t *node, dc_conn_t *conn) {
-  pthread_mutex_lock(&node->mu);
-  while (1) {
-    time_t now = time(NULL);
-    for (int i = 0; i < DC_POOL_SIZE; i++) {
-      if (!node->slots[i].busy) {
-        dc_slot_t *slot = &node->slots[i];
-        /* Reap expired handle */
-        if (slot->handle && slot->expire_time > 0 && now >= slot->expire_time) {
-          curl_easy_cleanup(slot->handle);
-          slot->handle = NULL;
-          slot->expire_time = 0;
-        }
-        /* Lazy init */
-        if (!slot->handle) {
-          slot->handle = curl_handle_init();
-          slot->expire_time = now + DC_CONN_EXPIRE_SECS;
-        }
-        slot->busy = 1;
-        conn->node = node;
-        conn->idx = i;
-        conn->curl = slot->handle;
-        pthread_mutex_unlock(&node->mu);
-        return;
-      }
-    }
-    pthread_cond_wait(&node->cv, &node->mu);
-  }
-}
-
-/* Return a connection to the pool, or close it if the node is dead. */
+/* Return handle to the pool for reuse. */
 static void node_checkin(dc_conn_t *conn) {
-  dc_node_t *node = conn->node;
-  pthread_mutex_lock(&node->mu);
-  dc_slot_t *slot = &node->slots[conn->idx];
-  if (node->dead) {
-    if (conn->curl) {
-      curl_easy_cleanup(conn->curl);
-      conn->curl = NULL;
-    }
-    slot->handle = NULL;
-    slot->expire_time = 0;
-  } else {
-    slot->handle = conn->curl;
-  }
-  slot->busy = 0;
-  pthread_cond_signal(&node->cv);
-  pthread_mutex_unlock(&node->mu);
+  if (conn->curl)
+    curl_pool_put(conn->curl, conn->nodeid);
   conn->curl = NULL;
 }
 
-/* Replace a broken connection with a fresh one (stale-connection retry). */
-static void node_reset(dc_conn_t *conn) {
-  if (conn->curl) {
-    curl_easy_cleanup(conn->curl);
-    conn->curl = curl_handle_init();
-    dc_slot_t *slot = &conn->node->slots[conn->idx];
-    slot->handle = conn->curl;
-    slot->expire_time = time(NULL) + DC_CONN_EXPIRE_SECS;
+/* ── ring_add_node ──────────────────────────────────────────────────────── */
+
+/* Add a newly discovered node (reviving dead one if present) and rebuild the
+ * ring. Caller must hold g_dctab.mutex. */
+static int ring_add_node(const char *name) {
+  /* Check if this nodeid is already known. */
+  int found = -1;
+  for (int j = 0; j < g_dctab.n_nodes; j++) {
+    if (strcmp(nodeid_lookup(g_dctab.nodes[j]), name) == 0) {
+      found = j;
+      break;
+    }
   }
-}
-
-/* ── ring_add_nodes ─────────────────────────────────────────────────────── */
-
-/* Add newly discovered nodes (reviving dead ones if present) and rebuild
- * the ring. Caller must hold g_ring_mu. */
-static int ring_add_nodes(const char names[][DC_NODE_NAME_MAX], int n) {
-  for (int i = 0; i < n; i++) {
-    char addr[DC_NODE_NAME_MAX];
-    uint32_t fid = 0;
-    strip_nodeid(names[i], addr, sizeof(addr), &fid);
-
-    int found = -1;
-    for (int j = 0; j < g_n_nodes; j++) {
-      if (strcmp(g_nodes[j]->name, addr) == 0) {
-        found = j;
-        break;
-      }
-    }
-    if (found >= 0) {
-      if (g_nodes[found]->dead) {
-        pthread_mutex_lock(&g_nodes[found]->mu);
-        g_nodes[found]->dead = 0;
-        pthread_mutex_unlock(&g_nodes[found]->mu);
-      }
-      g_nodes[found]->first_id = fid;
-      continue;
-    }
-
-    dc_node_t *nn = calloc(1, sizeof(dc_node_t));
-    if (!nn)
+  if (found < 0) {
+    /* New node: register nodeid, append to nodes array. */
+    nodeid_idx_t idx = nodeid_register(name);
+    if (!nodeid_valid(idx))
       return -1;
-    node_init(nn, names[i]);
-
-    dc_node_t **tmp =
-        realloc(g_nodes, (size_t)(g_n_nodes + 1) * sizeof(dc_node_t *));
-    if (!tmp) {
-      node_destroy(nn);
-      free(nn);
+    nodeid_idx_t *tmp = realloc(g_dctab.nodes, (size_t)(g_dctab.n_nodes + 1) *
+                                                   sizeof(nodeid_idx_t));
+    if (!tmp)
       return -1;
-    }
-    g_nodes = tmp;
-    g_nodes[g_n_nodes] = nn;
-    g_n_nodes++;
+    g_dctab.nodes = tmp;
+    g_dctab.nodes[g_dctab.n_nodes++] = idx;
   }
   return ring_rebuild();
 }
@@ -339,68 +210,6 @@ static int server_errcode(const char *s) {
   if (strcmp(s, "ERR_BAD_REQUEST") == 0)
     return DCERR_BAD_REQUEST;
   return DCERR_PROTOCOL;
-}
-
-/* ── JSON helpers ───────────────────────────────────────────────────────── */
-
-/* Find key in json and copy its string value into val. Returns 0 on success. */
-static int json_str_field(const char *json, size_t jlen, const char *key,
-                          char *val, size_t val_sz) {
-  char needle[64];
-  int nlen = snprintf(needle, sizeof(needle), "\"%s\":\"", key);
-  if (nlen <= 0 || (size_t)nlen >= sizeof(needle))
-    return -1;
-
-  const char *p = json;
-  const char *end = json + jlen;
-  while (p < end) {
-    const char *found = memmem(p, (size_t)(end - p), needle, (size_t)nlen);
-    if (!found)
-      return -1;
-    const char *start = found + nlen;
-    const char *q = memchr(start, '"', (size_t)(end - start));
-    if (!q)
-      return -1;
-    size_t len = (size_t)(q - start);
-    if (len < val_sz) {
-      memcpy(val, start, len);
-      val[len] = '\0';
-      return 0;
-    }
-    p = q + 1;
-  }
-  return -1;
-}
-
-/* Find key in json and copy its numeric value (as text) into val. Returns 0 on
- * success. */
-static int json_num_field(const char *json, size_t jlen, const char *key,
-                          char *val, size_t val_sz) {
-  char needle[64];
-  int nlen = snprintf(needle, sizeof(needle), "\"%s\":", key);
-  if (nlen <= 0 || (size_t)nlen >= sizeof(needle))
-    return -1;
-
-  const char *found = memmem(json, jlen, needle, (size_t)nlen);
-  if (!found)
-    return -1;
-
-  const char *start = found + nlen;
-  const char *end = json + jlen;
-  while (start < end && (*start == ' ' || *start == '\t'))
-    start++;
-
-  const char *q = start;
-  while (q < end && *q != ',' && *q != '}' && *q != '\n' && *q != ' ')
-    q++;
-
-  size_t len = (size_t)(q - start);
-  if (len > 0 && len < val_sz) {
-    memcpy(val, start, len);
-    val[len] = '\0';
-    return 0;
-  }
-  return -1;
 }
 
 /* Parse ERROR payload "type\nmessage\n" into separate buffers. */
@@ -467,8 +276,7 @@ typedef struct {
   char err_msg[512];
   int got_fin;
   int cb_called;
-  char redir_names[DC_MAX_REDIR_NODES][DC_NODE_NAME_MAX];
-  int n_redir;
+  char redir_name[DC_NODE_NAME_MAX];
   void *ctx;
   int (*cb)(void *ctx, const char *buf, int bufsz);
   int cb_failed;
@@ -504,14 +312,17 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
       st->cb_called = 1;
     } else if (strncmp(st->fp.raw, "FIN:", 4) == 0) {
       st->got_fin = 1;
+      if (st->cb(st->ctx, payload, 0) != 0) {
+        st->cb_failed = 1;
+        return 0;
+      }
     } else if (strncmp(st->fp.raw, "ERROR:", 6) == 0) {
       strncpy(st->status, "error", sizeof(st->status) - 1);
       parse_error_payload(payload, plen, st->err_type, sizeof(st->err_type),
                           st->err_msg, sizeof(st->err_msg));
     } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
       strncpy(st->status, "redirect", sizeof(st->status) - 1);
-      st->n_redir = parse_redirect_payload(payload, plen, st->redir_names[0],
-                                           DC_NODE_NAME_MAX);
+      parse_redirect_payload(payload, plen, st->redir_name, DC_NODE_NAME_MAX);
     }
 
     push_frame_init(&st->fp);
@@ -549,20 +360,28 @@ static size_t growbuf_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
 
 /* ── do_get_streaming ───────────────────────────────────────────────────── */
 
-#define DC_REDIRECT (-1)
-
-/*
- * Perform one HTTP GET, streaming DATA frames to cb.
- * Returns 0 on success, DC_REDIRECT, or a positive DCERR_*.
- * Retries once on stale-connection errors if no DATA was sent yet.
- */
-static int do_get_streaming(dc_conn_t *conn, const char *node_name,
+/* Perform one HTTP GET, streaming DATA frames to cb. */
+static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
                             const char *path, void *ctx,
                             int (*cb)(void *ctx, const char *buf, int bufsz),
-                            char redir_names[][DC_NODE_NAME_MAX], int *n_redir,
-                            char *errmsg, int errsz) {
+                            char *redir_name, int *is_redirect) {
+  char host[254];
+  int port = 0;
+  int first_id = 0;
+  if (nodeid_split(nodeid, host, &port, &first_id) != 0) {
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "invalid node index");
+    return -1;
+  }
+  char node_name[300];
+  snprintf(node_name, sizeof(node_name), "%s:%d", host, port);
+
   char url[1536];
   snprintf(url, sizeof(url), "http://%s%s", node_name, path);
+
+  if (is_redirect) {
+    *is_redirect = 0;
+  }
 
   for (int attempt = 0; attempt < 2; attempt++) {
     stream_state_t st = {0};
@@ -571,8 +390,12 @@ static int do_get_streaming(dc_conn_t *conn, const char *node_name,
     st.cb = cb;
 
     if (!conn->curl) {
-      snprintf(errmsg, errsz, "curl_easy_init failed");
-      return DCERR_NETWORK;
+      conn->curl = curl_handle_init();
+      if (!conn->curl) {
+        myerrno = DCERR_NETWORK;
+        snprintf(myerrmsg, sizeof(myerrmsg), "curl_easy_init failed");
+        return -1;
+      }
     }
 
     curl_easy_setopt(conn->curl, CURLOPT_URL, url);
@@ -582,46 +405,59 @@ static int do_get_streaming(dc_conn_t *conn, const char *node_name,
     CURLcode rc = curl_easy_perform(conn->curl);
 
     if (st.cb_failed) {
-      snprintf(errmsg, errsz, "callback failed");
-      return DCERR_CALLBACK_FAILED;
+      myerrno = DCERR_CALLBACK_FAILED;
+      snprintf(myerrmsg, sizeof(myerrmsg), "callback failed");
+      return -1;
     }
 
     if (rc != CURLE_OK && rc != CURLE_WRITE_ERROR) {
       if (!st.cb_called && (rc == CURLE_RECV_ERROR || rc == CURLE_SEND_ERROR ||
                             rc == CURLE_COULDNT_CONNECT)) {
-        node_reset(conn);
+        if (conn->curl) {
+          curl_easy_cleanup(conn->curl);
+        }
+        conn->curl = NULL;
         continue;
       }
-      snprintf(errmsg, errsz, "curl error (%s): %s", node_name,
-               curl_easy_strerror(rc));
-      return DCERR_NETWORK;
+      myerrno = DCERR_NETWORK;
+      snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%.100s): %.150s",
+               node_name, curl_easy_strerror(rc));
+      return -1;
     }
 
     if (!st.got_fin) {
-      snprintf(errmsg, errsz, "truncated response from %s", node_name);
-      return DCERR_PROTOCOL;
+      myerrno = DCERR_PROTOCOL;
+      snprintf(myerrmsg, sizeof(myerrmsg), "truncated response from %.150s",
+               node_name);
+      return -1;
     }
 
     if (strcmp(st.status, "redirect") == 0) {
-      memcpy(redir_names, st.redir_names,
-             (size_t)st.n_redir * sizeof(redir_names[0]));
-      *n_redir = st.n_redir;
-      return DC_REDIRECT;
+      strncpy(redir_name, st.redir_name, DC_NODE_NAME_MAX - 1);
+      redir_name[DC_NODE_NAME_MAX - 1] = '\0';
+      if (is_redirect) {
+        *is_redirect = 1;
+      }
+      return 0;
     }
 
     if (strcmp(st.status, "error") == 0) {
+      myerrno = server_errcode(st.err_type);
       if (st.err_msg[0])
-        snprintf(errmsg, errsz, "%s", st.err_msg);
+        snprintf(myerrmsg, sizeof(myerrmsg), "%.199s", st.err_msg);
       else
-        snprintf(errmsg, errsz, "server error: %s", st.err_type);
-      return server_errcode(st.err_type);
+        snprintf(myerrmsg, sizeof(myerrmsg), "server error: %.150s",
+                 st.err_type);
+      return -1;
     }
 
     return 0;
   }
 
-  snprintf(errmsg, errsz, "connection failed after retry: %s", node_name);
-  return DCERR_NETWORK;
+  myerrno = DCERR_NETWORK;
+  snprintf(myerrmsg, sizeof(myerrmsg), "connection failed after retry: %.150s",
+           node_name);
+  return -1;
 }
 
 /* ── fetch_nodes ────────────────────────────────────────────────────────── */
@@ -701,34 +537,30 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
 
 /* ── dc_housekeeping ────────────────────────────────────────────────────── */
 
-/* Refresh ring from /_nodes, mark dead nodes, compact tombstones, reap expired
- * connections. */
-int dc_housekeeping(char *errbuf, int errsz) {
-  pthread_mutex_lock(&g_hk_mu);
+/* Refresh the node list and ring from /_nodes on a random known node. */
+int dc_housekeeping(void) {
+  /* Acquire housekeeping lock to serialize execution */
+  static pthread_mutex_t housekeeping_mutex = PTHREAD_MUTEX_INITIALIZER;
+  pthread_mutex_lock(&housekeeping_mutex);
   int hk_rc = 0;
 
   /* ── Step 1: Snapshot node names for /_nodes probe ─────────────────── */
-  pthread_mutex_lock(&g_ring_mu);
-  int snap_n = g_n_nodes;
-  char (*snap_names)[DC_NODE_NAME_MAX] = NULL;
-  int *snap_dead = NULL;
+  pthread_mutex_lock(&g_dctab.mutex);
+  int snap_n = g_dctab.n_nodes;
+  nodeid_idx_t *snap_names = NULL;
   if (snap_n > 0) {
-    snap_names = malloc((size_t)snap_n * DC_NODE_NAME_MAX);
-    snap_dead = malloc((size_t)snap_n * sizeof(int));
-    if (!snap_names || !snap_dead) {
-      free(snap_names);
-      free(snap_dead);
-      pthread_mutex_unlock(&g_ring_mu);
-      pthread_mutex_unlock(&g_hk_mu);
-      snprintf(errbuf, errsz, "out of memory");
-      return DCERR_NOMEM;
+    snap_names = malloc((size_t)snap_n * sizeof(nodeid_idx_t));
+    if (!snap_names) {
+      pthread_mutex_unlock(&g_dctab.mutex);
+      pthread_mutex_unlock(&housekeeping_mutex);
+      myerrno = DCERR_NOMEM;
+      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+      return -1;
     }
-    for (int i = 0; i < snap_n; i++) {
-      memcpy(snap_names[i], g_nodes[i]->name, DC_NODE_NAME_MAX);
-      snap_dead[i] = g_nodes[i]->dead;
-    }
+    for (int i = 0; i < snap_n; i++)
+      snap_names[i] = g_dctab.nodes[i];
   }
-  pthread_mutex_unlock(&g_ring_mu);
+  pthread_mutex_unlock(&g_dctab.mutex);
 
   /* ── Step 2: Fetch /_nodes from a random non-dead node ─────────────── */
   char new_names[DC_MAX_REDIR_NODES][DC_NODE_NAME_MAX];
@@ -741,326 +573,245 @@ int dc_housekeeping(char *errbuf, int errsz) {
     int fetch_rc = DCERR_NO_NODE;
     for (int i = 0; i < snap_n; i++) {
       int idx = (start + i) % snap_n;
-      if (snap_dead[idx])
-        continue;
-      fetch_rc = fetch_nodes(snap_names[idx], new_names, &n_new, fetch_err,
-                             sizeof(fetch_err));
+      char host[254];
+      int port = 0;
+      int first_id = 0;
+      if (nodeid_split(snap_names[idx], host, &port, &first_id) == 0) {
+        char snap_addr[300];
+        snprintf(snap_addr, sizeof(snap_addr), "%s:%d", host, port);
+        fetch_rc = fetch_nodes(snap_addr, new_names, &n_new, fetch_err,
+                               sizeof(fetch_err));
+      } else {
+        fetch_rc = DCERR_NO_NODE;
+      }
       if (fetch_rc == 0) {
         fetch_ok = 1;
         break;
       }
     }
     if (!fetch_ok) {
-      snprintf(errbuf, errsz, "ring refresh failed: %s", fetch_err);
-      hk_rc = fetch_rc;
+      myerrno = fetch_rc;
+      snprintf(myerrmsg, sizeof(myerrmsg), "ring refresh failed: %.170s",
+               fetch_err);
+      hk_rc = -1;
     }
   }
   free(snap_names);
-  free(snap_dead);
 
   /* ── Step 3: Update ring ────────────────────────────────────────────── */
-  pthread_mutex_lock(&g_ring_mu);
+  pthread_mutex_lock(&g_dctab.mutex);
 
   if (fetch_ok && n_new > 0) {
-    /* Mark nodes dead if they are in B (current non-dead) but not in A (new
-     * list). */
-    for (int i = 0; i < g_n_nodes; i++) {
-      if (g_nodes[i]->dead)
-        continue;
-      int in_a = 0;
+    /* Rebuild nodes array: keep existing nodes in new list, add new ones. */
+    int w = 0;
+    for (int i = 0; i < g_dctab.n_nodes; i++) {
       for (int j = 0; j < n_new; j++) {
-        char addr[DC_NODE_NAME_MAX];
-        uint32_t fid = 0;
-        strip_nodeid(new_names[j], addr, sizeof(addr), &fid);
-        if (strcmp(g_nodes[i]->name, addr) == 0) {
-          in_a = 1;
+        if (strcmp(nodeid_lookup(g_dctab.nodes[i]), new_names[j]) == 0) {
+          g_dctab.nodes[w++] = g_dctab.nodes[i];
           break;
         }
       }
-      if (!in_a) {
-        pthread_mutex_lock(&g_nodes[i]->mu);
-        g_nodes[i]->dead = 1;
-        for (int s = 0; s < DC_POOL_SIZE; s++) {
-          dc_slot_t *slot = &g_nodes[i]->slots[s];
-          if (!slot->busy && slot->handle) {
-            curl_easy_cleanup(slot->handle);
-            slot->handle = NULL;
-            slot->expire_time = 0;
-          }
-        }
-        pthread_mutex_unlock(&g_nodes[i]->mu);
-      }
     }
+    g_dctab.n_nodes = w;
 
-    /* Add or revive nodes in A. */
     for (int j = 0; j < n_new; j++) {
-      char addr[DC_NODE_NAME_MAX];
-      uint32_t fid = 0;
-      strip_nodeid(new_names[j], addr, sizeof(addr), &fid);
-
-      int found = -1;
-      for (int i = 0; i < g_n_nodes; i++) {
-        if (strcmp(g_nodes[i]->name, addr) == 0) {
-          found = i;
+      int found = 0;
+      for (int i = 0; i < g_dctab.n_nodes; i++) {
+        if (strcmp(nodeid_lookup(g_dctab.nodes[i]), new_names[j]) == 0) {
+          found = 1;
           break;
         }
       }
-      if (found >= 0) {
-        if (g_nodes[found]->dead) {
-          pthread_mutex_lock(&g_nodes[found]->mu);
-          g_nodes[found]->dead = 0;
-          pthread_mutex_unlock(&g_nodes[found]->mu);
-        }
-        g_nodes[found]->first_id = fid;
-      } else {
-        dc_node_t *nn = calloc(1, sizeof(dc_node_t));
-        if (!nn)
+      if (!found) {
+        nodeid_idx_t idx = nodeid_register(new_names[j]);
+        if (!nodeid_valid(idx))
           continue;
-        node_init(nn, new_names[j]);
-        dc_node_t **tmp =
-            realloc(g_nodes, (size_t)(g_n_nodes + 1) * sizeof(dc_node_t *));
-        if (!tmp) {
-          node_destroy(nn);
-          free(nn);
+        nodeid_idx_t *tmp =
+            realloc(g_dctab.nodes,
+                    (size_t)(g_dctab.n_nodes + 1) * sizeof(nodeid_idx_t));
+        if (!tmp)
           continue;
-        }
-        g_nodes = tmp;
-        g_nodes[g_n_nodes++] = nn;
+        g_dctab.nodes = tmp;
+        g_dctab.nodes[g_dctab.n_nodes++] = idx;
       }
     }
   }
-
-  /* Compact fully-drained tombstones: dead nodes with no busy connections. */
-  int w = 0;
-  for (int i = 0; i < g_n_nodes; i++) {
-    int removable = 0;
-    if (g_nodes[i]->dead) {
-      pthread_mutex_lock(&g_nodes[i]->mu);
-      int busy = 0;
-      for (int s = 0; s < DC_POOL_SIZE; s++)
-        if (g_nodes[i]->slots[s].busy)
-          busy++;
-      if (busy == 0)
-        removable = 1;
-      pthread_mutex_unlock(&g_nodes[i]->mu);
-      if (removable) {
-        node_destroy(g_nodes[i]);
-        free(g_nodes[i]);
-        g_nodes[i] = NULL;
-      }
-    }
-    if (!removable)
-      g_nodes[w++] = g_nodes[i];
-  }
-  g_n_nodes = w;
 
   ring_rebuild();
-  pthread_mutex_unlock(&g_ring_mu);
 
-  /* ── Step 4: Reap idle expired connections on all nodes ─────────────── */
-  pthread_mutex_lock(&g_ring_mu);
-  int snap2_n = g_n_nodes;
-  dc_node_t **snap2 = malloc((size_t)snap2_n * sizeof(dc_node_t *));
-  if (snap2) {
-    for (int i = 0; i < snap2_n; i++)
-      snap2[i] = g_nodes[i];
-  }
-  pthread_mutex_unlock(&g_ring_mu);
-
-  if (snap2) {
-    time_t now = time(NULL);
-    for (int i = 0; i < snap2_n; i++) {
-      dc_node_t *node = snap2[i];
-      pthread_mutex_lock(&node->mu);
-      for (int s = 0; s < DC_POOL_SIZE; s++) {
-        dc_slot_t *slot = &node->slots[s];
-        if (!slot->busy && slot->handle && slot->expire_time > 0 &&
-            now >= slot->expire_time) {
-          curl_easy_cleanup(slot->handle);
-          slot->handle = NULL;
-          slot->expire_time = 0;
-        }
-      }
-      pthread_mutex_unlock(&node->mu);
-    }
-    free(snap2);
+  nodeid_bloom_t bf;
+  nodeid_bloom_init(&bf);
+  if (g_dctab.ring) {
+    bf = g_dctab.ring->bloom;
   }
 
-  pthread_mutex_unlock(&g_hk_mu);
+  pthread_mutex_unlock(&g_dctab.mutex);
+
+  /* GC connections from nodes no longer present in the ring */
+  curl_pool_gc(&bf);
+
+  pthread_mutex_unlock(&housekeeping_mutex);
   return hk_rc;
 }
 
 /* ── Public API ─────────────────────────────────────────────────────────── */
 
 /* Initialize the client with n seed nodes; tears down any prior state. */
-int dc_init(int n, const char *const *node, char *errmsg, int errsz) {
+int dc_init(int n, const char *const *node) {
+  /* Initialize connection pool */
+  curl_pool_init();
+
   if (n <= 0 || !node) {
-    snprintf(errmsg, errsz, "invalid arguments");
-    return DCERR_NOMEM;
+    myerrno = DCERR_NOMEM;
+    snprintf(myerrmsg, sizeof(myerrmsg), "invalid arguments");
+    return -1;
   }
 
-  dc_node_t **nodes = calloc((size_t)n, sizeof(dc_node_t *));
+  nodeid_idx_t *nodes = malloc((size_t)n * sizeof(nodeid_idx_t));
   if (!nodes) {
-    snprintf(errmsg, errsz, "out of memory");
-    return DCERR_NOMEM;
+    myerrno = DCERR_NOMEM;
+    snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+    return -1;
   }
   for (int i = 0; i < n; i++) {
-    nodes[i] = calloc(1, sizeof(dc_node_t));
-    if (!nodes[i]) {
-      for (int j = 0; j < i; j++) {
-        node_destroy(nodes[j]);
-        free(nodes[j]);
-      }
+    nodes[i] = nodeid_register(node[i]);
+    if (!nodeid_valid(nodes[i])) {
       free(nodes);
-      snprintf(errmsg, errsz, "out of memory");
-      return DCERR_NOMEM;
+      myerrno = DCERR_NOMEM;
+      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+      return -1;
     }
-    node_init(nodes[i], node[i]);
   }
 
-  pthread_mutex_lock(&g_ring_mu);
-  /* Tear down any previous state. */
-  for (int i = 0; i < g_n_nodes; i++) {
-    node_destroy(g_nodes[i]);
-    free(g_nodes[i]);
-  }
-  free(g_nodes);
-  ring_destroy(g_ring);
-  g_nodes = nodes;
-  g_n_nodes = n;
-  g_ring = NULL;
+  pthread_mutex_lock(&g_dctab.mutex);
+  free(g_dctab.nodes);
+  ring_destroy(g_dctab.ring);
+  g_dctab.nodes = nodes;
+  g_dctab.n_nodes = n;
+  g_dctab.ring = NULL;
 
   if (ring_rebuild() != 0) {
-    for (int i = 0; i < n; i++) {
-      node_destroy(nodes[i]);
-      free(nodes[i]);
-    }
     free(nodes);
-    g_nodes = NULL;
-    g_n_nodes = 0;
-    pthread_mutex_unlock(&g_ring_mu);
-    snprintf(errmsg, errsz, "out of memory");
-    return DCERR_NOMEM;
+    g_dctab.nodes = NULL;
+    g_dctab.n_nodes = 0;
+    pthread_mutex_unlock(&g_dctab.mutex);
+    myerrno = DCERR_NOMEM;
+    snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+    return -1;
   }
-  pthread_mutex_unlock(&g_ring_mu);
+  pthread_mutex_unlock(&g_dctab.mutex);
 
   /* Refresh ring from /_nodes; ignore errors (seed nodes are sufficient). */
-  char hk_err[256];
-  dc_housekeeping(hk_err, sizeof(hk_err));
+  dc_housekeeping();
 
   return 0;
 }
 
 /* Release all resources; must be called with no in-flight dc_get requests. */
-void dc_final(void) {
-  pthread_mutex_lock(&g_ring_mu);
-  for (int i = 0; i < g_n_nodes; i++) {
-    node_destroy(g_nodes[i]);
-    free(g_nodes[i]);
-  }
-  free(g_nodes);
-  ring_destroy(g_ring);
-  g_nodes = NULL;
-  g_n_nodes = 0;
-  g_ring = NULL;
-  pthread_mutex_unlock(&g_ring_mu);
+int dc_final(void) {
+  pthread_mutex_lock(&g_dctab.mutex);
+  free(g_dctab.nodes);
+  ring_destroy(g_dctab.ring);
+  g_dctab.nodes = NULL;
+  g_dctab.n_nodes = 0;
+  g_dctab.ring = NULL;
+  pthread_mutex_unlock(&g_dctab.mutex);
+  /* Tear down connection pool */
+  curl_pool_final();
+  return 0;
 }
 
 /* Fetch the object at bucket/key, streaming DATA payload bytes to cb. */
 int dc_get(const char *bucket, const char *key, void *ctx,
-           int (*cb)(void *ctx, const char *buf, int bufsz), char *errmsg,
-           int errsz) {
+           int (*cb)(void *ctx, const char *buf, int bufsz)) {
   char enc_bucket[512], enc_key[512], path[1100];
   url_encode(bucket, enc_bucket, sizeof(enc_bucket));
   url_encode(key, enc_key, sizeof(enc_key));
   snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
 
-  pthread_mutex_lock(&g_ring_mu);
+  pthread_mutex_lock(&g_dctab.mutex);
   uint32_t dest = compute_dest_id(bucket, key);
   int node_idx = find_successor(dest);
   if (node_idx < 0) {
-    pthread_mutex_unlock(&g_ring_mu);
-    snprintf(errmsg, errsz, "no nodes in ring");
-    return DCERR_NO_NODE;
+    pthread_mutex_unlock(&g_dctab.mutex);
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
+    return -1;
   }
-  dc_node_t *node = g_nodes[node_idx];
-  pthread_mutex_unlock(&g_ring_mu);
+  nodeid_idx_t nid = g_dctab.nodes[node_idx];
+  pthread_mutex_unlock(&g_dctab.mutex);
 
   dc_conn_t conn;
-  node_checkout(node, &conn);
+  node_checkout(nid, &conn);
 
-  char redir_names[DC_MAX_REDIR_NODES][DC_NODE_NAME_MAX];
-  int n_redir = 0;
+  char redir_name[DC_NODE_NAME_MAX];
 
   for (int hop = 0; hop <= DC_MAX_REDIRECTS; hop++) {
-    int rc = do_get_streaming(&conn, node->name, path, ctx, cb, redir_names,
-                              &n_redir, errmsg, errsz);
-    if (rc == 0) {
+    int is_redirect = 0;
+    int rc = do_get_streaming(&conn, conn.nodeid, path, ctx, cb, redir_name,
+                              &is_redirect);
+    if (rc == -1) {
+      node_checkin(&conn);
+      return -1;
+    }
+    if (!is_redirect) {
       node_checkin(&conn);
       return 0;
-    }
-    if (rc != DC_REDIRECT) {
-      node_checkin(&conn);
-      return rc;
     }
 
     node_checkin(&conn);
 
-    pthread_mutex_lock(&g_ring_mu);
-    if (ring_add_nodes(redir_names, n_redir) != 0) {
-      pthread_mutex_unlock(&g_ring_mu);
-      snprintf(errmsg, errsz, "out of memory adding nodes");
-      return DCERR_NOMEM;
+    pthread_mutex_lock(&g_dctab.mutex);
+    if (ring_add_node(redir_name) != 0) {
+      pthread_mutex_unlock(&g_dctab.mutex);
+      myerrno = DCERR_NOMEM;
+      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
+      return -1;
     }
     int new_idx = find_successor(dest);
     if (new_idx < 0) {
-      pthread_mutex_unlock(&g_ring_mu);
-      snprintf(errmsg, errsz, "ring empty after redirect");
-      return DCERR_NO_NODE;
-    }
-    if (new_idx == node_idx && hop > 0) {
-      pthread_mutex_unlock(&g_ring_mu);
-      snprintf(errmsg, errsz, "redirect loop after %d hop(s)", hop + 1);
-      return DCERR_REDIRECT_LOOP;
+      pthread_mutex_unlock(&g_dctab.mutex);
+      myerrno = DCERR_NO_NODE;
+      snprintf(myerrmsg, sizeof(myerrmsg), "ring empty after redirect");
+      return -1;
     }
     node_idx = new_idx;
-    node = g_nodes[node_idx];
-    pthread_mutex_unlock(&g_ring_mu);
+    nid = g_dctab.nodes[node_idx];
+    pthread_mutex_unlock(&g_dctab.mutex);
 
-    node_checkout(node, &conn);
+    node_checkout(nid, &conn);
   }
 
   node_checkin(&conn);
-  snprintf(errmsg, errsz, "exceeded %d redirects", DC_MAX_REDIRECTS);
-  return DCERR_REDIRECT_LOOP;
+  myerrno = DCERR_REDIRECT_LOOP;
+  snprintf(myerrmsg, sizeof(myerrmsg), "exceeded %d redirects",
+           DC_MAX_REDIRECTS);
+  return -1;
 }
 
 /* Write live node names into *buf (newline-separated); caller frees *buf. */
 int dc_node(char **buf, int *n) {
-  pthread_mutex_lock(&g_ring_mu);
+  pthread_mutex_lock(&g_dctab.mutex);
 
-  int live = 0;
-  for (int i = 0; i < g_n_nodes; i++)
-    if (!g_nodes[i]->dead)
-      live++;
+  int live = g_dctab.n_nodes;
 
   size_t sz = 1;
-  for (int i = 0; i < g_n_nodes; i++)
-    if (!g_nodes[i]->dead)
-      sz += strlen(g_nodes[i]->name) + 1;
+  for (int i = 0; i < g_dctab.n_nodes; i++)
+    sz += strlen(nodeid_lookup(g_dctab.nodes[i])) + 1;
 
   char *out = malloc(sz);
   if (!out) {
-    pthread_mutex_unlock(&g_ring_mu);
-    return DCERR_NOMEM;
+    pthread_mutex_unlock(&g_dctab.mutex);
+    myerrno = DCERR_NOMEM;
+    snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+    return -1;
   }
 
   size_t pos = 0;
-  for (int i = 0; i < g_n_nodes; i++) {
-    if (g_nodes[i]->dead)
-      continue;
-    size_t len = strlen(g_nodes[i]->name);
-    memcpy(out + pos, g_nodes[i]->name, len);
+  for (int i = 0; i < g_dctab.n_nodes; i++) {
+    const char *nstr = nodeid_lookup(g_dctab.nodes[i]);
+    size_t len = strlen(nstr);
+    memcpy(out + pos, nstr, len);
     pos += len;
     out[pos++] = '\n';
   }
@@ -1069,33 +820,48 @@ int dc_node(char **buf, int *n) {
   *buf = out;
   *n = live;
 
-  pthread_mutex_unlock(&g_ring_mu);
+  pthread_mutex_unlock(&g_dctab.mutex);
   return 0;
 }
 
-/* Fetch health stats from node_name and populate out. */
-int dc_health(const char *node_name, dc_health_t *out, char *errmsg,
-              int errsz) {
-  pthread_mutex_lock(&g_ring_mu);
-  dc_node_t *node = NULL;
-  for (int i = 0; i < g_n_nodes; i++) {
-    if (!g_nodes[i]->dead && strcmp(g_nodes[i]->name, node_name) == 0) {
-      node = g_nodes[i];
+/* Fetch health stats from node_name and return raw JSON. */
+int dc_health(const char *node_name, char **out_buf) {
+  if (!out_buf) {
+    myerrno = DCERR_PROTOCOL;
+    snprintf(myerrmsg, sizeof(myerrmsg), "out_buf is NULL");
+    return -1;
+  }
+  *out_buf = NULL;
+
+  pthread_mutex_lock(&g_dctab.mutex);
+  nodeid_idx_t found = NODEID_NONE;
+  for (int i = 0; i < g_dctab.n_nodes; i++) {
+    if (strcmp(nodeid_lookup(g_dctab.nodes[i]), node_name) == 0) {
+      found = g_dctab.nodes[i];
       break;
     }
   }
-  pthread_mutex_unlock(&g_ring_mu);
+  pthread_mutex_unlock(&g_dctab.mutex);
 
-  if (!node) {
-    snprintf(errmsg, errsz, "unknown node: %s", node_name);
-    return DCERR_NO_NODE;
+  if (!nodeid_valid(found)) {
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "unknown node: %s", node_name);
+    return -1;
   }
 
+  char host[254];
+  int port = 0;
+  int first_id = 0;
+  if (nodeid_split(found, host, &port, &first_id) != 0) {
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "invalid node index");
+    return -1;
+  }
   char url[1536];
-  snprintf(url, sizeof(url), "http://%s/_health", node_name);
+  snprintf(url, sizeof(url), "http://%s:%d/_health", host, port);
 
   dc_conn_t conn;
-  node_checkout(node, &conn);
+  node_checkout(found, &conn);
 
   growbuf_t body = {0};
   curl_easy_setopt(conn.curl, CURLOPT_URL, url);
@@ -1107,56 +873,202 @@ int dc_health(const char *node_name, dc_health_t *out, char *errmsg,
 
   if (crc != CURLE_OK) {
     free(body.data);
-    snprintf(errmsg, errsz, "curl error (%s): %s", node_name,
+    myerrno = DCERR_NETWORK;
+    snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%s): %s", node_name,
              curl_easy_strerror(crc));
-    return DCERR_NETWORK;
+    return -1;
   }
 
-  /* /_health returns plain JSON — parse body directly, no frame parsing. */
-  int rc = DCERR_PROTOCOL;
+  /* /_health returns plain JSON */
   if (!body.data || body.len == 0) {
-    snprintf(errmsg, errsz, "empty health response from %s", node_name);
-    goto done;
+    free(body.data);
+    myerrno = DCERR_PROTOCOL;
+    snprintf(myerrmsg, sizeof(myerrmsg), "empty health response from %s",
+             node_name);
+    return -1;
   }
 
-  {
-    memset(out, 0, sizeof(*out));
-    char num[32];
-    /* server emits "addr" and "disk_pct" */
-    json_str_field(body.data, body.len, "addr", out->id, sizeof(out->id));
-    json_str_field(body.data, body.len, "upsince", out->upsince,
-                   sizeof(out->upsince));
-    json_str_field(body.data, body.len, "upfor", out->upfor,
-                   sizeof(out->upfor));
-    if (json_num_field(body.data, body.len, "served", num, sizeof(num)) == 0)
-      out->served = strtoll(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "hits", num, sizeof(num)) == 0)
-      out->hits = strtoll(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "misses", num, sizeof(num)) == 0)
-      out->misses = strtoll(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "redirects", num, sizeof(num)) == 0)
-      out->redirects = strtoll(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "errors", num, sizeof(num)) == 0)
-      out->errors = strtoll(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "nodes", num, sizeof(num)) == 0)
-      out->nodes = (int)strtol(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "disk_pct", num, sizeof(num)) == 0)
-      out->usepct = strtod(num, NULL);
-    if (json_num_field(body.data, body.len, "lru_size", num, sizeof(num)) == 0)
-      out->lru_size = strtoll(num, NULL, 10);
-    if (json_num_field(body.data, body.len, "used_gib", num, sizeof(num)) == 0)
-      out->used_gib = strtod(num, NULL);
-    if (out->id[0] == '\0') {
-      snprintf(errmsg, errsz, "malformed health response from %s", node_name);
-      goto done;
-    }
-    rc = 0;
+  char *tmp = realloc(body.data, body.len + 1);
+  if (!tmp) {
+    free(body.data);
+    myerrno = DCERR_NOMEM;
+    snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+    return -1;
   }
+  body.data = tmp;
+  body.data[body.len] = '\0';
 
-done:
-  free(body.data);
-  return rc;
+  *out_buf = body.data;
+  return 0;
 }
+
+/* ── CURL connection pool ───────────────────────────────────────────────── */
+
+#define CURL_POOL_MAX                                                          \
+  128 /* max entries; evict oldest when count exceeds this */
+#define CURL_POOL_CAP                                                          \
+  (CURL_POOL_MAX + 10)       /* +10 NULL headroom before compact */
+#define CURL_POOL_COMPACT 10 /* compact when NULL count exceeds this */
+
+typedef struct {
+  CURL *handle; /* NULL means slot is empty */
+  nodeid_idx_t nodeid;
+  time_t expire_time;
+} curl_pool_entry_t;
+
+typedef struct {
+  curl_pool_entry_t slots[CURL_POOL_CAP];
+  int head;  /* next write index */
+  int tail;  /* oldest entry index */
+  int count; /* total entries (valid + NULL) between tail..head */
+  pthread_mutex_t mu;
+} curl_pool_t;
+
+static curl_pool_t g_curl_pool = {
+    .mu = PTHREAD_MUTEX_INITIALIZER,
+};
+
+/* Remove NULL slots in-place; reset to linear layout tail=0..head=n. */
+static void curl_pool_compact(void) {
+  curl_pool_t *p = &g_curl_pool;
+  curl_pool_entry_t tmp[CURL_POOL_CAP];
+  int n = 0;
+  for (int i = 0; i < p->count; i++) {
+    int idx = (p->tail + i) % CURL_POOL_CAP;
+    if (p->slots[idx].handle != NULL)
+      tmp[n++] = p->slots[idx];
+  }
+  memcpy(p->slots, tmp, (size_t)n * sizeof(curl_pool_entry_t));
+  if (n < CURL_POOL_CAP) {
+    memset(p->slots + n, 0,
+           (size_t)(CURL_POOL_CAP - n) * sizeof(curl_pool_entry_t));
+  }
+  p->tail = 0;
+  p->head = n;
+  p->count = n;
+}
+
+/* Return a CURL* matching idx (removes it from pool), or NULL.
+ * Expired entries found during scan are closed and discarded. */
+static CURL *curl_pool_get(nodeid_idx_t idx) {
+  curl_pool_t *p = &g_curl_pool;
+  pthread_mutex_lock(&p->mu); /* acquire pool lock */
+  CURL *found = NULL;
+  int null_count = 0;
+  time_t now = time(NULL);
+
+  for (int i = 0; i < p->count && found == NULL; i++) {
+    /* Scan newest-first so the freshest connection is returned. */
+    int slot = (p->head - 1 - i + CURL_POOL_CAP * 2) % CURL_POOL_CAP;
+    curl_pool_entry_t *e = &p->slots[slot];
+    if (e->handle == NULL) {
+      null_count++;
+    } else if (e->expire_time <= now) {
+      curl_easy_cleanup(e->handle);
+      e->handle = NULL;
+      null_count++;
+    } else if (nodeid_eq(e->nodeid, idx)) {
+      found = e->handle;
+      e->handle = NULL;
+      null_count++;
+    }
+  }
+
+  if (null_count > CURL_POOL_COMPACT)
+    curl_pool_compact();
+
+  pthread_mutex_unlock(&p->mu); /* release pool lock */
+  return found;
+}
+
+/* Insert handle into pool. Evicts the oldest entry when count > CURL_POOL_MAX.
+ */
+static void curl_pool_put(CURL *handle, nodeid_idx_t idx) {
+  curl_pool_t *p = &g_curl_pool;
+  pthread_mutex_lock(&p->mu); /* acquire pool lock */
+
+  /* Evict oldest entry when at capacity. */
+  if (p->count > CURL_POOL_MAX) {
+    curl_pool_entry_t *t = &p->slots[p->tail];
+    if (t->handle != NULL)
+      curl_easy_cleanup(t->handle);
+    t->handle = NULL;
+    p->tail = (p->tail + 1) % CURL_POOL_CAP;
+    p->count--;
+  }
+
+  p->slots[p->head] = (curl_pool_entry_t){
+      .handle = handle,
+      .nodeid = idx,
+      .expire_time = time(NULL) + DC_CONN_EXPIRE_SECS,
+  };
+  p->head = (p->head + 1) % CURL_POOL_CAP;
+  p->count++;
+
+  pthread_mutex_unlock(&p->mu); /* release pool lock */
+}
+
+/* Initialize the CURL connection pool and its mutex. */
+static void curl_pool_init(void) {
+  curl_pool_final();
+  curl_pool_t *p = &g_curl_pool;
+  p->head = 0;
+  p->tail = 0;
+  p->count = 0;
+  /* Initialize pool mutex */
+  pthread_mutex_init(&p->mu, NULL);
+}
+
+/* Close all handles and destroy the pool's mutex. Call at shutdown. */
+static void curl_pool_final(void) {
+  curl_pool_t *p = &g_curl_pool;
+  pthread_mutex_lock(&p->mu); /* acquire pool lock */
+  for (int i = 0; i < p->count; i++) {
+    int idx = (p->tail + i) % CURL_POOL_CAP;
+    if (p->slots[idx].handle != NULL) {
+      curl_easy_cleanup(p->slots[idx].handle);
+      p->slots[idx].handle = NULL;
+    }
+  }
+  p->head = 0;
+  p->tail = 0;
+  p->count = 0;
+  pthread_mutex_unlock(&p->mu); /* release before destroy */
+  /* Destroy pool mutex */
+  pthread_mutex_destroy(&p->mu);
+}
+
+/* GC connections from nodes that fail the Bloom filter test. */
+static void curl_pool_gc(const nodeid_bloom_t *bf) {
+  curl_pool_t *p = &g_curl_pool;
+  /* Acquire pool lock */
+  pthread_mutex_lock(&p->mu);
+  int null_count = 0;
+  for (int i = 0; i < p->count; i++) {
+    int idx = (p->tail + i) % CURL_POOL_CAP;
+    if (p->slots[idx].handle != NULL) {
+      const char *node_str = nodeid_lookup(p->slots[idx].nodeid);
+      if (!node_str || !nodeid_bloom_test(bf, node_str)) {
+        curl_easy_cleanup(p->slots[idx].handle);
+        p->slots[idx].handle = NULL;
+        null_count++;
+      }
+    } else {
+      null_count++;
+    }
+  }
+  if (null_count > CURL_POOL_COMPACT) {
+    curl_pool_compact();
+  }
+  /* Release pool lock */
+  pthread_mutex_unlock(&p->mu);
+}
+
+/* Return the thread-local error number from the last failed call. */
+int dc_errno(void) { return myerrno; }
+
+/* Return the thread-local error message from the last failed call. */
+const char *dc_errmsg(void) { return myerrmsg; }
 
 /* ── Test-only API (compiled in with -DDC_TESTING) ─────────────────────── */
 #ifdef DC_TESTING
@@ -1170,6 +1082,7 @@ int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
 int dc_test_parse_nodes(const char *payload, int plen,
                         char names[][DC_NODE_NAME_MAX], int max_names);
 int dc_test_server_errcode(const char *s);
+int dc_test_fin_callback(void);
 
 uint32_t dc_test_fnv1a(uint32_t prev, const char *input) {
   return ring_hash(prev, input);
@@ -1193,4 +1106,54 @@ int dc_test_parse_nodes(const char *payload, int plen,
   return parse_nodes_payload(payload, plen, names, max_names);
 }
 int dc_test_server_errcode(const char *s) { return server_errcode(s); }
+
+typedef struct {
+  int data_calls;
+  int eof_calls;
+  int last_bufsz;
+} test_cb_ctx_t;
+
+/* Test callback tracking DATA and EOF/FIN frame callback invocations. */
+static int test_fin_cb(void *ctx, const char *buf, int bufsz) {
+  test_cb_ctx_t *tc = ctx;
+  if (bufsz == 0) {
+    tc->eof_calls++;
+  } else {
+    tc->data_calls++;
+    tc->last_bufsz = bufsz;
+  }
+  (void)buf;
+  return 0;
+}
+
+/* Test function to verify stream_write_cb invokes callback with bufsz == 0 on
+ * FIN frame. */
+int dc_test_fin_callback(void) {
+  stream_state_t st = {0};
+  push_frame_init(&st.fp);
+  test_cb_ctx_t ctx = {0};
+  st.cb = test_fin_cb;
+  st.ctx = &ctx;
+
+  // Feed "DATA:5\nhello"
+  const char *chunk1 = "DATA:5\nhello";
+  size_t w1 = stream_write_cb((char *)chunk1, 1, strlen(chunk1), &st);
+  if (w1 != strlen(chunk1))
+    return -1;
+
+  // Feed "FIN:0\n"
+  const char *chunk2 = "FIN:0\n";
+  size_t w2 = stream_write_cb((char *)chunk2, 1, strlen(chunk2), &st);
+  if (w2 != strlen(chunk2))
+    return -2;
+
+  if (ctx.data_calls != 1 || ctx.last_bufsz != 5)
+    return -3;
+  if (ctx.eof_calls != 1)
+    return -4;
+  if (st.got_fin != 1)
+    return -5;
+
+  return 0;
+}
 #endif

@@ -1,4 +1,5 @@
 #pragma once
+#include "nodeid.h"
 #include <ctime>
 #include <memory>
 #include <string>
@@ -12,7 +13,7 @@ class http_server_t {
 public:
   explicit http_server_t(node_t &n);
   ~http_server_t();
-  void start(const std::string &nodeid);
+  void start(nodeid_idx_t nodeid);
   void stop();
 
 private:

@@ -84,8 +84,10 @@ int dc_get(const char *bucket, const char *key,
 int dc_node(char **buf, int *n);
 
 /* Query /_health on the named node ("host:port").
-   Returns 0 on success (out filled) or a DCERR_* code. */
-int dc_health(const char *node, dc_health_t *out, char *errmsg, int errsz);
+   On success, *out_buf is set to a growable, null-terminated JSON buffer.
+   Caller must free(*out_buf) when done.
+   Returns 0 on success or a DCERR_* code on failure. */
+int dc_health(const char *node, char **out_buf, char *errmsg, int errsz);
 
 /* Refresh the ring and reap stale connections. Thread-safe; fully re-entrant.
    Call periodically (e.g. every minute) from any thread.

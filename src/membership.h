@@ -31,6 +31,7 @@
 //   An internal mutex (injected_mtx_) protects the map of manually injected
 //   nodes.
 
+#include "nodeid.h"
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -47,7 +48,7 @@ class membership_t {
 public:
   explicit membership_t(node_t &n);
 
-  bool start(const std::string &nodeid, const std::vector<std::string> &seeds);
+  bool start(nodeid_idx_t nodeid, const std::vector<std::string> &seeds);
   void leave();
   void hint_alive(const std::string &peer_addr);
   std::vector<std::string> alive_peers();

@@ -20,7 +20,7 @@ LDFLAGS := $(SAN) -L$(HOME)/.local/lib -lswimc17 -pthread
 EXEC    := distcache
 LIB     := libdistcache.a
 MAINOBJ := main.o
-LIBOBJ  := stream.o ring.o $(patsubst %.cpp,%.o,$(filter-out main.cpp,$(wildcard *.cpp)))
+LIBOBJ  := stream.o ring.o nodeid.o $(patsubst %.cpp,%.o,$(filter-out main.cpp,$(wildcard *.cpp)))
 
 all: $(EXEC)
 

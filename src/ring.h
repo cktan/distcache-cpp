@@ -20,6 +20,7 @@
  * build a new ring_t that is atomically swapped into node_t::ring via
  * std::atomic<std::shared_ptr<ring_t>>.
  */
+#include "nodeid.h"
 #include <stddef.h>
 #include <stdint.h>
 
@@ -29,13 +30,14 @@ extern "C" {
 
 typedef struct {
   uint32_t id;
-  char *node; /* heap-allocated via strdup */
+  nodeid_idx_t node;
 } ring_entry_t;
 
 typedef struct {
   ring_entry_t *entries; /* sorted ascending by id after ring_finalize */
   size_t top;
-  size_t max; /* internal; do not read */
+  size_t max;           /* internal; do not read */
+  nodeid_bloom_t bloom; /* Bloom filter for nodes in the ring */
 } ring_t;
 
 /* Allocate an empty ring. */
@@ -44,25 +46,25 @@ ring_t *ring_create(void);
 /* Free ring and all owned strings. */
 void ring_destroy(ring_t *r);
 
-/* Add a node; derives 10 virtual IDs from node ("host:port" or
- * "host:port/first_id"). Duplicates resolved in ring_finalize. */
-void ring_add(ring_t *r, const char *node);
+/* Add a node; derives 10 virtual IDs from node.
+ * Duplicates resolved in ring_finalize. */
+void ring_add(ring_t *r, nodeid_idx_t node);
 
 /* Add a node with caller-supplied virtual IDs (for testing). */
-void ring_add_ex(ring_t *r, const char *node, const uint32_t ids[],
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
                  size_t nids);
 
 /* Sort entries by id and deduplicate (smaller node name wins on tie).
  * Must be called exactly once after all ring_add calls. */
 void ring_finalize(ring_t *r);
 
-/* Chord successor of target_id. Returns NULL if the ring is empty. */
-const char *ring_successor(const ring_t *r, uint32_t target_id);
+/* Chord successor of target_id. Returns NODEID_NONE if the ring is empty. */
+nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id);
 
 /* Successor skipping nodes in excluded[0..excl_n-1].
- * Returns NULL if the ring is empty or all nodes are excluded. */
-const char *ring_next_after(const ring_t *r, const char **excluded,
-                            size_t excl_n, uint32_t target_id);
+ * Returns NODEID_NONE if the ring is empty or all nodes are excluded. */
+nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
+                             size_t excl_n, uint32_t target_id);
 
 /* Number of virtual-node entries. */
 size_t ring_size(const ring_t *r);

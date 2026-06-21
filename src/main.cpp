@@ -76,7 +76,13 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  node_t node(homedir, addr_str);
+  nodeid_idx_t nid = nodeid_register(addr_str.c_str());
+  if (!nodeid_valid(nid)) {
+    fprintf(stderr, "Error: nodeid pool full, cannot register %s\n",
+            addr_str.c_str());
+    return 1;
+  }
+  node_t node(homedir, nid);
   node.seeds = seeds;
 
   // Create log dir before setting up the logger (sink needs the dir to exist).

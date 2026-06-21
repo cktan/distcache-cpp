@@ -144,10 +144,12 @@ static void handle_get(node_t &node, const httplib::Request &req,
     // The normal case! We need to redirect if this node is not dest.
 
     auto ring = node.ring.load();
-    const char *dest_c = ring_successor(ring.get(), rp_id);
-    std::string dest = dest_c ? dest_c : "";
-    if (!dest.empty() && dest != node.nodeid) {
-      // Key belongs to another ring node; update membership and redirect.
+    nodeid_idx_t dest_idx = ring_successor(ring.get(), rp_id);
+    if (nodeid_valid(dest_idx) && !nodeid_eq(dest_idx, node.nodeid)) {
+      // Key belongs to another ring node; look up string only for network ops.
+      const char *dest_c = nodeid_lookup(dest_idx);
+      std::string dest = dest_c ? dest_c : "";
+      // update membership and redirect.
       std::string dest_addr = membership_t::parse_peer(dest).first;
       node.membership.hint_alive(dest_addr);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
@@ -280,9 +282,10 @@ static void handle_health(node_t &node, const httplib::Request &,
 
   res.status = 200;
   res.set_header("Content-Type", "application/json");
+  const char *self_id = nodeid_lookup(node.nodeid);
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      node.nodeid, upsince, upfor, nodes, node.cache.size(),
+      self_id ? self_id : "", upsince, upfor, nodes, node.cache.size(),
       node.cache.disk_usepct(), used_gib_buf,
       node.cache.disk_error() ? "true" : "false", node.stats.hits.load(),
       node.stats.misses.load(), node.stats.served.load(),
@@ -407,8 +410,9 @@ static void handle_delete(node_t &node, const httplib::Request &req,
 // ──────────────────────────────────────────────────────────
 
 // Register all routes and start listening on nodeid's host:port (blocks).
-void http_server_t::start(const std::string &nodeid) {
-  auto [addr, fid] = membership_t::parse_peer(nodeid);
+void http_server_t::start(nodeid_idx_t nodeid) {
+  const char *nodeid_str = nodeid_lookup(nodeid);
+  auto [addr, fid] = membership_t::parse_peer(nodeid_str ? nodeid_str : "");
   size_t colon = addr.rfind(':');
   std::string host = addr.substr(0, colon);
   int port = std::stoi(addr.substr(colon + 1));

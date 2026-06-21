@@ -4,6 +4,7 @@
 #include "http.h"
 #include "keylock.h"
 #include "membership.h"
+#include "nodeid.h"
 #include "rebalance.h"
 #include "ring.h"
 #include "stats.h"
@@ -15,7 +16,7 @@
 
 struct node_t {
   std::string homedir;            // absolute root; all file ops use abspath()
-  std::string nodeid;             // "host:port" or "host:port/first_id"
+  nodeid_idx_t nodeid;            // registered index for "host:port[/first_id]"
   std::vector<std::string> seeds; // SWIM bootstrap peers
   keylock_t keylock;              // serialises concurrent S3 fetches per key
   cache_t cache;                  // file cache; owns lru_t internally
@@ -31,7 +32,7 @@ struct node_t {
   rebalancer_t rebalancer; // pull_one, claim_scan, hint_pull jobs
   http_server_t http;      // cpp-httplib thread-per-request server
 
-  node_t(const std::string &homedir, const std::string &nodeid)
+  node_t(const std::string &homedir, nodeid_idx_t nodeid)
       : homedir(homedir), nodeid(nodeid), cache(keylock, homedir),
         membership(*this), rebalancer(*this), http(*this) {}
   node_t(const node_t &) = delete;

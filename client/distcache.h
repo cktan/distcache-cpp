@@ -45,15 +45,18 @@ extern "C" {
 
 /*
  * dc_init — initialise with n known nodes ("host:port" strings).
- * Returns 0 on success, error code on failure (errmsg set).
- * Must not be called again without an intervening dc_final().
- * Calls dc_housekeeping() before returning; errors from housekeeping are
- * ignored (the provided seed nodes are sufficient to start).
+ * Returns 0 on success, -1 on failure (error details set in myerrno /
+ * myerrmsg). Must not be called again without an intervening dc_final(). Calls
+ * dc_housekeeping() before returning; errors from housekeeping are ignored (the
+ * provided seed nodes are sufficient to start).
  */
-int dc_init(int n, const char *const *node, char *errmsg, int errsz);
+int dc_init(int n, const char *const *node);
 
-/* dc_final — tear down all connections and free all memory. */
-void dc_final(void);
+/*
+ * dc_final — tear down all connections and free all memory.
+ * Returns 0 on success, -1 on failure.
+ */
+int dc_final(void);
 
 /*
  * dc_housekeeping — refresh the ring and reap stale connections.
@@ -65,10 +68,10 @@ void dc_final(void);
  *   are closed immediately. Newly discovered nodes are added.
  * - Reaps idle connections whose expiry time (5 min from establishment) has
  *   passed.
- * - Returns 0 on success, or an error code if /_nodes could not be reached
+ * - Returns 0 on success, or -1 if /_nodes could not be reached
  *   (connection cleanup still runs regardless).
  */
-int dc_housekeeping(char *errbuf, int errsz);
+int dc_housekeeping(void);
 
 /* ── GET ────────────────────────────────────────────────────────────────── */
 
@@ -77,14 +80,15 @@ int dc_housekeeping(char *errbuf, int errsz);
  *
  * The callback is invoked one or more times as DATA frames arrive:
  *   int callback(void *context, const char *buf, int bufsz)
+ * On EOF (successful completion of transmission), the callback is invoked
+ * once with bufsz == 0.
  * Return 0 from the callback to continue; return -1 to abort (dc_get
- * then returns DCERR_CALLBACK_FAILED).
+ * then returns -1, setting dc_errno() to DCERR_CALLBACK_FAILED).
  *
- * Returns 0 on success, error code on failure (errmsg set).
+ * Returns 0 on success, -1 on failure.
  */
 int dc_get(const char *bucket, const char *key, void *context,
-           int (*callback)(void *context, const char *buf, int bufsz),
-           char *errmsg, int errsz);
+           int (*callback)(void *context, const char *buf, int bufsz));
 
 /* ── Node enumeration ───────────────────────────────────────────────────── */
 
@@ -92,35 +96,31 @@ int dc_get(const char *bucket, const char *key, void *context,
  * dc_node — return a buffer listing all known nodes, one per line.
  *
  * On success: returns 0, sets *buf to a malloc'd null-terminated string of the
- * form "host:port\nhost:port\n...", and sets *n to the number of nodes.
+ * form "host:port[/first_id]\nhost:port[/first_id]\n...", and sets *n to the
+ * number of nodes.
  * Caller must free(*buf) after use.
- * On failure: returns DCERR_NOMEM.
+ * On failure: returns -1 (setting dc_errno() to DCERR_NOMEM).
  */
 int dc_node(char **buf, int *n);
 
 /* ── Health ─────────────────────────────────────────────────────────────── */
 
-typedef struct {
-  char id[256];
-  char upsince[32];
-  char upfor[32];
-  int64_t served;
-  int64_t hits;
-  int64_t misses;
-  int64_t redirects;
-  int64_t errors;
-  int nodes;
-  double usepct;
-  int64_t lru_size;
-  double used_gib;
-} dc_health_t;
-
 /*
  * dc_health — query /_health on the named node ("host:port").
  * node must not be NULL; use dc_node() to enumerate known nodes.
- * Returns 0 on success (out filled), error code on failure (errmsg set).
+ * On success, *out_buf is set to a growable, null-terminated JSON buffer.
+ * Caller must free(*out_buf) when done.
+ * Returns 0 on success, or -1 on failure (errmsg set, *out_buf set to NULL).
  */
-int dc_health(const char *node, dc_health_t *out, char *errmsg, int errsz);
+int dc_health(const char *node, char **out_buf);
+
+/* ── Error accessors ────────────────────────────────────────────────────── */
+
+/* dc_errno — return the error number from the last failed API call. */
+int dc_errno(void);
+
+/* dc_errmsg — return the error message from the last failed API call. */
+const char *dc_errmsg(void);
 
 /* ── Error codes ────────────────────────────────────────────────────────── */
 

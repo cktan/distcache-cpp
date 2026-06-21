@@ -51,12 +51,12 @@ void membership_t::rebuild_ring() {
     return;
   }
 
-  ring_add(r, node_.nodeid.c_str());
+  ring_add(r, node_.nodeid);
 
   if (npeers > 0) {
     const char *p = peerlist;
     for (int i = 0; i < npeers; i++) {
-      ring_add(r, p);
+      ring_add(r, nodeid_register(p));
       p += strlen(p) + 1;
     }
   }
@@ -65,7 +65,7 @@ void membership_t::rebuild_ring() {
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
     for (const auto &node : injected_)
-      ring_add(r, node.c_str());
+      ring_add(r, nodeid_register(node.c_str()));
   }
 
   ring_finalize(r);
@@ -88,16 +88,21 @@ void membership_t::inject_node(const std::string &nodeid) {
 
 // Start SWIM membership on the given nodeid, seeding from peers; spawns claim
 // sweep thread.
-bool membership_t::start(const std::string &nodeid,
+bool membership_t::start(nodeid_idx_t nodeid,
                          const std::vector<std::string> &seeds) {
-  auto [addr, fid] = parse_peer(nodeid);
+  const char *nodeid_str = nodeid_lookup(nodeid);
+  if (!nodeid_str) {
+    fprintf(stderr, "membership.start: invalid nodeid index\n");
+    return false;
+  }
+  auto [addr, fid] = parse_peer(nodeid_str);
   size_t colon = addr.rfind(':');
   std::string host = addr.substr(0, colon);
   std::string port_str = addr.substr(colon + 1);
   char *end;
   long p = strtol(port_str.c_str(), &end, 10);
   if (*end || p <= 0 || p > 65535) {
-    fprintf(stderr, "membership.start: bad nodeid: %s\n", nodeid.c_str());
+    fprintf(stderr, "membership.start: bad nodeid: %s\n", nodeid_str);
     return false;
   }
   uint16_t port = static_cast<uint16_t>(p);
@@ -174,7 +179,9 @@ bool membership_t::start(const std::string &nodeid,
                              [this] { return stopping_.load(); }))
         return;
     }
-    node_.rebalancer.claim_sweep(nodeid);
+    const char *s = nodeid_lookup(nodeid);
+    if (s)
+      node_.rebalancer.claim_sweep(s);
   });
 
   return true;
@@ -245,8 +252,11 @@ std::vector<std::string> membership_t::raw_peers() {
   {
     std::lock_guard<std::mutex> lk(ring_mu_);
     inst = inst_;
-    if (inst)
-      result.push_back(node_.nodeid);
+    if (inst) {
+      const char *s = nodeid_lookup(node_.nodeid);
+      if (s)
+        result.push_back(s);
+    }
   }
   if (!inst)
     return result;

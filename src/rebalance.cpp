@@ -87,7 +87,8 @@ void rebalancer_t::start() {
       if (!split_nodeid(dest, host, port, first_id))
         return;
 
-      std::string body = "{\"src\":\"" + node_.nodeid +
+      const char *self_str = nodeid_lookup(node_.nodeid);
+      std::string body = "{\"src\":\"" + std::string(self_str ? self_str : "") +
                          "\""
                          ",\"relpath\":\"" +
                          relpath +
@@ -122,7 +123,7 @@ void rebalancer_t::start() {
       // register the new peer in the ring before scanning against it
       node_.membership.inject_node(nodeid);
       auto [addr, fid] = membership_t::parse_peer(nodeid);
-      auto entries = scan_for_peer(nodeid);
+      auto entries = scan_for_peer(nodeid_find(nodeid.c_str()));
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
         // queue a hint_pull job per key now owned by addr
@@ -171,10 +172,10 @@ void rebalancer_t::claim_sweep(const std::string &nodeid) {
 }
 
 // Called by the claim_scan job handler above. Scans the local LRU for keys
-// whose ring successor is now peer_addr, returning up to the 50 most
+// whose ring successor is now peer_idx, returning up to the 50 most
 // recently touched (oldest entries skipped via the 5-day cutoff).
 std::vector<std::pair<std::string, time_t>>
-rebalancer_t::scan_for_peer(const std::string &peer_nodeid) {
+rebalancer_t::scan_for_peer(nodeid_idx_t peer_idx) {
   auto ring = node_.ring.load();
   time_t cutoff = time(nullptr) - 5 * 86400;
 
@@ -185,8 +186,8 @@ rebalancer_t::scan_for_peer(const std::string &peer_nodeid) {
       [&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
         if (mtime < cutoff)
           return;
-        const char *s = ring_successor(ring.get(), rp_id);
-        if (!s || peer_nodeid != s)
+        nodeid_idx_t s_idx = ring_successor(ring.get(), rp_id);
+        if (!nodeid_valid(s_idx) || !nodeid_eq(s_idx, peer_idx))
           return;
         heap.push({mtime, relpath});
         if (heap.size() > 50)

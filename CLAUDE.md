@@ -1,7 +1,7 @@
-## C++ Coding Style
+## C++/C Coding Style
 
 - use snake_case for names
-- class names end with '_t'
+- class names and struct names end with '_t'
 - for calls that trigger a significant operation (starting/
   stopping a service, acquiring a lock, chdir, logger setup,
   etc.), add a short comment naming the step, even if the

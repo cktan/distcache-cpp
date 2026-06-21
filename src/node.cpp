@@ -38,7 +38,8 @@ bool node_t::start() {
 
   // start membership service
   if (!membership.start(nodeid, seeds)) {
-    fprintf(stderr, "failed to start membership on %s\n", nodeid.c_str());
+    fprintf(stderr, "failed to start membership on %s\n",
+            nodeid_lookup(nodeid));
     rebalancer.stop();
     return false;
   }

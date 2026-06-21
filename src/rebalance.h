@@ -4,6 +4,7 @@
 // scan_for_peer (find keys a peer should own), and pull_one (fetch
 // one entry from a source peer).
 #include "feed.h"
+#include "nodeid.h"
 #include <cstdint>
 #include <string>
 #include <vector>
@@ -22,9 +23,9 @@ public:
   // Push all entries owned by nodeid to that node (called when it joins).
   void claim_sweep(const std::string &nodeid);
 
-  // Return all local entries whose consistent-hash owner is peer_nodeid.
+  // Return all local entries whose consistent-hash owner is peer_idx.
   std::vector<std::pair<std::string, time_t>>
-  scan_for_peer(const std::string &peer_nodeid);
+  scan_for_peer(nodeid_idx_t peer_idx);
 
   // Fetch one entry from src_addr and store it locally.
   void pull_one(const std::string &src_addr, const std::string &relpath);

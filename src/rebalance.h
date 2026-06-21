@@ -29,6 +29,11 @@ public:
   // Fetch one entry from src_addr and store it locally.
   void pull_one(const std::string &src_addr, const std::string &relpath);
 
+  // Splits a nodeid ("host:port/first_id" or "host:port") into host, port,
+  // and first_id. Returns false if parsing fails or port is out of range.
+  static bool split_nodeid(const std::string &nodeid, std::string &host,
+                           int &port, uint32_t &first_id);
+
 private:
   node_t &node_; // owning node; provides ring, LRU, and peer connections
 };

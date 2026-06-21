@@ -27,10 +27,16 @@ static bool relpath_to_bk(const std::string &relpath, std::string &bucket,
   return !bucket.empty() && !key.empty();
 }
 
-// Splits "host:port" into host and port. Used wherever a peer/dest address
-// needs to become an httplib::Client target (hint_pull, claim_sweep,
-// pull_one).
-static bool split_addr(const std::string &addr, std::string &host, int &port) {
+// Splits a nodeid ("host:port/first_id" or "host:port") into host, port,
+// and first_id. Returns false if parsing fails or port is out of range.
+bool rebalancer_t::split_nodeid(const std::string &nodeid, std::string &host,
+                                int &port, uint32_t &first_id) {
+  size_t slash = nodeid.find('/');
+  std::string addr =
+      (slash == std::string::npos) ? nodeid : nodeid.substr(0, slash);
+  std::string cookie =
+      (slash == std::string::npos) ? "" : nodeid.substr(slash + 1);
+
   size_t colon = addr.rfind(':');
   if (colon == std::string::npos)
     return false;
@@ -40,7 +46,21 @@ static bool split_addr(const std::string &addr, std::string &host, int &port) {
   } catch (...) {
     return false;
   }
-  return port > 0 && port <= 65535;
+  if (port <= 0 || port > 65535)
+    return false;
+
+  if (cookie.empty()) {
+    first_id = 0;
+  } else {
+    char *end = nullptr;
+    unsigned long val = strtoul(cookie.c_str(), &end, 10);
+    if (end == cookie.c_str() || *end != '\0') {
+      first_id = 0;
+    } else {
+      first_id = static_cast<uint32_t>(val);
+    }
+  }
+  return true;
 }
 
 // Called once at node startup (main.cpp). Registers the job-queue handler
@@ -63,7 +83,8 @@ void rebalancer_t::start() {
 
       std::string host;
       int port;
-      if (!split_addr(dest, host, port))
+      uint32_t first_id;
+      if (!split_nodeid(dest, host, port, first_id))
         return;
 
       std::string body = "{\"src\":\"" + node_.nodeid +
@@ -137,7 +158,8 @@ void rebalancer_t::claim_sweep(const std::string &nodeid) {
   for (const auto &peer : peers) {
     std::string host;
     int port;
-    if (!split_addr(peer, host, port))
+    uint32_t first_id;
+    if (!split_nodeid(peer, host, port, first_id))
       continue;
 
     httplib::Client cli(host, port);
@@ -258,7 +280,8 @@ void rebalancer_t::pull_one(const std::string &src_addr,
   // prepare to issue HTTP call
   std::string host;
   int port;
-  if (!split_addr(src_addr, host, port)) {
+  uint32_t first_id;
+  if (!split_nodeid(src_addr, host, port, first_id)) {
     return;
   }
 

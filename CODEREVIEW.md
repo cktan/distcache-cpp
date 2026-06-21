@@ -38,23 +38,6 @@ reference is held.
 
 ---
 
-## Path Validation & Key Routing Bugs
-
-### 2. `lru_t::disk_error()` Violates Node Isolation
-In [lru.cpp](file:///home/sprite/p/distcache-cpp/src/lru.cpp#L73-L76),
-the `disk_error()` check is implemented using:
-```cpp
-bool lru_t::disk_error() {
-  struct statvfs st;
-  return statvfs("./", &st) < 0;
-}
-```
-This queries `./` (the process's CWD) instead of the
-node's configured directory (`homedir_`). This
-violates the isolation guarantees defined in
-`DESIGN.md`, which state that multiple nodes running in
-the same process must be isolated from the CWD.
-
 ### 3. Leading Slash Key Routing Mismatch in Clients
 The client libraries in both languages
 ([distcache.c](file:///home/sprite/p/distcache-cpp/client/distcache.c)
@@ -76,29 +59,6 @@ which is rejected by `compute_relpath` as an invalid
 path with an empty segment, returning
 `ERR_INVALID_PATH`. The clients must strip leading
 slashes when constructing the GET path.
-
----
-
-## Architectural Isolation & Race Conditions
-
-### 4. Race Condition on Concurrent Reads During Writes
-In `http.cpp` ([handle_put](file:///home/sprite/p/distcache-cpp/src/http.cpp#L327))
-and `rebalance.cpp` ([pull_one](file:///home/sprite/p/distcache-cpp/src/rebalance.cpp#L248)),
-the file cache uses `cache_t::write()` to open a file
-descriptor directly at the final target path
-(`O_CREAT | O_EXCL`) before the payload is fully
-written.
-
-Since the file is created on disk immediately, any
-concurrent GET request for the same key will find that
-`cache_t::exists()` returns `true`. The server will
-then open the file descriptor `O_RDONLY` and stream
-whatever partial data is currently written, leading to
-silent client data corruption.
-
-PUT and Pull operations should write to a temporary
-file first (as S3 fetches do) and rename it
-atomically on success.
 
 ---
 

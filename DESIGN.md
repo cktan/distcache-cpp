@@ -54,9 +54,9 @@ extra coordination.
    the log file).
 4. Set up spdlog file + console sinks.
 5. Acquire PID lock (`homedir/dist_cache.lock`).
-6. Set `g_node_signal = &node`; install
+6. Initialize stop semaphore (`g_stop_sem`); install
    `SIGTERM`/`SIGINT` handlers.
-7. `node.start()` — creates `homedir/{cache,tmp}`,
+7. `node.start()` — creates `homedir/{log,cache,tmp}`,
    starts rebalancer and membership, detaches the
    startup scan thread, spawns the http thread.
 8. `node.join()` — blocks until the http thread exits.
@@ -79,12 +79,11 @@ after `stop()` to wait for a clean exit.
 
 ### Signal handler
 
-`on_signal` is a file-scope function that calls
-`g_node_signal->stop()`. `g_node_signal` is a
-`static node_t*` set in `main()` before `signal()`
-is installed. It is the only surviving file-scope
-pointer — necessary because POSIX signal handlers
-cannot capture state.
+`on_signal` posts to a `static sem_t g_stop_sem`.
+The main thread blocks on `sem_wait(&g_stop_sem)`,
+then calls `node.stop()` followed by `node.join()`.
+Using a semaphore keeps signal context async-signal-safe
+(no locks, no allocation, no virtual dispatch).
 
 ### PID lock
 
@@ -141,20 +140,21 @@ relpath_id = hash(0, relpath)        # deterministic; same on every node
 dest_node  = first ring point with id >= relpath_id (wraps)
 ```
 
-The ring is stored as a sorted `std::vector<RingEntry>`
-inside a `shared_ptr<ring_t>`. It lives in `node.ring` as
-`std::atomic<std::shared_ptr<ring_t>>` — lock-free read on
-the hot path, atomic-swap on membership change.
+The ring is a heap-allocated `ring_t` (sorted
+`ring_entry_t *entries` array) held in `node.ring` as
+`std::atomic<std::shared_ptr<ring_t>>` — lock-free
+read on the hot path, atomic-swap on membership
+change.
 
-Each `RingEntry::node` holds the full nodeid
+Each `ring_entry_t::node` holds the full nodeid
 (`host:port` or `host:port/first_id`), so
-`ring_t::successor()` returns a full nodeid. The
-GET handler compares it directly to `node.nodeid`
-to decide whether to redirect.
+`ring_successor()` returns a full nodeid. The GET
+handler compares it directly to `node.nodeid` to
+decide whether to redirect.
 
-Successor lookup: O(log N) binary search (`bisect_left`).
-`ring_t::next_after()` is O(log N + K) where K is the number
-of excluded nodes to skip.
+Successor lookup: O(log N) binary search
+(`bisect_left`). `ring_next_after()` is O(log N + K)
+where K is the number of excluded nodes to skip.
 
 ---
 
@@ -239,15 +239,6 @@ trailing slashes.
 3. `rename(tmp, dest)` — POSIX atomic. `tmp/` and `cache/`
    are on the same filesystem.
 4. `tmp/` is wiped at every startup — no orphan scan needed.
-
-### Direct/Streaming writes
-
-For endpoints that receive data incrementally (such as HTTP
-`PUT` and inter-node rebalance pulls), data is streamed
-directly to the final cache path using `cache_t::write(relpath,`
-`fd)` with `O_CREAT|O_EXCL`. If the write fails or the connection
-is aborted mid-stream, the node deletes the incomplete file using
-`cache_t::drop(relpath)`.
 
 ---
 
@@ -359,9 +350,9 @@ argument; `http_server_t::start()` registers them via
 lambdas that capture `node_` by reference.
 
 The `PUT` handler uses cpp-httplib's `ContentReader`
-streaming interface to write incoming body chunks directly
-to the cache file descriptor as they arrive, avoiding
-buffering the full request payload in memory.
+streaming interface to write incoming body chunks to a
+tmp file, then atomically renames it into the cache on
+success.
 
 The GET handler serves four cases: ring-redirect to the
 responsible peer; local cache hit; local-only miss
@@ -522,11 +513,11 @@ does the atomic rename.
 | `main.cpp` | entry point | flag parsing, node construction, logger setup, pidlock, lifecycle |
 | `node.h/.cpp` | struct | owns all shared state; `start/stop/join`; `abspath()` |
 | `fnv.h` | inline | FNV-1a-64, `ring_hash(prev, input)` |
-| `ring.h/.cpp` | plain | chord ring: sorted vector, binary search, 10-ID chain |
+| `ring.h/.c` | C | chord ring: sorted `ring_entry_t` array, binary search, 10-ID chain |
 | `relpath.h/.cpp` | plain | `compute_relpath`, path validation |
 | `rc.h/.cpp` | plain | `rc_t` typed error result; `fd_t` RAII file descriptor |
 | `unique.h/.cpp` | plain | `unique_get()` — atomic monotonic counter for tmp names |
-| `pidlock.h/.cpp` | plain | `O_CREAT\|O_EXCL` PID lock, stale-check via `kill(pid,0)` |
+| `pidlock.h/.cpp` | plain | `O_CREAT\|O_EXCL` PID lock, stale-check via `/proc/{pid}/comm` |
 | `feed.h/.cpp` | class | `feed_t`: `swim_feed_t` wrapper + consumer thread; `put(n,...)` |
 | `membership.h/.cpp` | class | SWIM lifecycle, ring rebuild, inject_node, claim sweep |
 | `cache.h/.cpp` | class | `cache_t`: file read/write (tmp+rename), owns `lru_t`, exposes LRU forwarding methods |
@@ -534,7 +525,7 @@ does the atomic rename.
 | `keylock.h/.cpp` | class | `keylock_t`: per-key condvar mutex; first caller owns, rest wait |
 | `stats.h/.cpp` | struct | `Stats` — atomic hit/miss/served/redirect/error/hint_pull counters |
 | `s3copy.h/.cpp` | plain | POST to sidecar `/copy`; configurable via `S3COPY_URL` |
-| `stream.h` | C API | wire framing: `stream_in/out`, fd wrappers, `push_frame_t`/`stream_in_push` |
+| `stream.h/.c` | C API | wire framing: `stream_in/out`, fd wrappers, `push_frame_t`/`stream_in_push` |
 | `wire.h/.cpp` | plain | TYPE:LENGTH encode (`wire_redirect`, `wire_err`, `wire_nodes`); `WIRE_FIN` constant |
 | `http.h/.cpp` | class | cpp-httplib routes; `/_health` + GET/PUT/DELETE + 2 POST inter-node |
 | `rebalance.h/.cpp` | class | `Rebalancer`: scan_for_peer, pull_one, claim_sweep; drives `node.jobq` |

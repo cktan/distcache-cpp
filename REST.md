@@ -15,21 +15,19 @@ TYPE:LEN\n
 <LEN bytes of payload>
 ```
 
-Frames appear back-to-back with no separator except for
-`INFO` frames, which write one extra `\n` after the payload
-before the following frame.
+Frames appear back-to-back with no separator.
 
 Frame types emitted by the server:
 
-| Type       | Payload                                          |
-|------------|--------------------------------------------------|
-| `INFO`     | JSON object                                      |
-| `DATA`     | raw file bytes (one frame per chunk)             |
-| `REDIRECT` | JSON string: `"host:port/first_id"`              |
-| `ERROR`    | JSON `{"type":"ERR_*","message":"..."}`          |
-| `FIN`      | empty (LEN=0); marks end of response             |
+| Type       | Payload                                       |
+|------------|-----------------------------------------------|
+| `DATA`     | raw file bytes (one frame per chunk)          |
+| `NODES`    | newline-delimited node IDs, one per line      |
+| `REDIRECT` | plain text: `host:port[/first_id]\n`          |
+| `ERROR`    | plain text: two lines — `type\nmessage\n`     |
+| `FIN`      | empty (LEN=0); marks end of response          |
 
-Every non-streaming response ends with `FIN:0\n`.
+Every response ends with `FIN:0\n`.
 
 ### Error payload
 
@@ -37,17 +35,21 @@ Every non-streaming response ends with `FIN:0\n`.
 arbitrary string for internal errors. Clients map `type` to
 a numeric error code; unknown types map to `DCERR_PROTOCOL`.
 
-| `type`                | Meaning                      |
-|-----------------------|------------------------------|
-| `ERR_NOT_CACHED`      | key not in local cache       |
-| `ERR_NO_NODE`         | no node owns this key        |
-| `ERR_DISK_FULL`       | cache disk is full           |
-| `ERR_S3`              | S3 fetch failed              |
-| `ERR_S3_AUTH`         | S3 authentication failure    |
-| `ERR_NOT_FOUND`       | object not found in S3       |
-| `ERR_TIMEOUT`         | operation timed out          |
-| `ERR_UNKNOWN_COMMAND` | unrecognized request         |
-| `ERR_BAD_OBJECT_NAME` | malformed bucket or key      |
+| `type`                | Meaning                           |
+|-----------------------|-----------------------------------|
+| `ERR_NOT_CACHED`      | key not in local cache            |
+| `ERR_INVALID_PATH`    | bucket or key failed validation   |
+| `ERR_S3_COPY`         | S3 fetch failed                   |
+| `ERR_IO`              | local I/O failure                 |
+| `ERR_BAD_REQUEST`     | missing or invalid request field  |
+| `ERR_NO_NODE`         | no node owns this key             |
+| `ERR_DISK_FULL`       | cache disk is full                |
+| `ERR_S3`              | S3 error (legacy)                 |
+| `ERR_S3_AUTH`         | S3 authentication failure         |
+| `ERR_NOT_FOUND`       | object not found in S3            |
+| `ERR_TIMEOUT`         | operation timed out               |
+| `ERR_UNKNOWN_COMMAND` | unrecognized request              |
+| `ERR_BAD_OBJECT_NAME` | malformed bucket or key           |
 
 ---
 
@@ -88,16 +90,18 @@ self.
 
 ### `GET /_nodes`
 
-Returns current cluster membership as a wire-framed `INFO`
-response. Used by the client libraries for ring housekeeping.
+Returns current cluster membership as a wire-framed
+`NODES` response. Used by the client libraries for
+ring housekeeping.
 
-**Response** (`INFO` frame, then `FIN`):
+**Response** (`NODES` frame, then `FIN`):
 
-```json
-["host:port[/first_id]", ...]
+```
+node1:4001/0\n
+node2:4002/789\n
 ```
 
-A flat array of node IDs (alive and suspected peers,
+Newline-delimited node IDs (alive and suspected peers,
 including self). Each ID is `host:port`, optionally
 suffixed with `/first_id`; clients use the suffix to
 place the node on the consistent-hash ring at the
@@ -123,7 +127,7 @@ components; `key` may contain `/`.
 - **Cache hit on this node** — one or more `DATA` frames
   containing the raw file bytes, terminated by `FIN`.
 - **Key owned by another node** — `REDIRECT` frame whose
-  payload is a single JSON string `"host:port/first_id"`
+  payload is plain text `host:port[/first_id]\n`
   identifying the responsible node. Followed by `FIN`.
 - **Error** — `ERROR` frame followed by `FIN`.
 

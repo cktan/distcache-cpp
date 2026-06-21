@@ -12,7 +12,8 @@
 // Bind membership to a node; swim instance starts null until start() is called.
 membership_t::membership_t(node_t &n) : node_(n) {}
 
-// Parse "addr/cookie" peer string; returns {addr, 0} if cookie is absent or invalid.
+// Parse "addr/cookie" peer string; returns {addr, 0} if cookie is absent or
+// invalid.
 std::pair<std::string, uint32_t>
 membership_t::parse_peer(const std::string &s) {
   size_t slash = s.find('/');
@@ -32,47 +33,39 @@ membership_t::parse_peer(const std::string &s) {
   return {addr, static_cast<uint32_t>(val)};
 }
 
-// Rebuild consistent hash ring from live SWIM peers and injected nodes; atomically replaces node_.ring.
+// Rebuild consistent hash ring from live SWIM peers and injected nodes;
+// atomically replaces node_.ring.
 void membership_t::rebuild_ring() {
   std::lock_guard<std::mutex> lk(ring_mu_);
   if (!inst_)
     return;
 
-  char *buf = nullptr;
-  int n = swim_peers(inst_, /*include_dead=*/false, &buf);
-  if (n < 0)
+  char *peerlist = nullptr;
+  int npeers = swim_peers(inst_, /*include_dead=*/false, &peerlist);
+  if (npeers < 0)
     return;
-
-  auto make_nodeid = [](const std::string &addr, uint32_t fid) {
-    return fid ? addr + "/" + std::to_string(fid) : addr;
-  };
 
   ring_t *r = ring_create();
   if (!r) {
-    free(buf);
+    free(peerlist);
     return;
   }
 
-  auto add_node = [&](const std::string &addr, uint32_t fid) {
-    ring_add(r, make_nodeid(addr, fid).c_str());
-  };
-
   ring_add(r, node_.nodeid.c_str());
 
-  if (buf && n > 0) {
-    const char *p = buf;
-    for (int i = 0; i < n; i++) {
-      auto [addr, fid] = parse_peer(std::string(p));
-      add_node(addr, fid);
+  if (npeers > 0) {
+    const char *p = peerlist;
+    for (int i = 0; i < npeers; i++) {
+      ring_add(r, p);
       p += strlen(p) + 1;
     }
   }
-  free(buf);
+  free(peerlist);
 
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
-    for (const auto &[addr, fid] : injected_)
-      add_node(addr, fid);
+    for (const auto &node : injected_)
+      ring_add(r, node.c_str());
   }
 
   ring_finalize(r);
@@ -83,17 +76,18 @@ void membership_t::rebuild_ring() {
           ring_size(new_ring.get()), ring_node_count(new_ring.get()));
 }
 
-// Inject a node into the ring outside of SWIM (e.g. for testing or forced membership).
+// Inject a node into the ring outside of SWIM (e.g. for testing or forced
+// membership).
 void membership_t::inject_node(const std::string &nodeid) {
-  auto [addr, fid] = parse_peer(nodeid);
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
-    injected_[addr] = fid;
+    injected_.push_back(nodeid);
   }
   rebuild_ring();
 }
 
-// Start SWIM membership on the given nodeid, seeding from peers; spawns claim sweep thread.
+// Start SWIM membership on the given nodeid, seeding from peers; spawns claim
+// sweep thread.
 bool membership_t::start(const std::string &nodeid,
                          const std::vector<std::string> &seeds) {
   auto [addr, fid] = parse_peer(nodeid);
@@ -138,14 +132,13 @@ bool membership_t::start(const std::string &nodeid,
     if (type == "node" && rec.size() >= 3) {
       const std::string &verb = rec[1];
       const std::string &peer = rec[2];
-      auto [addr, _fid] = parse_peer(peer);
       if (verb == "down") {
         std::lock_guard<std::mutex> lk(injected_mtx_);
-        injected_.erase(addr);
+        std::erase(injected_, peer);
       }
       rebuild_ring();
       fprintf(stderr, "%s ring.change node=%s event=%s\n", timestamp().c_str(),
-              addr.c_str(), verb.c_str());
+              peer.c_str(), verb.c_str());
       return;
     }
 
@@ -208,7 +201,8 @@ void membership_t::leave() {
     swim_leave(tmp);
 }
 
-// Hint to SWIM that a peer is alive; used to accelerate convergence after a redirect.
+// Hint to SWIM that a peer is alive; used to accelerate convergence after a
+// redirect.
 void membership_t::hint_alive(const std::string &peer_addr) {
   if (inst_)
     swim_hint_alive(inst_, peer_addr.c_str());
@@ -243,7 +237,8 @@ std::vector<std::string> membership_t::alive_peers() {
   return result;
 }
 
-// Return raw nodeids of all known peers including self, preserving cookie suffixes.
+// Return raw nodeids of all known peers including self, preserving cookie
+// suffixes.
 std::vector<std::string> membership_t::raw_peers() {
   swim_t *inst = nullptr;
   std::vector<std::string> result;

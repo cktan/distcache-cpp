@@ -63,7 +63,7 @@ private:
   swim_t *inst_ = nullptr;
   std::mutex ring_mu_;
   std::mutex injected_mtx_;
-  std::map<std::string, uint32_t> injected_;
+  std::vector<std::string> injected_;
 
   std::mutex claim_mu_;
   std::condition_variable claim_cv_;

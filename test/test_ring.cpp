@@ -205,8 +205,7 @@ TEST_CASE("distinct: sorted ascending by nodeidx.v") {
   ring_finalize(r);
   REQUIRE(r->distinct.top == 3);
   for (int i = 1; i < r->distinct.top; i++)
-    CHECK(r->distinct.entries[i].node.v >
-          r->distinct.entries[i - 1].node.v);
+    CHECK(r->distinct.entries[i].node.v > r->distinct.entries[i - 1].node.v);
   ring_destroy(r);
   nodeid_destroy();
 }

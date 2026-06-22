@@ -1,16 +1,21 @@
 /*
  * DistCache C client implementation.
  *
- * Global state lives in g_dctab (mutex, dynamic nodes array, ring).
- * Connection pool lives in a global ring-buffer connection pool (g_curl_pool).
- * g_dctab.mutex is released before any network I/O or callback invocations.
+ * Global state lives in g_dctab (mutex, ring); the node list
+ * is available from ring_t::distinct after ring_finalize.
+ * Connection pool lives in a global ring-buffer connection
+ * pool (g_curl_pool).
+ * g_dctab.mutex is released before any network I/O or
+ * callback invocations.
  *
  * Connection lifecycle:
- *   - The global pool caches up to CURL_POOL_CAP connections with keep-alive.
+ *   - The global pool caches up to CURL_POOL_CAP connections
+ *     with keep-alive.
  *   - Each slot has an expire_time (now + DC_CONN_EXPIRE_SECS).
  *   - Expired idle slots are reaped at checkout.
- *   - Connections to dead nodes (removed from the server's ring) are pruned
- *     immediately by dc_housekeeping calling curl_pool_gc.
+ *   - Connections to dead nodes (removed from the server's
+ *     ring) are pruned immediately by dc_housekeeping calling
+ *     curl_pool_gc.
  */
 
 #define _GNU_SOURCE /* memmem */
@@ -47,10 +52,7 @@ typedef struct {
 /* ── Global state ───────────────────────────────────────────────────────── */
 
 static struct {
-  pthread_mutex_t
-      mutex;           /* guards nodes[], n_nodes, ring; released during I/O */
-  nodeid_idx_t *nodes; /* dynamic array of known node indices */
-  int n_nodes;
+  pthread_mutex_t mutex; /* guards ring; released during I/O */
   ring_t *ring;
 } g_dctab = {
     .mutex = PTHREAD_MUTEX_INITIALIZER,
@@ -70,33 +72,27 @@ static uint32_t compute_dest_id(const char *bucket, const char *key) {
 
 /* ── Ring management ────────────────────────────────────────────────────── */
 
-/* Rebuild the sorted ring from all non-dead nodes. Caller holds g_dctab.mutex.
- */
-static int ring_rebuild(void) {
+/* Rebuild the sorted ring from the given node list.
+ * Caller holds g_dctab.mutex. */
+static int ring_rebuild(const nodeid_idx_t *nodes, int n_nodes) {
   ring_t *r = ring_create();
   if (!r)
     return -1;
-  for (int i = 0; i < g_dctab.n_nodes; i++)
-    ring_add(r, g_dctab.nodes[i]);
+  for (int i = 0; i < n_nodes; i++)
+    ring_add(r, nodes[i]);
   ring_finalize(r);
   ring_destroy(g_dctab.ring);
   g_dctab.ring = r;
   return 0;
 }
 
-/* Return index into g_dctab.node[] whose ring position is the successor of
- * target_id. Returns -1 if the ring is empty. Caller holds g_dctab.mutex. */
-static int find_successor(uint32_t target_id) {
+/* Return the nodeid_idx_t of the ring successor of target_id.
+ * Returns NODEID_NONE if the ring is empty.
+ * Caller holds g_dctab.mutex. */
+static nodeid_idx_t find_successor(uint32_t target_id) {
   if (!g_dctab.ring)
-    return -1;
-  nodeid_idx_t succ_idx = ring_successor(g_dctab.ring, target_id);
-  if (!nodeid_valid(succ_idx))
-    return -1;
-  for (int i = 0; i < g_dctab.n_nodes; i++) {
-    if (nodeid_eq(g_dctab.nodes[i], succ_idx))
-      return i;
-  }
-  return -1;
+    return NODEID_NONE;
+  return ring_successor(g_dctab.ring, target_id);
 }
 
 /* ── Node management ────────────────────────────────────────────────────── */
@@ -135,30 +131,31 @@ static void node_checkin(dc_conn_t *conn) {
 
 /* ── ring_add_node ──────────────────────────────────────────────────────── */
 
-/* Add a newly discovered node (reviving dead one if present) and rebuild the
- * ring. Caller must hold g_dctab.mutex. */
+/* Add a newly discovered node and rebuild the ring.
+ * Caller must hold g_dctab.mutex. */
 static int ring_add_node(const char *name) {
-  /* Check if this nodeid is already known. */
-  int found = -1;
-  for (int j = 0; j < g_dctab.n_nodes; j++) {
-    if (strcmp(nodeid_lookup(g_dctab.nodes[j]), name) == 0) {
-      found = j;
-      break;
-    }
+  /* Register the node (idempotent). */
+  nodeid_idx_t new_idx = nodeid_register(name);
+  if (!nodeid_valid(new_idx))
+    return -1;
+
+  /* Collect existing nodes from the ring; append new_idx if absent. */
+  int n = g_dctab.ring ? g_dctab.ring->distinct.top : 0;
+  nodeid_idx_t *nodes = malloc((size_t)(n + 1) * sizeof(nodeid_idx_t));
+  if (!nodes)
+    return -1;
+  int already_in = 0;
+  for (int i = 0; i < n; i++) {
+    nodes[i] = g_dctab.ring->distinct.entries[i].node;
+    if (nodeid_eq(nodes[i], new_idx))
+      already_in = 1;
   }
-  if (found < 0) {
-    /* New node: register nodeid, append to nodes array. */
-    nodeid_idx_t idx = nodeid_register(name);
-    if (!nodeid_valid(idx))
-      return -1;
-    nodeid_idx_t *tmp = realloc(g_dctab.nodes, (size_t)(g_dctab.n_nodes + 1) *
-                                                   sizeof(nodeid_idx_t));
-    if (!tmp)
-      return -1;
-    g_dctab.nodes = tmp;
-    g_dctab.nodes[g_dctab.n_nodes++] = idx;
-  }
-  return ring_rebuild();
+  if (!already_in)
+    nodes[n++] = new_idx;
+
+  int rc = ring_rebuild(nodes, n);
+  free(nodes);
+  return rc;
 }
 
 /* ── URL encoding ───────────────────────────────────────────────────────── */
@@ -544,9 +541,9 @@ int dc_housekeeping(void) {
   pthread_mutex_lock(&housekeeping_mutex);
   int hk_rc = 0;
 
-  /* ── Step 1: Snapshot node names for /_nodes probe ─────────────────── */
+  /* ── Step 1: Snapshot node indices for /_nodes probe ────────────────── */
   pthread_mutex_lock(&g_dctab.mutex);
-  int snap_n = g_dctab.n_nodes;
+  int snap_n = g_dctab.ring ? g_dctab.ring->distinct.top : 0;
   nodeid_idx_t *snap_names = NULL;
   if (snap_n > 0) {
     snap_names = malloc((size_t)snap_n * sizeof(nodeid_idx_t));
@@ -558,7 +555,7 @@ int dc_housekeeping(void) {
       return -1;
     }
     for (int i = 0; i < snap_n; i++)
-      snap_names[i] = g_dctab.nodes[i];
+      snap_names[i] = g_dctab.ring->distinct.entries[i].node;
   }
   pthread_mutex_unlock(&g_dctab.mutex);
 
@@ -598,52 +595,55 @@ int dc_housekeeping(void) {
   }
   free(snap_names);
 
-  /* ── Step 3: Update ring ────────────────────────────────────────────── */
+  /* ── Step 3: Rebuild ring from merged node list ──────────────────────── */
   pthread_mutex_lock(&g_dctab.mutex);
 
   if (fetch_ok && n_new > 0) {
-    /* Rebuild nodes array: keep existing nodes in new list, add new ones. */
-    int w = 0;
-    for (int i = 0; i < g_dctab.n_nodes; i++) {
+    /* Keep existing ring nodes that appear in new_names; add any new ones. */
+    int old_n = g_dctab.ring ? g_dctab.ring->distinct.top : 0;
+    nodeid_idx_t *nodes =
+        malloc((size_t)(old_n + n_new) * sizeof(nodeid_idx_t));
+    if (nodes) {
+      int n = 0;
+
+      /* Retain existing nodes that are still present. */
+      for (int i = 0; i < old_n; i++) {
+        nodeid_idx_t idx = g_dctab.ring->distinct.entries[i].node;
+        const char *s = nodeid_lookup(idx);
+        for (int j = 0; j < n_new; j++) {
+          if (strcmp(s, new_names[j]) == 0) {
+            nodes[n++] = idx;
+            break;
+          }
+        }
+      }
+
+      /* Append nodes from new_names not already retained. */
       for (int j = 0; j < n_new; j++) {
-        if (strcmp(nodeid_lookup(g_dctab.nodes[i]), new_names[j]) == 0) {
-          g_dctab.nodes[w++] = g_dctab.nodes[i];
-          break;
+        int found = 0;
+        for (int i = 0; i < n; i++) {
+          if (strcmp(nodeid_lookup(nodes[i]), new_names[j]) == 0) {
+            found = 1;
+            break;
+          }
+        }
+        if (!found) {
+          nodeid_idx_t idx = nodeid_register(new_names[j]);
+          if (nodeid_valid(idx))
+            nodes[n++] = idx;
         }
       }
-    }
-    g_dctab.n_nodes = w;
 
-    for (int j = 0; j < n_new; j++) {
-      int found = 0;
-      for (int i = 0; i < g_dctab.n_nodes; i++) {
-        if (strcmp(nodeid_lookup(g_dctab.nodes[i]), new_names[j]) == 0) {
-          found = 1;
-          break;
-        }
-      }
-      if (!found) {
-        nodeid_idx_t idx = nodeid_register(new_names[j]);
-        if (!nodeid_valid(idx))
-          continue;
-        nodeid_idx_t *tmp =
-            realloc(g_dctab.nodes,
-                    (size_t)(g_dctab.n_nodes + 1) * sizeof(nodeid_idx_t));
-        if (!tmp)
-          continue;
-        g_dctab.nodes = tmp;
-        g_dctab.nodes[g_dctab.n_nodes++] = idx;
-      }
+      ring_rebuild(nodes, n);
+      free(nodes);
     }
+    /* On malloc failure, leave current ring unchanged. */
   }
-
-  ring_rebuild();
 
   nodeid_bloom_t bf;
   nodeid_bloom_init(&bf);
-  if (g_dctab.ring) {
+  if (g_dctab.ring)
     bf = g_dctab.ring->bloom;
-  }
 
   pthread_mutex_unlock(&g_dctab.mutex);
 
@@ -667,16 +667,16 @@ int dc_init(int n, const char *const *node) {
     return -1;
   }
 
-  nodeid_idx_t *nodes = malloc((size_t)n * sizeof(nodeid_idx_t));
-  if (!nodes) {
+  nodeid_idx_t *indices = malloc((size_t)n * sizeof(nodeid_idx_t));
+  if (!indices) {
     myerrno = DCERR_NOMEM;
     snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
     return -1;
   }
   for (int i = 0; i < n; i++) {
-    nodes[i] = nodeid_register(node[i]);
-    if (!nodeid_valid(nodes[i])) {
-      free(nodes);
+    indices[i] = nodeid_register(node[i]);
+    if (!nodeid_valid(indices[i])) {
+      free(indices);
       myerrno = DCERR_NOMEM;
       snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
       return -1;
@@ -684,21 +684,17 @@ int dc_init(int n, const char *const *node) {
   }
 
   pthread_mutex_lock(&g_dctab.mutex);
-  free(g_dctab.nodes);
   ring_destroy(g_dctab.ring);
-  g_dctab.nodes = nodes;
-  g_dctab.n_nodes = n;
   g_dctab.ring = NULL;
 
-  if (ring_rebuild() != 0) {
-    free(nodes);
-    g_dctab.nodes = NULL;
-    g_dctab.n_nodes = 0;
+  if (ring_rebuild(indices, n) != 0) {
+    free(indices);
     pthread_mutex_unlock(&g_dctab.mutex);
     myerrno = DCERR_NOMEM;
     snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
     return -1;
   }
+  free(indices);
   pthread_mutex_unlock(&g_dctab.mutex);
 
   /* Refresh ring from /_nodes; ignore errors (seed nodes are sufficient). */
@@ -710,10 +706,7 @@ int dc_init(int n, const char *const *node) {
 /* Release all resources; must be called with no in-flight dc_get requests. */
 int dc_final(void) {
   pthread_mutex_lock(&g_dctab.mutex);
-  free(g_dctab.nodes);
   ring_destroy(g_dctab.ring);
-  g_dctab.nodes = NULL;
-  g_dctab.n_nodes = 0;
   g_dctab.ring = NULL;
   pthread_mutex_unlock(&g_dctab.mutex);
   /* Tear down connection pool */
@@ -731,14 +724,13 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 
   pthread_mutex_lock(&g_dctab.mutex);
   uint32_t dest = compute_dest_id(bucket, key);
-  int node_idx = find_successor(dest);
-  if (node_idx < 0) {
+  nodeid_idx_t nid = find_successor(dest);
+  if (!nodeid_valid(nid)) {
     pthread_mutex_unlock(&g_dctab.mutex);
     myerrno = DCERR_NO_NODE;
     snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
     return -1;
   }
-  nodeid_idx_t nid = g_dctab.nodes[node_idx];
   pthread_mutex_unlock(&g_dctab.mutex);
 
   dc_conn_t conn;
@@ -768,15 +760,13 @@ int dc_get(const char *bucket, const char *key, void *ctx,
       snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
       return -1;
     }
-    int new_idx = find_successor(dest);
-    if (new_idx < 0) {
+    nid = find_successor(dest);
+    if (!nodeid_valid(nid)) {
       pthread_mutex_unlock(&g_dctab.mutex);
       myerrno = DCERR_NO_NODE;
       snprintf(myerrmsg, sizeof(myerrmsg), "ring empty after redirect");
       return -1;
     }
-    node_idx = new_idx;
-    nid = g_dctab.nodes[node_idx];
     pthread_mutex_unlock(&g_dctab.mutex);
 
     node_checkout(nid, &conn);
@@ -793,11 +783,13 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 int dc_node(char **buf, int *n) {
   pthread_mutex_lock(&g_dctab.mutex);
 
-  int live = g_dctab.n_nodes;
+  int live = g_dctab.ring ? (int)ring_node_count(g_dctab.ring) : 0;
 
   size_t sz = 1;
-  for (int i = 0; i < g_dctab.n_nodes; i++)
-    sz += strlen(nodeid_lookup(g_dctab.nodes[i])) + 1;
+  if (g_dctab.ring) {
+    for (int i = 0; i < g_dctab.ring->distinct.top; i++)
+      sz += strlen(nodeid_lookup(g_dctab.ring->distinct.entries[i].node)) + 1;
+  }
 
   char *out = malloc(sz);
   if (!out) {
@@ -808,12 +800,14 @@ int dc_node(char **buf, int *n) {
   }
 
   size_t pos = 0;
-  for (int i = 0; i < g_dctab.n_nodes; i++) {
-    const char *nstr = nodeid_lookup(g_dctab.nodes[i]);
-    size_t len = strlen(nstr);
-    memcpy(out + pos, nstr, len);
-    pos += len;
-    out[pos++] = '\n';
+  if (g_dctab.ring) {
+    for (int i = 0; i < g_dctab.ring->distinct.top; i++) {
+      const char *nstr = nodeid_lookup(g_dctab.ring->distinct.entries[i].node);
+      size_t len = strlen(nstr);
+      memcpy(out + pos, nstr, len);
+      pos += len;
+      out[pos++] = '\n';
+    }
   }
   out[pos] = '\0';
 
@@ -835,10 +829,13 @@ int dc_health(const char *node_name, char **out_buf) {
 
   pthread_mutex_lock(&g_dctab.mutex);
   nodeid_idx_t found = NODEID_NONE;
-  for (int i = 0; i < g_dctab.n_nodes; i++) {
-    if (strcmp(nodeid_lookup(g_dctab.nodes[i]), node_name) == 0) {
-      found = g_dctab.nodes[i];
-      break;
+  if (g_dctab.ring) {
+    for (int i = 0; i < g_dctab.ring->distinct.top; i++) {
+      nodeid_idx_t idx = g_dctab.ring->distinct.entries[i].node;
+      if (strcmp(nodeid_lookup(idx), node_name) == 0) {
+        found = idx;
+        break;
+      }
     }
   }
   pthread_mutex_unlock(&g_dctab.mutex);

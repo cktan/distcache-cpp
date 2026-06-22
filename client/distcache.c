@@ -438,6 +438,8 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
       return -1;
     }
 
+    // TODO: return error on unknown frame type
+
     return 0;
   }
 

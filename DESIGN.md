@@ -48,7 +48,8 @@ extra coordination.
 **Startup sequence:**
 
 1. Parse flags (order-independent).
-2. Construct `node_t node(homedir, nodeid)`.
+2. Call `nodeid_register(addr_str)` to get `nodeid_idx_t nid`.
+   Construct `node_t node(homedir, nid)`.
    Set `node.seeds`.
 3. `mkdir -p homedir/log` (needed before logger opens
    the log file).
@@ -120,6 +121,9 @@ hash(prev, input) = FNV-1a-64(str(prev) + ":" + input) mod 2^32
 
 id[0] = first_id  (if /first_id given in nodeid)  OR  hash(0, "host:port")
 id[n] = hash(id[n-1], "host:port:" + str(id[n-1]))   n ≥ 1
+
+When /first_id is present the chain uses the bare "host:port" address
+(without the /first_id suffix) as the chain_name in subsequent IDs.
 ```
 
 Ring space: `[0, 2^32)`. On ID collision, the
@@ -167,18 +171,19 @@ isolation.
 
 ```
 struct node_t {
-    std::string homedir; // absolute path; all file ops use abspath()
-    std::string nodeid;  // "host:port" or "host:port/first_id"
+    std::string homedir;   // absolute root; all file ops use abspath()
+    nodeid_idx_t nodeid;   // registered pool index for "host:port[/first_id]"
     std::vector<std::string> seeds; // SWIM bootstrap peers
-    keylock_t keylock;   // per-key S3 fetch serialization
-    cache_t   cache;     // file cache + embedded lru_t
-    Stats     stats;     // atomic hit/miss/error counters
-    atomic<shared_ptr<ring_t>> ring;
-    feed_t    feed;      // SWIM + telemetry feed
-    feed_t    jobq;      // async job queue
-    membership_t  membership;
-    rebalancer_t  rebalancer;
-    http_server_t http;
+    keylock_t keylock;     // serialises concurrent S3 fetches per key
+    cache_t   cache;       // file cache; owns lru_t internally
+    Stats     stats;       // atomic hit/miss/redirect/error counters
+    atomic<shared_ptr<ring_t>> ring; // lock-free ring; swapped on change
+    feed_t    feed;        // SWIM events + app telemetry
+    feed_t    jobq;        // async job queue (hint_pull, do_pull,
+                           //   claim_scan, maybe_evict)
+    membership_t  membership; // SWIM lifecycle, ring rebuild, inject
+    rebalancer_t  rebalancer; // pull_one, claim_scan, hint_pull jobs
+    http_server_t http;       // cpp-httplib thread-per-request server
 
     bool start();  // create dirs, start services, spawn http thread
     void stop();   // signal all services to stop
@@ -277,17 +282,17 @@ and a `put(n, ...)` method.
 
 **Ring rebuild:** `Membership::rebuild_ring()` calls
 `swim_peers()`, merges alive peers with self and with any
-injected-but-not-yet-converged nodes (`injected_` map), and
-atomic-stores a new `shared_ptr<ring_t>` into `node_.ring`.
-Ring keys are full nodeids (`host:port` or
-`host:port/first_id`); the ring ID chain is still
-computed from the bare address and first_id.
+injected-but-not-yet-converged nodes (`injected_` vector),
+and atomic-stores a new `shared_ptr<ring_t>` into
+`node_.ring`. Ring keys are full nodeids (`host:port` or
+`host:port/first_id`); the ring ID chain is computed from
+the bare address and first_id.
 
-**Pre-convergence injection:** `inject_node(addr, first_id)`
-adds a node to the `injected_` map and triggers an immediate
-ring rebuild. On a subsequent "down" event the injected entry
-is cleared. This lets the ring reflect a joining node before
-SWIM has delivered the convergence event.
+**Pre-convergence injection:** `inject_node(nodeid)` appends
+a nodeid string to the `injected_` vector and triggers an
+immediate ring rebuild. On a subsequent "down" event the
+entry is erased. This lets the ring reflect a joining node
+before SWIM has delivered the convergence event.
 
 ---
 
@@ -320,9 +325,9 @@ two roles:
    `cache.redirect`, `rebalance.pull`) to it.
 
 The consumer thread runs inside `membership_t`. When a `node`
-`down` event is detected, it updates the local injected peer
-cache and rebuilds the chord ring. Telemetry and warnings are
-logged to standard error.
+`down` event is detected, it removes the peer from the
+`injected_` vector and rebuilds the chord ring. Telemetry
+and warnings are written to stderr.
 
 ### Job Queue (node.jobq)
 
@@ -335,10 +340,10 @@ types of jobs are currently supported:
 
 | Job type | Args | Description |
 |----------|------|-------------|
-| `hint_pull` | `addr relpath mtime_str` | POSTs `/_hint_pull` to `addr` telling it to pull `relpath` from us. Fired when the GET redirect branch finds the file locally or when `/_claim_keyspace` scan finds keys belonging to a claimant. |
-| `do_pull` | `src_addr relpath mtime_str` | Calls `pull_one(src, relpath, mtime)` to fetch `relpath` from `src_addr` into local cache. Enqueued by the `/_hint_pull` handler so that handler returns immediately. |
+| `hint_pull` | `addr relpath mtime_str` | POSTs `/_hint_pull` to `addr` telling it to pull `relpath` from us. Fired when the GET redirect branch finds the file locally or when `claim_scan` finds keys belonging to a claimant. |
+| `do_pull` | `src_addr relpath mtime_str` | Calls `pull_one(src_addr, relpath)` to fetch `relpath` from `src_addr` into local cache. Enqueued by the `/_hint_pull` handler so that handler returns immediately. |
 | `claim_scan` | `nodeid` | Calls `inject_node(nodeid)` to update the ring, scans the LRU for keys whose successor is the claimant, and enqueues a `hint_pull` job per matching key. Enqueued by the `/_claim_keyspace` handler to avoid blocking it on an O(N) LRU scan. |
-| `evict` | _(none)_ | Calls `node.cache.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
+| `maybe_evict` | _(none)_ | Calls `node.cache.maybe_evict()`, which checks disk pressure via `statvfs` and evicts the oldest eligible file if needed. Enqueued after every cache write (S3 fetch, PUT, rebalance pull) so the handler thread is not blocked by the filesystem call. |
 
 ---
 
@@ -463,15 +468,16 @@ The receiving node (new owner) calls `Rebalancer::pull_one`:
 1. Fast check: skip if `cache_exists`.
 2. Acquire `keylock_t` (prevents duplicate pulls).
 3. Re-check `cache_exists` after acquire.
-4. `GET http://src/bucket/key?local=1&delete=1` using a
-   streaming GET client receiver.
-5. Parse the `DATA:N\n` envelope header on the fly.
-6. Write payload chunks directly into the cache
-   file descriptor (deleting file on failure).
-7. Release `keylock_t`.
+4. `GET http://src/bucket/key?local=1&delete=1` streaming
+   into a tmp file via `stream_in_push`.
+5. Parse `DATA:N\n` frames on the fly, writing payload
+   bytes directly to the tmp file descriptor.
+6. On success, atomically rename tmp → cache path.
+7. Release `keylock_t`; enqueue `maybe_evict`.
 
-`?delete=1` tells the source to delete its copy after
-serving — no second round-trip.
+`?local=1` skips ring routing; `?delete=1` tells the
+source to remove its copy after serving — no second
+round-trip.
 
 ---
 
@@ -499,10 +505,11 @@ a tmp path and does the atomic rename on success.
 (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`,
 `AWS_REGION`) are consumed by the sidecar only.
 
-`s3copy_fetch(bucket, key, abspath, homedir)` generates a
-tmp path via `tmp_path(homedir)`, sends it as `dest`, and
-on success the sidecar writes to `dest` directly; the caller
-does the atomic rename.
+`s3copy_fetch(bucket, key, dest_abspath)` posts the sidecar
+request with the caller-supplied `dest` path. The sidecar
+writes the object directly to that path. The caller (GET
+handler, pull_one) is responsible for choosing a tmp path
+and performing the atomic rename on success.
 
 ---
 

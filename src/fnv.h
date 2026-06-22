@@ -2,8 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
-/* FNV-1a 64-bit: ring_hash(prev, input) = FNV1a64("prev:input") mod 2^32.
-   Matches DistCache.Ring.hash/2 in Elixir exactly. */
+/* FNV-1a 64-bit: ring_hash(prev, input) = FNV1a64(str(prev) + ":" + input)
+   truncated to 32 bits. Used to derive virtual ring IDs from node addresses. */
 static inline uint32_t ring_hash(uint32_t prev, const char *input) {
   static const uint64_t FNV_BASIS = UINT64_C(14695981039346656037);
   static const uint64_t FNV_PRIME = UINT64_C(1099511628211);

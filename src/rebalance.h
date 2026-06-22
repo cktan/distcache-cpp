@@ -1,8 +1,8 @@
 #pragma once
 // rebalancer_t: moves cache entries between nodes when ring membership
-// changes. Drives claim_sweep (push owned keys to a joining node),
-// scan_for_peer (find keys a peer should own), and pull_one (fetch
-// one entry from a source peer).
+// changes. Drives claim_sweep (notify peers of a new node's keyspace),
+// scan_for_peer (find local keys a peer should own), and pull_one
+// (stream one entry from a source peer into local cache).
 #include "feed.h"
 #include "nodeid.h"
 #include <cstdint>
@@ -28,6 +28,7 @@ public:
   scan_for_peer(nodeid_idx_t peer_idx);
 
   // Fetch one entry from src_addr and store it locally.
+  // Guarded by keylock to prevent duplicate concurrent fetches.
   void pull_one(const std::string &src_addr, const std::string &relpath);
 
   // Splits a nodeid ("host:port/first_id" or "host:port") into host, port,

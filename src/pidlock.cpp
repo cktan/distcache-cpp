@@ -33,12 +33,12 @@ static bool same_command(pid_t other_pid) {
 static bool try_acquire(const std::string &path) {
   int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0644);
   if (fd >= 0) {
-    // File does not exist: write our pid. Lock now belongs to us.
+    // File did not exist: created it and wrote our PID. We own the lock.
     char buf[32];
     int n = snprintf(buf, sizeof(buf), "%d\n", getpid());
     (void)write(fd, buf, n);
     close(fd);
-    return true; // we now owns this lock.
+    return true;
   }
 
   if (errno != EEXIST)
@@ -68,14 +68,15 @@ static bool try_acquire(const std::string &path) {
     return false;
   }
 
-  // stale lock from a dead process. Delete the file.
+  // Stale lock from a dead process. Delete the file and return false;
+  // the caller (pidlock_acquire) will retry immediately.
   unlink(path.c_str());
   return false;
 }
 
+// Try once; if the lock file was stale and just unlinked, try again.
 bool pidlock_acquire(const std::string &path) {
-  if (try_acquire(path)) {
+  if (try_acquire(path))
     return true;
-  }
   return try_acquire(path);
 }

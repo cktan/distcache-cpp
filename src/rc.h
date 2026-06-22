@@ -29,8 +29,8 @@ public:
   bool ok() const { return ok_; }
   rc_errcode_t errcode() const { return errcode_; }
   const std::string &errmsg() const { return errmsg_; }
-  // Returns "ERRCODE: errmsg" as a C string; valid for the lifetime of this
-  // rc_t.
+  // Returns the error code as a short lowercase string (e.g. "not_found",
+  // "io", "s3_error"); valid for the lifetime of this rc_t.
   const char *errstr() const;
 };
 

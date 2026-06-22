@@ -101,11 +101,10 @@ node1:4001/0\n
 node2:4002/789\n
 ```
 
-Newline-delimited node IDs (alive and suspected peers,
-including self). Each ID is `host:port`, optionally
-suffixed with `/first_id`; clients use the suffix to
-place the node on the consistent-hash ring at the
-correct position.
+Newline-delimited node IDs including self. Each ID is
+`host:port`, optionally suffixed with `/first_id`; clients
+use the suffix to place the node on the consistent-hash ring
+at the correct position.
 
 ---
 
@@ -132,10 +131,19 @@ components; `key` may contain `/`.
 - **Error** — `ERROR` frame followed by `FIN`.
 
 The ring routes by computing `FNV-1a-64(0, "cache/{bucket}/{key}")`
-and finding the successor node. `?local` skips ring routing
-and returns `ERR_NOT_CACHED` on a miss. `?no_redirect` also
-skips ring routing but falls through to S3 on a miss, so
-the caller always receives the object directly.
+and finding the successor node.
+
+- `?local` — serve only from local cache; skip ring routing;
+  return `ERR_NOT_CACHED` on a miss.
+- `?no_redirect` — skip ring routing; fall back to S3 on a
+  miss, so the caller always receives the object directly.
+- `?delete` — unlink the file from local cache after serving
+  (used by `pull_one` to implement move-on-read).
+
+When routing is active and another node owns the key but
+the local node also holds the file, the response is a
+`DATA` stream (not a redirect), and the owner is notified
+via `/_hint_pull` to pull the file proactively.
 
 ---
 

@@ -18,7 +18,7 @@ static sem_t g_stop_sem;
 // Wake main thread; sem_post is async-signal-safe.
 static void on_signal(int) { sem_post(&g_stop_sem); }
 
-// Print a usage message
+// Print usage message to stderr.
 static void usage(const char *prog) {
   fprintf(stderr,
           "Usage: %s -D <homedir> -N <host:port[/first_id]> [-p <seed>]...\n"
@@ -38,7 +38,9 @@ static void usage(const char *prog) {
           prog);
 }
 
-// Parse argc/argv to extract parameters
+// Parse argc/argv; populate homedir, addr_str, and seeds.
+// Returns false if required flags (-D, -N) are missing or an unknown
+// flag is encountered. Returns true with empty homedir on --version.
 static bool parse_arg(int argc, char **argv, std::string &homedir,
                       std::string &addr_str, std::vector<std::string> &seeds) {
   homedir = "";

@@ -300,6 +300,7 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
       st->cb_called = 1;
     } else if (strncmp(st->fp.raw, "FIN:", 4) == 0) {
       st->got_fin = 1;
+      /* bufsz==0 is the EOF signal to the caller's callback */
       if (st->cb(st->ctx, payload, 0) != 0) {
         st->cb_failed = 1;
         return 0;
@@ -371,6 +372,9 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
     *is_redirect = 0;
   }
 
+  /* Two attempts: the first may hit a stale keep-alive connection;
+   * on a low-level socket error before any data reaches the callback,
+   * drop the handle and retry once with a fresh connection. */
   for (int attempt = 0; attempt < 2; attempt++) {
     stream_state_t st = {0};
     push_frame_init(&st.fp);
@@ -399,6 +403,8 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
     }
 
     if (rc != CURLE_OK && rc != CURLE_WRITE_ERROR) {
+      /* Only retry if the callback was never called: once data starts
+       * flowing to the caller we cannot restart the request. */
       if (!st.cb_called && (rc == CURLE_RECV_ERROR || rc == CURLE_SEND_ERROR ||
                             rc == CURLE_COULDNT_CONNECT)) {
         if (conn->curl) {
@@ -475,7 +481,7 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
   curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
 
   CURLcode rc = curl_easy_perform(h);
-  curl_easy_cleanup(h);
+  curl_easy_cleanup(h); /* done with handle regardless of outcome */
 
   if (rc != CURLE_OK) {
     free(body.data);
@@ -484,11 +490,14 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
     return DCERR_NETWORK;
   }
 
+  /* Walk the response body frame by frame using the push parser.
+   * stream_in_push consumes as many bytes as it needs and sets
+   * fp.complete when a full frame is ready. */
   push_frame_t fp;
   push_frame_init(&fp);
   const char *rp = body.data;
   size_t rrem = body.len;
-  int found = 0;
+  int found = 0;      /* set when we see a NODES frame */
   int ret = DCERR_PROTOCOL;
 
   while (rrem > 0) {
@@ -513,11 +522,12 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
       found = 1;
       ret = 0;
     }
-    push_frame_init(&fp);
+    push_frame_init(&fp); /* reset parser for next frame */
   }
 
   free(body.data);
 
+  /* A valid response must contain a NODES frame before FIN. */
   if (!found)
     snprintf(errbuf, errsz, "no NODES frame in /_nodes from %s", node_name);
 
@@ -887,7 +897,7 @@ int dc_health(const char *node_name, char **out_buf) {
   curl_easy_setopt(conn.curl, CURLOPT_WRITEDATA, &body);
 
   CURLcode crc = curl_easy_perform(conn.curl);
-  node_checkin(&conn);
+  node_checkin(&conn); /* response is in body growbuf; handle not needed */
 
   if (crc != CURLE_OK) {
     free(body.data);
@@ -1066,6 +1076,8 @@ static void curl_pool_gc(const nodeid_bloom_t *bf) {
     int idx = (p->tail + i) % CURL_POOL_CAP;
     if (p->slots[idx].handle != NULL) {
       const char *node_str = nodeid_lookup(p->slots[idx].nodeid);
+      /* Bloom filter has no false negatives: ring members always pass.
+       * A false positive just keeps a stale conn alive until it expires. */
       if (!node_str || !nodeid_bloom_test(bf, node_str)) {
         curl_easy_cleanup(p->slots[idx].handle);
         p->slots[idx].handle = NULL;

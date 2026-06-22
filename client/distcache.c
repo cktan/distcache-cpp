@@ -59,7 +59,7 @@ static struct {
 };
 
 static __thread int myerrno;
-static __thread char myerrmsg[200];
+static __thread char myerrmsg[1024];
 
 /* Hash bucket/key to the ring position that owns the object. */
 static uint32_t compute_dest_id(const char *bucket, const char *key) {
@@ -417,14 +417,14 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
         continue;
       }
       myerrno = DCERR_NETWORK;
-      snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%.100s): %.150s",
-               node_name, curl_easy_strerror(rc));
+      snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%s): %s", node_name,
+               curl_easy_strerror(rc));
       return -1;
     }
 
     if (!st.got_fin) {
       myerrno = DCERR_PROTOCOL;
-      snprintf(myerrmsg, sizeof(myerrmsg), "truncated response from %.150s",
+      snprintf(myerrmsg, sizeof(myerrmsg), "truncated response from %s",
                node_name);
       return -1;
     }
@@ -441,10 +441,9 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
     if (strcmp(st.status, "error") == 0) {
       myerrno = server_errcode(st.err_type);
       if (st.err_msg[0])
-        snprintf(myerrmsg, sizeof(myerrmsg), "%.199s", st.err_msg);
+        snprintf(myerrmsg, sizeof(myerrmsg), "%s", st.err_msg);
       else
-        snprintf(myerrmsg, sizeof(myerrmsg), "server error: %.150s",
-                 st.err_type);
+        snprintf(myerrmsg, sizeof(myerrmsg), "server error: %s", st.err_type);
       return -1;
     }
 
@@ -452,7 +451,7 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
   }
 
   myerrno = DCERR_NETWORK;
-  snprintf(myerrmsg, sizeof(myerrmsg), "connection failed after retry: %.150s",
+  snprintf(myerrmsg, sizeof(myerrmsg), "connection failed after retry: %s",
            node_name);
   return -1;
 }
@@ -781,6 +780,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 
 /* Write live node names into *buf (newline-separated); caller frees *buf. */
 int dc_node(char **buf, int *n) {
+  *buf = NULL;
   pthread_mutex_lock(&g_dctab.mutex);
 
   int live = g_dctab.ring ? (int)ring_node_count(g_dctab.ring) : 0;

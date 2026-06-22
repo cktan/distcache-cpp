@@ -12,27 +12,6 @@
 // Bind membership to a node; swim instance starts null until start() is called.
 membership_t::membership_t(node_t &n) : node_(n) {}
 
-// Parse "addr/cookie" peer string; returns {addr, 0} if cookie is absent or
-// invalid.
-std::pair<std::string, uint32_t>
-membership_t::parse_peer(const std::string &s) {
-  size_t slash = s.find('/');
-  if (slash == std::string::npos)
-    return {s, 0};
-
-  std::string addr = s.substr(0, slash);
-  std::string cookie = s.substr(slash + 1);
-
-  if (cookie.empty())
-    return {addr, 0};
-
-  char *end = nullptr;
-  unsigned long val = strtoul(cookie.c_str(), &end, 10);
-  if (end == cookie.c_str() || *end != '\0')
-    return {addr, 0};
-  return {addr, static_cast<uint32_t>(val)};
-}
-
 // Rebuild consistent hash ring from live SWIM peers and injected nodes;
 // atomically replaces node_.ring.
 void membership_t::rebuild_ring() {
@@ -231,8 +210,14 @@ std::vector<std::string> membership_t::alive_peers() {
   result.reserve(n);
   const char *p = buf;
   for (int i = 0; i < n; i++) {
-    auto [addr, _fid] = parse_peer(std::string(p));
-    result.push_back(addr);
+    nodeid_idx_t idx = nodeid_register(p);
+    if (nodeid_valid(idx)) {
+      char host[254];
+      int port = 0;
+      if (nodeid_split(idx, host, &port, nullptr) == 0) {
+        result.push_back(std::string(host) + ":" + std::to_string(port));
+      }
+    }
     p += strlen(p) + 1;
   }
   free(buf);

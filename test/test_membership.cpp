@@ -10,62 +10,6 @@
 #include <vector>
 
 TEST_SUITE("membership_t") {
-  /**
-   * @test parse_peer: valid formats
-   * @brief Verifies that membership_t::parse_peer correctly parses peer strings
-   *        containing valid addresses and optional numeric placement IDs.
-   *
-   * Steps:
-   * 1. Call parse_peer with address-only string "127.0.0.1:4001".
-   * 2. Verify that it returns the address with a placement ID of 0.
-   * 3. Call parse_peer with a string containing a slash and a placement ID
-   * "127.0.0.1:4001/12345".
-   * 4. Verify that it returns the address "127.0.0.1:4001" and placement ID
-   * 12345.
-   * 5. Call parse_peer with placement ID 0.
-   * 6. Verify that it returns the address and placement ID 0.
-   */
-  TEST_CASE("parse_peer: valid formats") {
-    auto [addr1, id1] = membership_t::parse_peer("127.0.0.1:4001");
-    CHECK(addr1 == "127.0.0.1:4001");
-    CHECK(id1 == 0);
-
-    auto [addr2, id2] = membership_t::parse_peer("127.0.0.1:4001/12345");
-    CHECK(addr2 == "127.0.0.1:4001");
-    CHECK(id2 == 12345U);
-
-    auto [addr3, id3] = membership_t::parse_peer("node1:80/0");
-    CHECK(addr3 == "node1:80");
-    CHECK(id3 == 0);
-  }
-
-  /**
-   * @test parse_peer: invalid and edge cases
-   * @brief Verifies that membership_t::parse_peer fallback behaves correctly
-   * (returns ID 0) when given invalid, malformed, or empty placement ID
-   * suffixes.
-   *
-   * Steps:
-   * 1. Call parse_peer with trailing slash but no ID.
-   * 2. Verify that placement ID is parsed as 0.
-   * 3. Call parse_peer with non-numeric placement ID.
-   * 4. Verify that placement ID is parsed as 0.
-   * 5. Call parse_peer with alphanumeric trailing suffix.
-   * 6. Verify that placement ID is parsed as 0.
-   */
-  TEST_CASE("parse_peer: invalid and edge cases") {
-    auto [addr1, id1] = membership_t::parse_peer("127.0.0.1:4001/");
-    CHECK(addr1 == "127.0.0.1:4001");
-    CHECK(id1 == 0);
-
-    auto [addr2, id2] = membership_t::parse_peer("127.0.0.1:4001/abc");
-    CHECK(addr2 == "127.0.0.1:4001");
-    CHECK(id2 == 0);
-
-    auto [addr3, id3] = membership_t::parse_peer("127.0.0.1:4001/123a");
-    CHECK(addr3 == "127.0.0.1:4001");
-    CHECK(id3 == 0);
-  }
 
   /**
    * @test timestamp format

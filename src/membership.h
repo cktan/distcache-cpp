@@ -57,7 +57,6 @@ public:
   void rebuild_ring();
   void inject_node(const std::string &nodeid);
 
-  static std::pair<std::string, uint32_t> parse_peer(const std::string &s);
   static std::string timestamp();
 
 private:

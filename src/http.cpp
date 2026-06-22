@@ -147,13 +147,14 @@ static void handle_get(node_t &node, const httplib::Request &req,
     nodeid_idx_t dest_idx = ring_successor(ring.get(), rp_id);
     if (nodeid_valid(dest_idx) && !nodeid_eq(dest_idx, node.nodeid)) {
       // Key belongs to another ring node; look up string only for network ops.
-      const char *dest_c = nodeid_lookup(dest_idx);
-      std::string dest = dest_c ? dest_c : "";
-      // update membership and redirect.
-      std::string dest_addr = membership_t::parse_peer(dest).first;
+      char host[254];
+      int port = 0;
+      nodeid_split(dest_idx, host, &port, nullptr);
+      std::string dest_addr = std::string(host) + ":" + std::to_string(port);
       node.membership.hint_alive(dest_addr);
+      const char *dest_c = nodeid_lookup(dest_idx);
       node.feed.put("cache.redirect", relpath.str().c_str(), "dest",
-                    dest.c_str());
+                    dest_c ? dest_c : "");
 
       if (node.cache.read(relpath, fd).ok()) {
         // We have the file; serve it and let dest pull it from us.
@@ -171,7 +172,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
         return;
       }
       node.stats.redirects++;
-      send_raw(res, wire_redirect(dest) + WIRE_FIN);
+      send_raw(res, wire_redirect(dest_c ? dest_c : "") + WIRE_FIN);
       return;
     }
   }
@@ -412,10 +413,13 @@ static void handle_delete(node_t &node, const httplib::Request &req,
 // Register all routes and start listening on nodeid's host:port (blocks).
 void http_server_t::start(nodeid_idx_t nodeid) {
   const char *nodeid_str = nodeid_lookup(nodeid);
-  auto [addr, fid] = membership_t::parse_peer(nodeid_str ? nodeid_str : "");
-  size_t colon = addr.rfind(':');
-  std::string host = addr.substr(0, colon);
-  int port = std::stoi(addr.substr(colon + 1));
+  char host[254];
+  int port = 0;
+  if (nodeid_split(nodeid, host, &port, nullptr) != 0) {
+    fprintf(stderr, "http_server.start: bad nodeid: %s\n",
+            nodeid_str ? nodeid_str : "(null)");
+    return;
+  }
 
   start_time_ = time(nullptr);
   svr_ = std::make_unique<httplib::Server>();

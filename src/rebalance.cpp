@@ -120,10 +120,13 @@ void rebalancer_t::start() {
     // behalf and hint_pulls each one.
     if (type == "claim_scan" && rec.size() >= 2) {
       const std::string &nodeid = rec[1];
-      // register the new peer in the ring before scanning against it
+      nodeid_idx_t idx = nodeid_register(nodeid.c_str());
       node_.membership.inject_node(nodeid);
-      auto [addr, fid] = membership_t::parse_peer(nodeid);
-      auto entries = scan_for_peer(nodeid_find(nodeid.c_str()));
+      char host[254];
+      int port = 0;
+      nodeid_split(idx, host, &port, nullptr);
+      std::string addr = std::string(host) + ":" + std::to_string(port);
+      auto entries = scan_for_peer(idx);
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
         // queue a hint_pull job per key now owned by addr

@@ -91,23 +91,18 @@ void membership_t::inject_node(const std::string &nodeid) {
 bool membership_t::start(nodeid_idx_t nodeid,
                          const std::vector<std::string> &seeds) {
   const char *nodeid_str = nodeid_lookup(nodeid);
-  if (!nodeid_str) {
-    fprintf(stderr, "membership.start: invalid nodeid index\n");
+  char host[254];
+  int port_val = 0;
+  int fid_val = 0;
+  if (nodeid_split(nodeid, host, &port_val, &fid_val) != 0 || port_val <= 0 ||
+      port_val > 65535) {
+    fprintf(stderr, "membership.start: bad nodeid: %s\n",
+            nodeid_str ? nodeid_str : "(null)");
     return false;
   }
-  auto [addr, fid] = parse_peer(nodeid_str);
-  size_t colon = addr.rfind(':');
-  std::string host = addr.substr(0, colon);
-  std::string port_str = addr.substr(colon + 1);
-  char *end;
-  long p = strtol(port_str.c_str(), &end, 10);
-  if (*end || p <= 0 || p > 65535) {
-    fprintf(stderr, "membership.start: bad nodeid: %s\n", nodeid_str);
-    return false;
-  }
-  uint16_t port = static_cast<uint16_t>(p);
+  uint16_t port = static_cast<uint16_t>(port_val);
 
-  std::string cookie = fid ? std::to_string(fid) : "";
+  std::string cookie = fid_val ? std::to_string(fid_val) : "";
 
   std::vector<const char *> seed_ptrs;
   for (const auto &s : seeds)
@@ -120,7 +115,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
   opts.seeds = seed_ptrs.data();
   opts.feed = node_.feed.raw();
 
-  inst_ = swim_start(host.c_str(), port, cookie.c_str(), &opts);
+  inst_ = swim_start(host, port, cookie.c_str(), &opts);
   if (!inst_) {
     fprintf(stderr, "swim_start failed: %s\n", swim_errmsg());
     return false;

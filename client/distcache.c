@@ -312,6 +312,8 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
     } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
       strncpy(st->status, "redirect", sizeof(st->status) - 1);
       parse_redirect_payload(payload, plen, st->redir_name, DC_NODE_NAME_MAX);
+    } else {
+      strncpy(st->status, "unknown", sizeof(st->status) - 1);
     }
 
     push_frame_init(&st->fp);
@@ -444,7 +446,12 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
       return -1;
     }
 
-    // TODO: return error on unknown frame type
+    if (st.status[0] != '\0') {
+      myerrno = DCERR_PROTOCOL;
+      snprintf(myerrmsg, sizeof(myerrmsg), "unknown frame type from %s",
+               node_name);
+      return -1;
+    }
 
     return 0;
   }
@@ -497,7 +504,7 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
   push_frame_init(&fp);
   const char *rp = body.data;
   size_t rrem = body.len;
-  int found = 0;      /* set when we see a NODES frame */
+  int found = 0; /* set when we see a NODES frame */
   int ret = DCERR_PROTOCOL;
 
   while (rrem > 0) {
@@ -669,6 +676,7 @@ int dc_init(int n, const char *const *node) {
     return -1;
   }
 
+  /* Register each seed node name, collecting stable indices */
   nodeid_idx_t *indices = malloc((size_t)n * sizeof(nodeid_idx_t));
   if (!indices) {
     myerrno = DCERR_NOMEM;
@@ -685,6 +693,7 @@ int dc_init(int n, const char *const *node) {
     }
   }
 
+  /* Replace existing ring with fresh one built from seed nodes */
   pthread_mutex_lock(&g_dctab.mutex);
   ring_destroy(g_dctab.ring);
   g_dctab.ring = NULL;
@@ -813,14 +822,18 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 int dc_node(char **buf, int *n) {
   *buf = NULL;
   pthread_mutex_lock(&g_dctab.mutex);
-
-  int live = g_dctab.ring ? (int)ring_node_count(g_dctab.ring) : 0;
-
-  size_t sz = 1;
-  if (g_dctab.ring) {
-    for (int i = 0; i < g_dctab.ring->distinct.top; i++)
-      sz += strlen(nodeid_lookup(g_dctab.ring->distinct.entries[i].node)) + 1;
+  if (!g_dctab.ring) {
+    *n = 0;
+    pthread_mutex_unlock(&g_dctab.mutex);
+    return 0;
   }
+
+  int live = (int)ring_node_count(g_dctab.ring);
+
+  /* Pre-compute buffer size: one byte per newline plus NUL terminator */
+  size_t sz = 1;
+  for (int i = 0; i < g_dctab.ring->distinct.top; i++)
+    sz += strlen(nodeid_lookup(g_dctab.ring->distinct.entries[i].node)) + 1;
 
   char *out = malloc(sz);
   if (!out) {
@@ -830,15 +843,14 @@ int dc_node(char **buf, int *n) {
     return -1;
   }
 
+  /* Write each node name followed by a newline */
   size_t pos = 0;
-  if (g_dctab.ring) {
-    for (int i = 0; i < g_dctab.ring->distinct.top; i++) {
-      const char *nstr = nodeid_lookup(g_dctab.ring->distinct.entries[i].node);
-      size_t len = strlen(nstr);
-      memcpy(out + pos, nstr, len);
-      pos += len;
-      out[pos++] = '\n';
-    }
+  for (int i = 0; i < g_dctab.ring->distinct.top; i++) {
+    const char *nstr = nodeid_lookup(g_dctab.ring->distinct.entries[i].node);
+    size_t len = strlen(nstr);
+    memcpy(out + pos, nstr, len);
+    pos += len;
+    out[pos++] = '\n';
   }
   out[pos] = '\0';
 
@@ -858,46 +870,26 @@ int dc_health(const char *node_name, char **out_buf) {
   }
   *out_buf = NULL;
 
-  pthread_mutex_lock(&g_dctab.mutex);
-  nodeid_idx_t found = NODEID_NONE;
-  if (g_dctab.ring) {
-    for (int i = 0; i < g_dctab.ring->distinct.top; i++) {
-      nodeid_idx_t idx = g_dctab.ring->distinct.entries[i].node;
-      if (strcmp(nodeid_lookup(idx), node_name) == 0) {
-        found = idx;
-        break;
-      }
-    }
-  }
-  pthread_mutex_unlock(&g_dctab.mutex);
-
-  if (!nodeid_valid(found)) {
-    myerrno = DCERR_NO_NODE;
-    snprintf(myerrmsg, sizeof(myerrmsg), "unknown node: %s", node_name);
-    return -1;
-  }
-
-  char host[254];
-  int port = 0;
-  int first_id = 0;
-  if (nodeid_split(found, host, &port, &first_id) != 0) {
-    myerrno = DCERR_NO_NODE;
-    snprintf(myerrmsg, sizeof(myerrmsg), "invalid node index");
-    return -1;
-  }
   char url[1536];
-  snprintf(url, sizeof(url), "http://%s:%d/_health", host, port);
+  snprintf(url, sizeof(url), "http://%s/_health", node_name);
 
-  dc_conn_t conn;
-  node_checkout(found, &conn);
+  /* One-shot handle; no pool interaction needed for a single health fetch. */
+  CURL *h = curl_easy_init();
+  if (!h) {
+    myerrno = DCERR_NETWORK;
+    snprintf(myerrmsg, sizeof(myerrmsg), "curl_easy_init failed");
+    return -1;
+  }
 
   growbuf_t body = {0};
-  curl_easy_setopt(conn.curl, CURLOPT_URL, url);
-  curl_easy_setopt(conn.curl, CURLOPT_WRITEFUNCTION, growbuf_write_cb);
-  curl_easy_setopt(conn.curl, CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(h, CURLOPT_URL, url);
+  curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, growbuf_write_cb);
+  curl_easy_setopt(h, CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
+  curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
 
-  CURLcode crc = curl_easy_perform(conn.curl);
-  node_checkin(&conn); /* response is in body growbuf; handle not needed */
+  CURLcode crc = curl_easy_perform(h);
+  curl_easy_cleanup(h);
 
   if (crc != CURLE_OK) {
     free(body.data);

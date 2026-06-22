@@ -915,17 +915,21 @@ int dc_health(const char *node_name, char **out_buf) {
     return -1;
   }
 
-  char *tmp = realloc(body.data, body.len + 1);
-  if (!tmp) {
-    free(body.data);
-    myerrno = DCERR_NOMEM;
-    snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
-    return -1;
+  // need to add NUL terminator.
+  char *ret = body.data;
+  if (body.cap == body.len) {
+    char *tmp = realloc(body.data, body.len + 1);
+    if (!tmp) {
+      free(body.data);
+      myerrno = DCERR_NOMEM;
+      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+      return -1;
+    }
+    ret = tmp;
   }
-  body.data = tmp;
-  body.data[body.len] = '\0';
+  ret[body.len] = '\0';
 
-  *out_buf = body.data;
+  *out_buf = ret;
   return 0;
 }
 

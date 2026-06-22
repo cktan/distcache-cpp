@@ -148,3 +148,108 @@ TEST_CASE("nodeid_split: registers and splits different formats") {
 
   nodeid_destroy();
 }
+
+TEST_CASE("ring_entryvec_append: grows top and stores entries") {
+  ring_entryvec_t vec = {};
+  nodeid_idx_t idx0 = {0}, idx1 = {1}, idx2 = {2};
+  ring_entryvec_append(&vec, 100u, idx0);
+  ring_entryvec_append(&vec, 200u, idx1);
+  ring_entryvec_append(&vec, 300u, idx2);
+  REQUIRE(vec.top == 3);
+  CHECK(vec.entries[0].id == 100u);
+  CHECK(vec.entries[1].id == 200u);
+  CHECK(vec.entries[2].id == 300u);
+  CHECK(vec.entries[0].node.v == 0);
+  CHECK(vec.entries[1].node.v == 1);
+  CHECK(vec.entries[2].node.v == 2);
+  free(vec.entries);
+}
+
+TEST_CASE("ring_entryvec_append: handles capacity growth") {
+  ring_entryvec_t vec = {};
+  nodeid_idx_t idx = {0};
+  /* Push 20 entries, well past the initial capacity of 16. */
+  for (int i = 0; i < 20; i++)
+    ring_entryvec_append(&vec, (uint32_t)i, idx);
+  REQUIRE(vec.top == 20);
+  CHECK(vec.max >= 20);
+  for (int i = 0; i < 20; i++)
+    CHECK(vec.entries[i].id == (uint32_t)i);
+  free(vec.entries);
+}
+
+TEST_CASE("distinct: one entry per physical node after finalize") {
+  ring_t *r = ring_create();
+  nodeid_idx_t a = nodeid_register("a");
+  nodeid_idx_t b = nodeid_register("b");
+  nodeid_idx_t c = nodeid_register("c");
+  ring_add(r, a);
+  ring_add(r, b);
+  ring_add(r, c);
+  ring_finalize(r);
+  /* 3 physical nodes -> distinct.top == 3, regardless of 30 virtual nodes. */
+  CHECK(r->distinct.top == 3);
+  CHECK(ring_node_count(r) == 3);
+  ring_destroy(r);
+  nodeid_destroy();
+}
+
+TEST_CASE("distinct: sorted ascending by nodeidx.v") {
+  ring_t *r = ring_create();
+  nodeid_idx_t x = nodeid_register("x");
+  nodeid_idx_t y = nodeid_register("y");
+  nodeid_idx_t z = nodeid_register("z");
+  ring_add(r, x);
+  ring_add(r, y);
+  ring_add(r, z);
+  ring_finalize(r);
+  REQUIRE(r->distinct.top == 3);
+  for (int i = 1; i < r->distinct.top; i++)
+    CHECK(r->distinct.entries[i].node.v >
+          r->distinct.entries[i - 1].node.v);
+  ring_destroy(r);
+  nodeid_destroy();
+}
+
+TEST_CASE("distinct: single node produces one distinct entry") {
+  ring_t *r = ring_create();
+  nodeid_idx_t n = nodeid_register("solo");
+  ring_add(r, n);
+  ring_finalize(r);
+  CHECK(r->distinct.top == 1);
+  CHECK(nodeid_eq(r->distinct.entries[0].node, n));
+  ring_destroy(r);
+  nodeid_destroy();
+}
+
+TEST_CASE("ring_node_count: zero for empty ring") {
+  ring_t *r = ring_create();
+  ring_finalize(r);
+  CHECK(ring_node_count(r) == 0);
+  ring_destroy(r);
+}
+
+TEST_CASE("bloom from distinct: registered nodes test positive") {
+  ring_t *r = ring_create();
+  nodeid_idx_t p = nodeid_register("peer1");
+  nodeid_idx_t q = nodeid_register("peer2");
+  ring_add(r, p);
+  ring_add(r, q);
+  ring_finalize(r);
+  CHECK(nodeid_bloom_test(&r->bloom, "peer1") != 0);
+  CHECK(nodeid_bloom_test(&r->bloom, "peer2") != 0);
+  ring_destroy(r);
+  nodeid_destroy();
+}
+
+TEST_CASE("bloom from distinct: absent node tests negative") {
+  ring_t *r = ring_create();
+  nodeid_idx_t p = nodeid_register("present");
+  ring_add(r, p);
+  ring_finalize(r);
+  CHECK(nodeid_bloom_test(&r->bloom, "present") != 0);
+  /* "absent" was never added; a correct Bloom filter must return 0. */
+  CHECK(nodeid_bloom_test(&r->bloom, "absent") == 0);
+  ring_destroy(r);
+  nodeid_destroy();
+}

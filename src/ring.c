@@ -12,38 +12,47 @@ ring_t *ring_create(void) { return calloc(1, sizeof(ring_t)); }
 void ring_destroy(ring_t *r) {
   if (!r)
     return;
-  free(r->entries);
+  free(r->entries.entries);
+  free(r->distinct.entries);
   free(r);
 }
 
-/* Grow entries array to hold at least `need` elements. */
-static void ensure_cap(ring_t *r, size_t need) {
-  size_t cap;
-  if (r->max >= need)
+/* Grow vec to hold at least `need` elements. */
+static void entryvec_ensure_cap(ring_entryvec_t *vec, int need) {
+  int cap;
+  if (vec->max >= need)
     return;
-  cap = r->max ? r->max * 2 : 16;
+  cap = vec->max ? vec->max * 2 : 16;
   while (cap < need)
     cap *= 2;
-  r->entries = realloc(r->entries, cap * sizeof(*r->entries));
-  r->max = cap;
+  vec->entries = realloc(vec->entries, (size_t)cap * sizeof(*vec->entries));
+  vec->max = cap;
+}
+
+/* Append (id, nodeidx) to vec, growing as needed. */
+void ring_entryvec_append(ring_entryvec_t *vec, uint32_t id,
+                          nodeid_idx_t nodeidx) {
+  entryvec_ensure_cap(vec, vec->top + 1);
+  vec->entries[vec->top].id = id;
+  vec->entries[vec->top].node = nodeidx;
+  vec->top++;
 }
 
 /* Append (id, node) pairs for each of the nids IDs. */
 void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
                  size_t nids) {
   size_t i;
-  ensure_cap(r, r->top + nids);
-  for (i = 0; i < nids; i++) {
-    r->entries[r->top].id = ids[i];
-    r->entries[r->top].node = node;
-    r->top++;
-  }
+  for (i = 0; i < nids; i++)
+    ring_entryvec_append(&r->entries, ids[i], node);
+
+  // TODO: add (ids[0], node) into distinct[]
+  // Note: ring_finalize() will dedup distinct[]
 }
 
 /* Derive 10 virtual IDs from node. */
 void ring_add(ring_t *r, nodeid_idx_t node) {
-  const char *node_str = nodeid_lookup(node);
-  if (!node_str)
+  const char *nodeid = nodeid_lookup(node);
+  if (!nodeid)
     return;
   uint32_t ids[10];
   ring_compute_ids(node_str, ids);
@@ -66,38 +75,72 @@ static int entry_cmp(const void *a, const void *b) {
   return strcmp(sa, sb);
 }
 
-/* Sort then deduplicate: keep the first (smallest-name) entry per id. */
+/* qsort comparator for distinct: ascending by nodeidx.v. */
+static int distinct_cmp(const void *a, const void *b) {
+  const ring_entry_t *ea = a, *eb = b;
+  if (ea->node.v < eb->node.v)
+    return -1;
+  if (ea->node.v > eb->node.v)
+    return 1;
+  return 0;
+}
+
+/* Sort then deduplicate: keep the first (smallest-name) entry per id.
+ * Build distinct (one entry per physical node), then set Bloom filter. */
 void ring_finalize(ring_t *r) {
-  size_t i, out;
-  if (r->top == 0)
+  int i, out;
+  if (r->entries.top == 0)
     return;
-  qsort(r->entries, r->top, sizeof(*r->entries), entry_cmp);
+
+  /* Sort virtual-node entries by id; deduplicate. */
+  qsort(r->entries.entries, (size_t)r->entries.top, sizeof(*r->entries.entries),
+        entry_cmp);
   out = 0;
-  for (i = 0; i < r->top; i++) {
-    if (out == 0 || r->entries[i].id != r->entries[out - 1].id) {
+  for (i = 0; i < r->entries.top; i++) {
+    if (out == 0 ||
+        r->entries.entries[i].id != r->entries.entries[out - 1].id) {
       if (i != out)
-        r->entries[out] = r->entries[i];
+        r->entries.entries[out] = r->entries.entries[i];
       out++;
     }
   }
-  r->top = out;
+  r->entries.top = out;
 
-  /* Initialize and populate Bloom filter */
-  nodeid_bloom_init(&r->bloom);
-  for (i = 0; i < r->top; i++) {
-    const char *node_str = nodeid_lookup(r->entries[i].node);
-    if (node_str) {
-      nodeid_bloom_add(&r->bloom, node_str);
+  /* Build distinct: collect unique physical nodes from deduplicated entries. */
+  // TODO: no need to copy from r->entries. skip this step.
+  for (i = 0; i < r->entries.top; i++)
+    ring_entryvec_append(&r->distinct, r->entries.entries[i].id,
+                         r->entries.entries[i].node);
+
+  /* Sort distinct by nodeidx so duplicates are adjacent, then deduplicate. */
+  qsort(r->distinct.entries, (size_t)r->distinct.top,
+        sizeof(*r->distinct.entries), distinct_cmp);
+  out = 0;
+  for (i = 0; i < r->distinct.top; i++) {
+    if (out == 0 ||
+        r->distinct.entries[i].node.v != r->distinct.entries[out - 1].node.v) {
+      if (i != out)
+        r->distinct.entries[out] = r->distinct.entries[i];
+      out++;
     }
+  }
+  r->distinct.top = out;
+
+  /* Populate Bloom filter from distinct physical nodes. */
+  nodeid_bloom_init(&r->bloom);
+  for (i = 0; i < r->distinct.top; i++) {
+    const char *node_str = nodeid_lookup(r->distinct.entries[i].node);
+    if (node_str)
+      nodeid_bloom_add(&r->bloom, node_str);
   }
 }
 
 /* First index where entries[i].id >= target, or n if none. */
-static size_t bisect_left(const ring_t *r, uint32_t target) {
-  size_t lo = 0, hi = r->top;
+static int bisect_left(const ring_t *r, uint32_t target) {
+  int lo = 0, hi = r->entries.top;
   while (lo < hi) {
-    size_t mid = lo + (hi - lo) / 2;
-    if (r->entries[mid].id < target)
+    int mid = lo + (hi - lo) / 2;
+    if (r->entries.entries[mid].id < target)
       lo = mid + 1;
     else
       hi = mid;
@@ -107,28 +150,29 @@ static size_t bisect_left(const ring_t *r, uint32_t target) {
 
 /* Return the successor node for target_id, wrapping around if needed. */
 nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id) {
-  size_t idx;
-  if (r->top == 0)
+  int idx;
+  if (r->entries.top == 0)
     return NODEID_NONE;
   idx = bisect_left(r, target_id);
-  if (idx == r->top)
+  if (idx == r->entries.top)
     idx = 0;
-  return r->entries[idx].node;
+  return r->entries.entries[idx].node;
 }
 
 /* Return first successor not in the excluded list. */
 nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
                              size_t excl_n, uint32_t target_id) {
-  size_t i, j, start;
-  if (r->top == 0)
+  int i, start;
+  size_t j;
+  if (r->entries.top == 0)
     return NODEID_NONE;
   if (excl_n == 0)
     return ring_successor(r, target_id);
   start = bisect_left(r, target_id);
-  if (start == r->top)
+  if (start == r->entries.top)
     start = 0;
-  for (i = 0; i < r->top; i++) {
-    nodeid_idx_t node = r->entries[(start + i) % r->top].node;
+  for (i = 0; i < r->entries.top; i++) {
+    nodeid_idx_t node = r->entries.entries[(start + i) % r->entries.top].node;
     for (j = 0; j < excl_n; j++)
       if (nodeid_eq(node, excluded[j]))
         break;
@@ -139,20 +183,10 @@ nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
 }
 
 /* Number of virtual-node entries. */
-size_t ring_size(const ring_t *r) { return r->top; }
+size_t ring_size(const ring_t *r) { return (size_t)r->entries.top; }
 
-/* Number of distinct physical nodes (O(n^2); n is small in practice). */
-size_t ring_node_count(const ring_t *r) {
-  size_t i, j, unique = 0;
-  for (i = 0; i < r->top; i++) {
-    for (j = 0; j < i; j++)
-      if (nodeid_eq(r->entries[i].node, r->entries[j].node))
-        break;
-    if (j == i)
-      unique++;
-  }
-  return unique;
-}
+/* Number of distinct physical nodes. */
+size_t ring_node_count(const ring_t *r) { return (size_t)r->distinct.top; }
 
 /* Fill ids[10] with virtual-node IDs derived from node_name. */
 void ring_compute_ids(const char *nodeid, uint32_t ids[10]) {

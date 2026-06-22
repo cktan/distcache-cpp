@@ -33,11 +33,21 @@ typedef struct {
   nodeid_idx_t node;
 } ring_entry_t;
 
+/* Dynamic array of ring_entry_t. */
 typedef struct {
-  ring_entry_t *entries; /* sorted ascending by id after ring_finalize */
-  size_t top;
-  size_t max;           /* internal; do not read */
-  nodeid_bloom_t bloom; /* Bloom filter for nodes in the ring */
+  ring_entry_t *entries;
+  int top;
+  int max;
+} ring_entryvec_t;
+
+/* Append (id, node) to vec, growing as needed. */
+void ring_entryvec_append(ring_entryvec_t *vec, uint32_t id,
+                          nodeid_idx_t nodeidx);
+
+typedef struct {
+  ring_entryvec_t entries;  /* sorted ascending by id after ring_finalize */
+  ring_entryvec_t distinct; /* one entry per physical node, sorted by nodeidx */
+  nodeid_bloom_t bloom;     /* Bloom filter for nodes in the ring */
 } ring_t;
 
 /* Allocate an empty ring. */

@@ -820,15 +820,22 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 
 /* Write live node names into *buf (newline-separated); caller frees *buf. */
 int dc_node(char **buf, int *n) {
+  // assume 0 nodes
   *buf = NULL;
+  *n = 0;
+
+  // enter critsec
   pthread_mutex_lock(&g_dctab.mutex);
   if (!g_dctab.ring) {
-    *n = 0;
     pthread_mutex_unlock(&g_dctab.mutex);
     return 0;
   }
 
   int live = (int)ring_node_count(g_dctab.ring);
+  if (0 == live) {
+    pthread_mutex_unlock(&g_dctab.mutex);
+    return 0;
+  }
 
   /* Pre-compute buffer size: one byte per newline plus NUL terminator */
   size_t sz = 1;

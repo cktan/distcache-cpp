@@ -543,11 +543,28 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
 
 /* ── dc_housekeeping ────────────────────────────────────────────────────── */
 
-/* Refresh the node list and ring from /_nodes on a random known node. */
+/*
+ * Refresh the client's ring by polling one known node's /_nodes
+ * endpoint and reconciling the result with the current ring.
+ *
+ * Steps:
+ *   1. Snapshot the current node indices (under the ring lock).
+ *   2. Pick a random node from the snapshot and call GET /_nodes.
+ *      Retry the remaining nodes in order until one succeeds.
+ *   3. Rebuild the ring: retain existing nodes that appear in the
+ *      new list, then append any new nodes from the response.
+ *   4. GC connection-pool handles for nodes no longer in the ring.
+ *
+ * A static mutex prevents concurrent runs: if housekeeping is already
+ * in progress, the call returns 0 immediately. Returns -1 if no node
+ * could be reached (current ring is left unchanged).
+ */
 int dc_housekeeping(void) {
-  /* Acquire housekeeping lock to serialize execution */
+  /* Skip if another housekeeping call is already in progress */
   static pthread_mutex_t housekeeping_mutex = PTHREAD_MUTEX_INITIALIZER;
-  pthread_mutex_lock(&housekeeping_mutex);
+  if (pthread_mutex_trylock(&housekeeping_mutex) != 0)
+    return 0;
+
   int hk_rc = 0;
 
   /* ── Step 1: Snapshot node indices for /_nodes probe ────────────────── */

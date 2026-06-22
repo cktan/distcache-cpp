@@ -38,21 +38,22 @@ void ring_entryvec_append(ring_entryvec_t *vec, uint32_t id,
   vec->top++;
 }
 
-/* Append (id, node) pairs for each of the nids IDs. */
+/* Append (id, node) pairs for each of the nids IDs.
+ * Also records one entry in distinct[] (deduped in ring_finalize). */
 void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
                  size_t nids) {
   size_t i;
   for (i = 0; i < nids; i++)
     ring_entryvec_append(&r->entries, ids[i], node);
-
-  // TODO: add (ids[0], node) into distinct[]
-  // Note: ring_finalize() will dedup distinct[]
+  /* Seed distinct with ids[0] as a placeholder; node.v is what matters. */
+  if (nids > 0)
+    ring_entryvec_append(&r->distinct, ids[0], node);
 }
 
 /* Derive 10 virtual IDs from node. */
 void ring_add(ring_t *r, nodeid_idx_t node) {
-  const char *nodeid = nodeid_lookup(node);
-  if (!nodeid)
+  const char *node_str = nodeid_lookup(node);
+  if (!node_str)
     return;
   uint32_t ids[10];
   ring_compute_ids(node_str, ids);
@@ -105,12 +106,6 @@ void ring_finalize(ring_t *r) {
     }
   }
   r->entries.top = out;
-
-  /* Build distinct: collect unique physical nodes from deduplicated entries. */
-  // TODO: no need to copy from r->entries. skip this step.
-  for (i = 0; i < r->entries.top; i++)
-    ring_entryvec_append(&r->distinct, r->entries.entries[i].id,
-                         r->entries.entries[i].node);
 
   /* Sort distinct by nodeidx so duplicates are adjacent, then deduplicate. */
   qsort(r->distinct.entries, (size_t)r->distinct.top,

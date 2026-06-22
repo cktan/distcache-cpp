@@ -86,15 +86,6 @@ static int ring_rebuild(const nodeid_idx_t *nodes, int n_nodes) {
   return 0;
 }
 
-/* Return the nodeid_idx_t of the ring successor of target_id.
- * Returns NODEID_NONE if the ring is empty.
- * Caller holds g_dctab.mutex. */
-static nodeid_idx_t find_successor(uint32_t target_id) {
-  if (!g_dctab.ring)
-    return NODEID_NONE;
-  return ring_successor(g_dctab.ring, target_id);
-}
-
 /* ── Node management ────────────────────────────────────────────────────── */
 
 /* Allocate a libcurl easy handle with keep-alive, no redirects, HTTP/1.1. */
@@ -716,61 +707,89 @@ int dc_final(void) {
 /* Fetch the object at bucket/key, streaming DATA payload bytes to cb. */
 int dc_get(const char *bucket, const char *key, void *ctx,
            int (*cb)(void *ctx, const char *buf, int bufsz)) {
-  char enc_bucket[512], enc_key[512], path[1100];
-  url_encode(bucket, enc_bucket, sizeof(enc_bucket));
-  url_encode(key, enc_key, sizeof(enc_key));
-  snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
-
+  /* Acquire ring lock to check if initialized and look up successor node */
   pthread_mutex_lock(&g_dctab.mutex);
-  uint32_t dest = compute_dest_id(bucket, key);
-  nodeid_idx_t nid = find_successor(dest);
-  if (!nodeid_valid(nid)) {
+  if (!g_dctab.ring) {
+    /* Release ring lock if ring is not initialized */
     pthread_mutex_unlock(&g_dctab.mutex);
     myerrno = DCERR_NO_NODE;
     snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
     return -1;
   }
+  uint32_t dest = compute_dest_id(bucket, key);
+  nodeid_idx_t nid = ring_successor(g_dctab.ring, dest);
+  if (!nodeid_valid(nid)) {
+    /* Release ring lock on lookup failure */
+    pthread_mutex_unlock(&g_dctab.mutex);
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
+    return -1;
+  }
+  /* Release ring lock */
   pthread_mutex_unlock(&g_dctab.mutex);
 
+  char enc_bucket[512], enc_key[512], path[1100];
+  url_encode(bucket, enc_bucket, sizeof(enc_bucket));
+  url_encode(key, enc_key, sizeof(enc_key));
+  snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
+
+  /* Check out connection for the target successor node */
   dc_conn_t conn;
   node_checkout(nid, &conn);
 
   char redir_name[DC_NODE_NAME_MAX];
 
+  /* Resolve redirects up to the maximum limit */
   for (int hop = 0; hop <= DC_MAX_REDIRECTS; hop++) {
     int is_redirect = 0;
     int rc = do_get_streaming(&conn, conn.nodeid, path, ctx, cb, redir_name,
                               &is_redirect);
     if (rc == -1) {
+      /* Check in connection on fetch error */
       node_checkin(&conn);
       return -1;
     }
     if (!is_redirect) {
+      /* Check in connection on successful data retrieval */
       node_checkin(&conn);
       return 0;
     }
 
+    /* Check in connection before redirecting to a new node */
     node_checkin(&conn);
 
+    /* Acquire ring lock to add redirect node and update ring */
     pthread_mutex_lock(&g_dctab.mutex);
     if (ring_add_node(redir_name) != 0) {
+      /* Release ring lock if addition fails */
       pthread_mutex_unlock(&g_dctab.mutex);
       myerrno = DCERR_NOMEM;
       snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
       return -1;
     }
-    nid = find_successor(dest);
-    if (!nodeid_valid(nid)) {
+    if (!g_dctab.ring) {
+      /* Release ring lock if ring is empty */
       pthread_mutex_unlock(&g_dctab.mutex);
       myerrno = DCERR_NO_NODE;
       snprintf(myerrmsg, sizeof(myerrmsg), "ring empty after redirect");
       return -1;
     }
+    nid = ring_successor(g_dctab.ring, dest);
+    if (!nodeid_valid(nid)) {
+      /* Release ring lock if successor search fails */
+      pthread_mutex_unlock(&g_dctab.mutex);
+      myerrno = DCERR_NO_NODE;
+      snprintf(myerrmsg, sizeof(myerrmsg), "ring empty after redirect");
+      return -1;
+    }
+    /* Release ring lock */
     pthread_mutex_unlock(&g_dctab.mutex);
 
+    /* Check out connection for the redirected successor node */
     node_checkout(nid, &conn);
   }
 
+  /* Check in connection if too many redirection hops occur */
   node_checkin(&conn);
   myerrno = DCERR_REDIRECT_LOOP;
   snprintf(myerrmsg, sizeof(myerrmsg), "exceeded %d redirects",

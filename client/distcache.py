@@ -17,12 +17,8 @@ Usage:
 
     dc.final()
 
-Connection lifecycle:
-    Each connection slot carries an expiry time (now + 5 min at lazy init).
-    Expired idle connections are reaped at checkout and by housekeeping().
-    Dead nodes (removed from the server ring) have their idle connections
-    closed immediately; busy connections are closed at checkin. Tombstones
-    are compacted by the next housekeeping() call.
+Global state: g_dctab (mutex + ring + members) and g_pool
+(connection pool), mirroring distcache.c.
 """
 
 from __future__ import annotations
@@ -36,7 +32,7 @@ from typing import Callable, Optional
 
 
 # ---------------------------------------------------------------------------
-# Error codes  (mirror C client and server ERR_* strings)
+# Error codes  (mirror distcache.h and server ERR_* strings)
 # ---------------------------------------------------------------------------
 
 DCERR_UNKNOWN_COMMAND  =   1
@@ -48,7 +44,7 @@ DCERR_S3               =   6
 DCERR_TIMEOUT          =   7
 DCERR_NOT_FOUND        =   8
 DCERR_S3_AUTH          =   9
-DCERR_CALLBACK_FAILED  =  10   # unused in Python (callback exceptions propagate directly)
+DCERR_CALLBACK_FAILED  =  10
 DCERR_INVALID_PATH     =  11
 DCERR_S3_COPY          =  12
 DCERR_IO               =  13
@@ -107,21 +103,26 @@ class HealthResult:
 
 
 # ---------------------------------------------------------------------------
-# Internal constants
+# Constants  (mirror distcache.c)
 # ---------------------------------------------------------------------------
 
-_RING_SIZE        = 0x100000000   # 2^32
-_POSITIONS_PER_NODE     = 10
-_MAX_REDIRECTS    = 5
-_POOL_SIZE        = 4             # connection slots per node
-_CONN_EXPIRE_SECS = 300           # 5 minutes
+_RING_SIZE           = 0x100000000  # 2^32
+_POSITIONS_PER_NODE  = 10
+_DC_MAX_REDIRECTS    = 5
+_DC_CONN_EXPIRE_SECS = 300          # 5 minutes
+_DC_MAX_SEED_NODES   = 20
+
+_POOL_MAX     = 128   # mirrors CURL_POOL_MAX
+_POOL_COMPACT = 10    # mirrors CURL_POOL_COMPACT
 
 _FNV_BASIS = 14695981039346656037
 _FNV_PRIME = 1099511628211
 
+NODEID_NONE: Optional[str] = None   # mirrors C NODEID_NONE
+
 
 # ---------------------------------------------------------------------------
-# FNV-1a ring hash  (must match Elixir and C implementations)
+# FNV-1a ring hash  (must match C and server implementations)
 # ---------------------------------------------------------------------------
 
 def _fnv1a_mod(prev: int, input_str: str) -> int:
@@ -132,10 +133,10 @@ def _fnv1a_mod(prev: int, input_str: str) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Ring
+# Ring algorithms
 # ---------------------------------------------------------------------------
 
-def _strip_nodeid(s: str) -> tuple[str, int]:
+def _strip_first_pos(s: str) -> tuple[str, int]:
     """Split 'host:port[/first_pos]' into (host:port, first_pos)."""
     slash = s.find('/')
     if slash >= 0:
@@ -147,7 +148,7 @@ def _strip_nodeid(s: str) -> tuple[str, int]:
 
 
 def node_positions(node_name: str, first_pos: int = 0) -> list[int]:
-    """Compute the 10 ring positions for a node (matches server and C client)."""
+    """Compute the 10 ring positions for a node."""
     positions: list[int] = []
     prev: int = first_pos if first_pos != 0 else _fnv1a_mod(0, node_name)
     positions.append(prev)
@@ -157,199 +158,32 @@ def node_positions(node_name: str, first_pos: int = 0) -> list[int]:
     return positions
 
 
-def dest_pos(bucket: str, key: str) -> int:
-    """Compute the destination ring ID for (bucket, key)."""
+def compute_dest_pos(bucket: str, key: str) -> int:
+    """Hash bucket/key to the ring position that owns the object."""
     relpath = f"cache/{bucket}/{key.lstrip('/')}"
     return _fnv1a_mod(0, relpath)
 
+dest_pos = compute_dest_pos   # alias kept for test_api.py
+
 
 def find_successor(ring: list[tuple[int, str]], target: int) -> Optional[str]:
-    """Chord successor: first ring point with id >= target (wraps around)."""
+    """Chord successor: first ring point with pos >= target (wraps around)."""
     if not ring:
         return None
-    for rid, name in ring:
-        if rid >= target:
+    for pos, name in ring:
+        if pos >= target:
             return name
     return ring[0][1]
 
 
 def _build_sorted_ring(members: dict[str, list[int]]) -> list[tuple[int, str]]:
-    """Build a sorted ring from {name: [ring_ids]}. On collision: smaller name wins."""
+    """Build a sorted ring from {name: [positions]}. On collision: smaller name wins."""
     points: dict[int, str] = {}
-    for name, ids in members.items():
-        for rid in ids:
-            if rid not in points or name < points[rid]:
-                points[rid] = name
+    for name, positions in members.items():
+        for pos in positions:
+            if pos not in points or name < points[pos]:
+                points[pos] = name
     return sorted(points.items())
-
-
-# ---------------------------------------------------------------------------
-# Per-connection slot
-# ---------------------------------------------------------------------------
-
-class _Slot:
-    __slots__ = ("conn", "busy", "expire_time")
-
-    def __init__(self) -> None:
-        self.conn:        Optional[http.client.HTTPConnection] = None
-        self.busy:        bool  = False
-        self.expire_time: float = 0.0   # monotonic; 0 = uninitialized
-
-
-# ---------------------------------------------------------------------------
-# Node — owns lock, dead flag, and all connection slots
-# ---------------------------------------------------------------------------
-
-_STALE_ERRORS = (
-    BrokenPipeError,
-    ConnectionResetError,
-    http.client.RemoteDisconnected,
-    http.client.CannotSendRequest,
-)
-
-
-class _Node:
-    def __init__(self, raw_name: str) -> None:
-        clean, fid         = _strip_nodeid(raw_name)
-        host, port_str     = clean.rsplit(":", 1)
-        self.name          = clean
-        self.first_pos      = fid
-        self.dead          = False
-        self._host         = host
-        self._port         = int(port_str)
-        self._cv           = threading.Condition()
-        self._slots: list[_Slot] = [_Slot() for _ in range(_POOL_SIZE)]
-
-    def checkout(self) -> tuple[int, http.client.HTTPConnection]:
-        """Block until a free slot is available; reap expired and lazy-init."""
-        with self._cv:
-            while True:
-                now = time.monotonic()
-                for i, slot in enumerate(self._slots):
-                    if not slot.busy:
-                        if slot.conn is not None and slot.expire_time > 0 and now >= slot.expire_time:
-                            try:
-                                slot.conn.close()
-                            except Exception:
-                                pass
-                            slot.conn        = None
-                            slot.expire_time = 0.0
-                        if slot.conn is None:
-                            slot.conn        = http.client.HTTPConnection(self._host, self._port)
-                            slot.expire_time = now + _CONN_EXPIRE_SECS
-                        slot.busy = True
-                        return i, slot.conn
-                self._cv.wait()
-
-    def checkin(self, idx: int) -> None:
-        """Return a connection to the pool, or close it if the node is dead."""
-        with self._cv:
-            slot = self._slots[idx]
-            if self.dead:
-                if slot.conn:
-                    try:
-                        slot.conn.close()
-                    except Exception:
-                        pass
-                    slot.conn        = None
-                    slot.expire_time = 0.0
-            slot.busy = False
-            self._cv.notify()
-
-    def drop(self, idx: int) -> None:
-        """Discard a connection (broken or Connection: close); free the slot."""
-        with self._cv:
-            slot = self._slots[idx]
-            conn = slot.conn
-            slot.conn        = None
-            slot.expire_time = 0.0
-            slot.busy        = False
-            self._cv.notify()
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
-    def destroy(self) -> None:
-        """Close all connections. Called from final() or housekeeping."""
-        with self._cv:
-            for slot in self._slots:
-                conn = slot.conn
-                slot.conn        = None
-                slot.expire_time = 0.0
-                slot.busy        = False
-                if conn:
-                    try:
-                        conn.close()
-                    except Exception:
-                        pass
-            self._cv.notify_all()
-
-    def reap_expired(self) -> None:
-        """Close idle connections that have passed their expiry time."""
-        now = time.monotonic()
-        with self._cv:
-            for slot in self._slots:
-                if (not slot.busy and slot.conn is not None
-                        and slot.expire_time > 0 and now >= slot.expire_time):
-                    try:
-                        slot.conn.close()
-                    except Exception:
-                        pass
-                    slot.conn        = None
-                    slot.expire_time = 0.0
-
-    def mark_dead_and_close_idle(self) -> None:
-        """Mark node dead and immediately close all idle connections."""
-        with self._cv:
-            self.dead = True
-            for slot in self._slots:
-                if not slot.busy and slot.conn is not None:
-                    try:
-                        slot.conn.close()
-                    except Exception:
-                        pass
-                    slot.conn        = None
-                    slot.expire_time = 0.0
-
-
-# ---------------------------------------------------------------------------
-# Module-level state
-# ---------------------------------------------------------------------------
-
-_ring_lock = threading.Lock()
-_hk_lock   = threading.Lock()
-_nodes: list[_Node]           = []
-_ring:  list[tuple[int, str]] = []
-
-
-def _find_node(name: str) -> Optional[_Node]:
-    """Return the live (non-dead) _Node for name, or None. Caller holds _ring_lock."""
-    for n in _nodes:
-        if n.name == name and not n.dead:
-            return n
-    return None
-
-
-def _ring_update(names: list[str]) -> None:
-    """Add/revive nodes and rebuild the ring. Caller must hold _ring_lock."""
-    existing = {n.name: n for n in _nodes}
-    for raw in names:
-        addr, fid = _strip_nodeid(raw)
-        if addr in existing:
-            n = existing[addr]
-            if n.dead:
-                with n._cv:
-                    n.dead = False
-            n.first_pos = fid
-        else:
-            new_node = _Node(raw)
-            _nodes.append(new_node)
-            existing[addr] = new_node
-    members = {n.name: node_positions(n.name, n.first_pos) for n in _nodes if not n.dead}
-    _ring.clear()
-    _ring.extend(_build_sorted_ring(members))
 
 
 # ---------------------------------------------------------------------------
@@ -421,7 +255,7 @@ class _ChunkReader:
                     data_chunks.append(frame.payload)
             elif frame.type == "REDIRECT":
                 result["status"] = "redirect"
-                result["nodes"] = [frame.payload.decode("ascii").rstrip("\n")]
+                result["nodes"]  = [frame.payload.decode("ascii").rstrip("\n")]
             elif frame.type == "ERROR":
                 lines = frame.payload.decode("ascii").splitlines()
                 result["status"]  = "error"
@@ -444,14 +278,22 @@ class _ChunkReader:
 # ---------------------------------------------------------------------------
 
 def _url_encode(s: str) -> str:
-    """Percent-encode a path component (preserves forward slashes)."""
+    """Percent-encode a path component, preserving URL-safe characters."""
     safe = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~")
     return "".join(c if c in safe else f"%{ord(c):02X}" for c in s)
 
 
 # ---------------------------------------------------------------------------
-# Internal HTTP helpers
+# Internal HTTP helper  (patchable by tests; mirrors do_get_streaming's curl call)
 # ---------------------------------------------------------------------------
+
+_STALE_ERRORS = (
+    BrokenPipeError,
+    ConnectionResetError,
+    http.client.RemoteDisconnected,
+    http.client.CannotSendRequest,
+)
+
 
 def _do_request(
     conn: http.client.HTTPConnection,
@@ -462,8 +304,7 @@ def _do_request(
     """
     Issue one GET on an already-checked-out connection.
     Returns (result_dict, will_close). Does NOT manage the pool.
-    Raises DistCacheError on network/protocol failure.
-    Re-raises _STALE_ERRORS so _execute can retry on a fresh connection.
+    Re-raises _STALE_ERRORS so callers can retry on a fresh connection.
     Any exception from on_data propagates as-is.
     """
     try:
@@ -477,240 +318,498 @@ def _do_request(
     return result, response.will_close
 
 
-def _execute(
-    node: _Node,
+# ---------------------------------------------------------------------------
+# Global state  (mirrors g_dctab and g_curl_pool in distcache.c)
+# ---------------------------------------------------------------------------
+
+# mirrors struct { mutex; ring } g_dctab
+_g_dctab_mutex = threading.Lock()
+_g_ring: list[tuple[int, str]] = []       # sorted ring: [(pos, node_name), ...]
+_g_members: dict[str, int]     = {}       # {node_name: first_pos}
+
+# mirrors curl_pool_t g_curl_pool (flat list, newest at end)
+_g_pool: list[Optional[_curl_pool_entry_t]] = []  # type: ignore[name-defined]
+_g_pool_lock = threading.Lock()
+
+# housekeeping trylock — mirrors static housekeeping_mutex in dc_housekeeping
+_g_hk_lock = threading.Lock()
+
+
+# ---------------------------------------------------------------------------
+# Connection pool entry  (mirrors curl_pool_entry_t)
+# ---------------------------------------------------------------------------
+
+class _curl_pool_entry_t:
+    __slots__ = ('conn', 'nodeid', 'expire_time')
+
+    def __init__(
+        self,
+        conn: http.client.HTTPConnection,
+        nodeid: str,
+        expire_time: float,
+    ) -> None:
+        self.conn        = conn
+        self.nodeid      = nodeid
+        self.expire_time = expire_time
+
+
+# Redo _g_pool type annotation now that _curl_pool_entry_t is defined.
+_g_pool: list[Optional[_curl_pool_entry_t]] = []  # type: ignore[no-redef]
+
+
+# ---------------------------------------------------------------------------
+# Checked-out connection  (mirrors dc_conn_t)
+# ---------------------------------------------------------------------------
+
+class _dc_conn_t:
+    __slots__ = ('nodeid', 'conn')
+
+    def __init__(self) -> None:
+        self.nodeid: Optional[str]                          = None
+        self.conn:   Optional[http.client.HTTPConnection]   = None
+
+
+# ---------------------------------------------------------------------------
+# Ring management  (mirrors ring_rebuild in distcache.c)
+# ---------------------------------------------------------------------------
+
+def ring_rebuild(node_names: list[str]) -> None:
+    """Replace the ring with positions computed from node_names.
+    Caller must hold _g_dctab_mutex."""
+    global _g_ring, _g_members
+    _g_members = {}
+    for raw in node_names:
+        addr, first_pos = _strip_first_pos(raw)
+        _g_members[addr] = first_pos
+    _g_ring = _build_sorted_ring(
+        {addr: node_positions(addr, fp) for addr, fp in _g_members.items()}
+    )
+
+
+# ---------------------------------------------------------------------------
+# Connection pool  (mirrors curl_pool_* in distcache.c)
+# ---------------------------------------------------------------------------
+
+def _pool_compact() -> None:
+    """Remove None slots in-place. Caller holds _g_pool_lock."""
+    global _g_pool
+    _g_pool = [e for e in _g_pool if e is not None]
+
+
+def curl_pool_get(nodeid: str) -> Optional[http.client.HTTPConnection]:
+    """Return a connection matching nodeid (removes from pool), or None.
+    Scans newest-first; closes and discards expired entries found during scan."""
+    global _g_pool
+    with _g_pool_lock:
+        now        = time.monotonic()
+        found      = None
+        null_count = 0
+        for i in range(len(_g_pool) - 1, -1, -1):   # newest-first
+            e = _g_pool[i]
+            if e is None or e.expire_time <= now:
+                if e is not None:
+                    try:
+                        e.conn.close()
+                    except Exception:
+                        pass
+                _g_pool[i] = None
+                null_count += 1
+                continue
+            if e.nodeid == nodeid:
+                found      = e.conn
+                _g_pool[i] = None
+                null_count += 1
+                break
+        if null_count > _POOL_COMPACT:
+            _pool_compact()
+        return found
+
+
+def curl_pool_put(conn: http.client.HTTPConnection, nodeid: str) -> None:
+    """Insert connection into pool. Evicts oldest entry when count exceeds _POOL_MAX."""
+    global _g_pool
+    with _g_pool_lock:
+        if len(_g_pool) >= _POOL_MAX:
+            # evict oldest (front)
+            oldest = _g_pool.pop(0)
+            if oldest is not None:
+                try:
+                    oldest.conn.close()
+                except Exception:
+                    pass
+        _g_pool.append(
+            _curl_pool_entry_t(conn, nodeid, time.monotonic() + _DC_CONN_EXPIRE_SECS)
+        )
+
+
+def curl_pool_gc(valid_nodes: set[str]) -> None:
+    """Close connections to nodes not in valid_nodes."""
+    global _g_pool
+    with _g_pool_lock:
+        null_count = 0
+        for i, e in enumerate(_g_pool):
+            if e is None:
+                null_count += 1
+            elif e.nodeid not in valid_nodes:
+                try:
+                    e.conn.close()
+                except Exception:
+                    pass
+                _g_pool[i] = None
+                null_count += 1
+        if null_count > _POOL_COMPACT:
+            _pool_compact()
+
+
+def curl_pool_reap_expired() -> None:
+    """Scan all pool slots and close expired connections."""
+    global _g_pool
+    with _g_pool_lock:
+        now        = time.monotonic()
+        null_count = 0
+        for i, e in enumerate(_g_pool):
+            if e is None:
+                null_count += 1
+            elif e.expire_time <= now:
+                try:
+                    e.conn.close()
+                except Exception:
+                    pass
+                _g_pool[i] = None
+                null_count += 1
+        if null_count > _POOL_COMPACT:
+            _pool_compact()
+
+
+def curl_pool_final() -> None:
+    """Close all connections and clear the pool."""
+    global _g_pool
+    with _g_pool_lock:
+        for e in _g_pool:
+            if e is not None:
+                try:
+                    e.conn.close()
+                except Exception:
+                    pass
+        _g_pool = []
+
+
+# ---------------------------------------------------------------------------
+# Node checkout / checkin  (mirrors node_checkout / node_checkin)
+# ---------------------------------------------------------------------------
+
+def _conn_init(nodeid: str) -> http.client.HTTPConnection:
+    """Create a fresh HTTP connection for nodeid (mirrors curl_handle_init)."""
+    addr, _ = _strip_first_pos(nodeid)
+    host, port_str = addr.rsplit(":", 1)
+    return http.client.HTTPConnection(host, int(port_str))
+
+
+def node_checkout(nodeid: str, conn_out: _dc_conn_t) -> None:
+    """Fetch a connection from the pool or create a fresh one.
+    1% of the time, sweep the pool to reap expired connections."""
+    if random.randint(0, 99) == 0:
+        curl_pool_reap_expired()
+    conn_out.nodeid = nodeid
+    conn_out.conn   = curl_pool_get(nodeid)
+    if conn_out.conn is None:
+        conn_out.conn = _conn_init(nodeid)
+
+
+def node_checkin(conn_out: _dc_conn_t) -> None:
+    """Return connection to the pool for reuse."""
+    if conn_out.conn is not None:
+        curl_pool_put(conn_out.conn, conn_out.nodeid)
+    conn_out.conn = None
+
+
+# ---------------------------------------------------------------------------
+# do_get_streaming  (mirrors do_get_streaming in distcache.c)
+# ---------------------------------------------------------------------------
+
+def do_get_streaming(
+    nodeid: str,
     path: str,
-    on_data: Optional[Callable[[bytes], None]] = None,
-) -> dict:
-    """
-    Checkout a connection from node's pool, call _do_request with one stale
-    retry, then checkin (keep-alive) or drop (Connection: close / error).
-    Returns the result dict.
-    """
-    idx, conn = node.checkout()
+    ctx: object,
+    cb: Callable[[object, bytes], None],
+) -> Optional[str]:
+    """Perform one HTTP GET, streaming DATA frames to cb(ctx, data).
+    Returns redirect nodeid string on REDIRECT, None on success.
+    Raises DistCacheError on network or server error.
+
+    Two attempts: if the first attempt hits a stale keep-alive connection
+    before any data reaches cb, drop the handle and retry once with a
+    fresh connection."""
+    addr, _ = _strip_first_pos(nodeid)
+    on_data  = lambda data: cb(ctx, data)
+
+    conn_out  = _dc_conn_t()
+    node_checkout(nodeid, conn_out)
+
+    cb_called = [False]
+
+    def tracked_on_data(data: bytes) -> None:
+        cb_called[0] = True
+        on_data(data)
+
     try:
-        result, will_close = _do_request(conn, node.name, path, on_data=on_data)
-    except _STALE_ERRORS:
-        node.drop(idx)
-        idx, conn = node.checkout()
+        for attempt in range(2):
+            if conn_out.conn is None:
+                conn_out.conn = _conn_init(nodeid)
+
+            try:
+                result, will_close = _do_request(
+                    conn_out.conn, addr, path, on_data=tracked_on_data
+                )
+            except _STALE_ERRORS:
+                if cb_called[0]:
+                    # data already delivered — cannot restart
+                    conn_out.conn = None
+                    raise DistCacheError(
+                        f"connection failed: {addr}", DCERR_NETWORK
+                    )
+                try:
+                    conn_out.conn.close()
+                except Exception:
+                    pass
+                conn_out.conn = None
+                continue  # retry with fresh connection
+            except Exception:
+                # includes DistCacheError and callback exceptions
+                conn_out.conn = None
+                raise
+
+            # got a valid response; drop conn if server said Connection: close
+            if will_close:
+                try:
+                    conn_out.conn.close()
+                except Exception:
+                    pass
+                conn_out.conn = None
+
+            status = result.get("status", "")
+            if status == "redirect":
+                names = result.get("nodes", [])
+                return names[0] if names else NODEID_NONE
+            if status == "error":
+                err_type = result.get("type", "")
+                msg      = result.get("message", "server error")
+                raise DistCacheError(
+                    msg, _SERVER_ERRCODES.get(err_type, DCERR_PROTOCOL)
+                )
+            return NODEID_NONE  # ok / data received
+
+        # exhausted 2 attempts
+        conn_out.conn = None
+        raise DistCacheError(
+            f"connection failed after retry: {addr}", DCERR_NETWORK
+        )
+    finally:
+        node_checkin(conn_out)
+
+
+# ---------------------------------------------------------------------------
+# fetch_nodes  (mirrors fetch_nodes in distcache.c)
+# ---------------------------------------------------------------------------
+
+def fetch_nodes(nodeid: str) -> list[str]:
+    """GET /_nodes from nodeid; return list of node name strings.
+    Uses a one-shot connection (mirrors C url_get, avoids pool interaction)."""
+    addr, _ = _strip_first_pos(nodeid)
+    host, port_str = addr.rsplit(":", 1)
+    conn = http.client.HTTPConnection(host, int(port_str))
+    try:
+        conn.request("GET", "/_nodes")
+        response = conn.getresponse()
+        result   = _ChunkReader(response).read_response()
+    except (OSError, http.client.HTTPException, EOFError) as exc:
+        raise DistCacheError(str(exc), DCERR_NETWORK) from exc
+    finally:
         try:
-            result, will_close = _do_request(conn, node.name, path, on_data=on_data)
-        except _STALE_ERRORS:
-            node.drop(idx)
-            raise DistCacheError(f"connection failed: {node.name}", DCERR_NETWORK)
+            conn.close()
         except Exception:
-            node.drop(idx)
-            raise
-    except Exception:
-        node.drop(idx)
-        raise
-    if will_close:
-        node.drop(idx)
-    else:
-        node.checkin(idx)
-    return result
-
-
-# ---------------------------------------------------------------------------
-# Internal: fetch /_nodes
-# ---------------------------------------------------------------------------
-
-def _fetch_nodes(node: _Node) -> list[str]:
-    """Call GET /_nodes and return node IDs."""
-    result = _execute(node, "/_nodes")
+            pass
     if result.get("status") == "error":
-        raise DistCacheError(result.get("message", "/_nodes error"), DCERR_PROTOCOL)
+        raise DistCacheError(
+            result.get("message", "/_nodes error"), DCERR_PROTOCOL
+        )
     return result.get("_list", [])
 
 
 # ---------------------------------------------------------------------------
-# Public API
+# dc_housekeeping
 # ---------------------------------------------------------------------------
 
-def init(nodes: list[str]) -> None:
-    """
-    Initialise with known nodes (list of "host:port" strings).
-    Must be called once before get() or health(). Not thread-safe.
-    """
-    with _ring_lock:
-        for n in _nodes:
-            n.destroy()
-        _nodes.clear()
-        _ring.clear()
-        _ring_update(nodes)
+def dc_housekeeping() -> None:
+    """Refresh the ring from /_nodes and GC stale connections.
+
+    Steps (mirror distcache.c dc_housekeeping):
+      1. Pick up to 3 distinct random nodes from the ring.
+      2. Call GET /_nodes on each until one succeeds.
+      3. Replace the ring with the fetched node list.
+      4. GC connection-pool slots for nodes no longer in the ring.
+
+    Trylock: returns immediately if housekeeping is already in progress.
+    Raises DistCacheError if no node could be reached."""
+    if not _g_hk_lock.acquire(blocking=False):
+        return
 
     try:
-        housekeeping()
-    except DistCacheError:
-        pass
+        # Step 1: pick up to 3 distinct random nodes from the ring
+        with _g_dctab_mutex:
+            ring_snap = list(_g_ring)
 
+        seen: set[str] = set()
+        all_nodes: list[str] = []
+        for _, name in ring_snap:
+            if name not in seen:
+                seen.add(name)
+                all_nodes.append(name)
 
-def final() -> None:
-    """
-    Close all connections and clear ring state.
-    Not thread-safe; call after all worker threads have stopped.
-    """
-    with _ring_lock:
-        for n in _nodes:
-            n.destroy()
-        _nodes.clear()
-        _ring.clear()
-
-
-def housekeeping() -> None:
-    """
-    Refresh the ring from /_nodes and reap expired/dead connections.
-
-    - Calls /_nodes on a randomly chosen live node (tries each in order on failure).
-    - Marks nodes absent from the server ring as dead; closes their idle connections.
-    - Adds newly discovered nodes.
-    - Compacts fully-drained dead-node tombstones.
-    - Reaps idle connections whose expiry time has passed.
-
-    Raises DistCacheError if /_nodes could not be reached, but still performs
-    connection cleanup regardless. Thread-safe and fully re-entrant.
-    """
-    with _hk_lock:
-        # Step 1: snapshot
-        with _ring_lock:
-            snap = list(_nodes)
-
-        # Step 2: fetch /_nodes from a random non-dead node
-        live_snap = [n for n in snap if not n.dead]
-        fetch_error: Optional[DistCacheError] = None
-        new_names: list[str] = []
-
-        if live_snap:
-            start = random.randrange(len(live_snap))
-            for i in range(len(live_snap)):
-                probe = live_snap[(start + i) % len(live_snap)]
-                try:
-                    new_names  = _fetch_nodes(probe)
-                    fetch_error = None
-                    break
-                except DistCacheError as e:
-                    fetch_error = e
-
-        # Step 3: update ring under lock
-        with _ring_lock:
-            if fetch_error is None and new_names:
-                a_set = {_strip_nodeid(name)[0] for name in new_names}
-
-                # Mark B-A nodes dead and close their idle connections
-                for n in _nodes:
-                    if not n.dead and n.name not in a_set:
-                        n.mark_dead_and_close_idle()
-
-                # Add or revive A nodes
-                existing = {n.name: n for n in _nodes}
-                for raw in new_names:
-                    addr, fid = _strip_nodeid(raw)
-                    if addr in existing:
-                        if existing[addr].dead:
-                            with existing[addr]._cv:
-                                existing[addr].dead = False
-                        existing[addr].first_pos = fid
-                    else:
-                        new_node = _Node(raw)
-                        _nodes.append(new_node)
-                        existing[addr] = new_node
-
-            # Compact fully-drained tombstones
-            i = 0
-            while i < len(_nodes):
-                n = _nodes[i]
-                if n.dead:
-                    with n._cv:
-                        drained = not any(s.busy for s in n._slots)
-                    if drained:
-                        _nodes.pop(i)
-                        continue
-                i += 1
-
-            # Rebuild ring from live nodes
-            members = {n.name: node_positions(n.name, n.first_pos) for n in _nodes if not n.dead}
-            _ring.clear()
-            _ring.extend(_build_sorted_ring(members))
-
-        # Step 4: reap expired idle connections on all nodes
-        with _ring_lock:
-            snap2 = list(_nodes)
-        for n in snap2:
-            n.reap_expired()
-
-        if fetch_error is not None:
-            raise fetch_error
-
-
-def get(bucket: str, key: str,
-        context: object,
-        callback: Callable[[object, bytes], None]) -> None:
-    """
-    Fetch a cached object, delivering data via callback.
-
-    The callback is invoked once per DATA frame as data arrives:
-        callback(context, data: bytes) -> None
-    Any exception raised by the callback propagates out of get().
-    Raises DistCacheError on network or server failure.
-    """
-    path    = f"/{_url_encode(bucket)}/{_url_encode(key)}"
-    on_data = lambda data: callback(context, data)
-
-    with _ring_lock:
-        target = find_successor(_ring, dest_pos(bucket, key))
-        if target is None:
-            raise DistCacheError("empty ring", DCERR_NO_NODE)
-        node = _find_node(target)
-
-    for hop in range(_MAX_REDIRECTS + 1):
-        result = _execute(node, path, on_data=on_data)
-
-        if result["status"] == "ok":
+        if not all_nodes:
             return
 
-        if result["status"] == "redirect":
-            names = result.get("nodes", [])
-            with _ring_lock:
-                _ring_update(names)
-                new_target = find_successor(_ring, dest_pos(bucket, key))
-                new_node   = _find_node(new_target) if new_target else None
-            if new_node is None or new_target == target:
-                raise DistCacheError(
-                    f"redirect loop after {hop + 1} hop(s)",
-                    DCERR_REDIRECT_LOOP,
-                )
-            target = new_target
-            node   = new_node
-            continue
+        random.shuffle(all_nodes)
+        picks = all_nodes[:3]
 
-        err_type = result.get("type", "")
-        msg      = result.get("message", "unknown error")
-        raise DistCacheError(msg, _SERVER_ERRCODES.get(err_type, DCERR_PROTOCOL))
+        # Step 2: fetch /_nodes from each picked node until one succeeds
+        nodes_list: list[str]             = []
+        fetch_ok                           = False
+        fetch_err: Optional[DistCacheError] = None
 
-    raise DistCacheError(f"exceeded {_MAX_REDIRECTS} redirects", DCERR_REDIRECT_LOOP)
+        for nodeid in picks:
+            try:
+                nodes_list = fetch_nodes(nodeid)
+                fetch_ok   = True
+                break
+            except DistCacheError as e:
+                fetch_err = e
+
+        # Step 3: replace ring with the fetched node list
+        with _g_dctab_mutex:
+            if fetch_ok and nodes_list:
+                ring_rebuild(nodes_list)
+
+        # Step 4: GC connections to nodes no longer in the ring
+        with _g_dctab_mutex:
+            valid = set(_g_members.keys())
+        curl_pool_gc(valid)
+
+        if not fetch_ok and fetch_err is not None:
+            raise fetch_err
+
+    finally:
+        _g_hk_lock.release()
 
 
-def get_nodes() -> list[str]:
-    """Return the names of all currently known live ring nodes."""
-    with _ring_lock:
-        return [n.name for n in _nodes if not n.dead]
+# ---------------------------------------------------------------------------
+# Public API  (mirrors dc_init / dc_final / dc_get / dc_node / dc_health)
+# ---------------------------------------------------------------------------
+
+def dc_init(nodes: list[str]) -> None:
+    """Initialise with seed nodes. Not thread-safe.
+    Calls dc_housekeeping(); errors from housekeeping are ignored."""
+    curl_pool_final()
+
+    if not nodes:
+        raise DistCacheError("no seed nodes", DCERR_NO_NODE)
+
+    seed = nodes[:_DC_MAX_SEED_NODES]
+    with _g_dctab_mutex:
+        ring_rebuild(seed)
+
+    try:
+        dc_housekeeping()
+    except DistCacheError:
+        pass  # seed nodes are sufficient to start
 
 
-def health(node_name: str) -> HealthResult:
-    """
-    Query /_health on the named node ("host:port").
-    Raises DistCacheError if the node is unknown or unreachable.
-    """
-    with _ring_lock:
-        node = _find_node(node_name)
-    if node is None:
+def dc_final() -> None:
+    """Tear down all connections and clear ring state. Not thread-safe."""
+    global _g_ring, _g_members
+    with _g_dctab_mutex:
+        _g_ring    = []
+        _g_members = {}
+    curl_pool_final()
+
+
+def dc_get(
+    bucket: str,
+    key: str,
+    ctx: object,
+    cb: Callable[[object, bytes], None],
+) -> None:
+    """Fetch a cached object, streaming DATA bytes to cb(ctx, data).
+    Follows redirects up to _DC_MAX_REDIRECTS hops."""
+    global _g_ring
+    with _g_dctab_mutex:
+        if not _g_ring:
+            raise DistCacheError("no nodes in ring", DCERR_NO_NODE)
+        dest = compute_dest_pos(bucket, key)
+        nid  = find_successor(_g_ring, dest)
+        if nid is None:
+            raise DistCacheError("no nodes in ring", DCERR_NO_NODE)
+
+    path = f"/{_url_encode(bucket)}/{_url_encode(key)}"
+
+    for _hop in range(_DC_MAX_REDIRECTS + 1):
+        redirect_node = do_get_streaming(nid, path, ctx, cb)
+
+        if redirect_node is NODEID_NONE:
+            return  # success
+
+        # Redirect: add redirect node to ring, re-lookup same dest position.
+        # Mirrors: ring_add(g_dctab.ring, redirect_node); ring_finalize(ring);
+        #          nid = ring_successor(ring, dest);
+        with _g_dctab_mutex:
+            addr, first_pos = _strip_first_pos(redirect_node)
+            if addr not in _g_members:
+                _g_members[addr] = first_pos
+                new_positions    = node_positions(addr, first_pos)
+                points           = dict(_g_ring)
+                for pos in new_positions:
+                    if pos not in points or addr < points[pos]:
+                        points[pos] = addr
+                _g_ring = sorted(points.items())
+            nid = find_successor(_g_ring, dest)
+            if nid is None:
+                raise DistCacheError("ring empty after redirect", DCERR_NO_NODE)
+
+    raise DistCacheError(
+        f"exceeded {_DC_MAX_REDIRECTS} redirects", DCERR_REDIRECT_LOOP
+    )
+
+
+def dc_node() -> list[str]:
+    """Return names of all known ring nodes."""
+    with _g_dctab_mutex:
+        return list(_g_members.keys())
+
+
+def dc_health(node_name: str) -> HealthResult:
+    """Query /_health on node_name.
+    Raises DistCacheError(DCERR_NO_NODE) if node is not in the ring."""
+    with _g_dctab_mutex:
+        known = set(_g_members.keys())
+    if node_name not in known:
         raise DistCacheError(f"unknown node: {node_name}", DCERR_NO_NODE)
 
-    result = _execute(node, "/_health")
+    host, port_str = node_name.rsplit(":", 1)
+    conn = http.client.HTTPConnection(host, int(port_str))
+    try:
+        conn.request("GET", "/_health")
+        response = conn.getresponse()
+        result   = _ChunkReader(response).read_response()
+    except (OSError, http.client.HTTPException, EOFError) as exc:
+        raise DistCacheError(str(exc), DCERR_NETWORK) from exc
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
     if result.get("status") == "error":
-        msg = result.get("message", "health error")
-        raise DistCacheError(msg, DCERR_PROTOCOL)
+        raise DistCacheError(result.get("message", "health error"), DCERR_PROTOCOL)
 
     return HealthResult(
         id        = result.get("id",        ""),
@@ -726,3 +825,31 @@ def health(node_name: str) -> HealthResult:
         lru_size  = int(result.get("lru_size",  0)),
         used_gib  = float(result.get("used_gib",  0.0)),
     )
+
+
+# ---------------------------------------------------------------------------
+# Public aliases  (keep old API names working)
+# ---------------------------------------------------------------------------
+
+def init(nodes: list[str]) -> None:
+    dc_init(nodes)
+
+def final() -> None:
+    dc_final()
+
+def get(
+    bucket: str,
+    key: str,
+    ctx: object,
+    cb: Callable[[object, bytes], None],
+) -> None:
+    dc_get(bucket, key, ctx, cb)
+
+def get_nodes() -> list[str]:
+    return dc_node()
+
+def health(node_name: str) -> HealthResult:
+    return dc_health(node_name)
+
+def housekeeping() -> None:
+    dc_housekeeping()

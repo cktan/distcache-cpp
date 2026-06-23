@@ -868,20 +868,25 @@ static CURL *curl_pool_get(nodeid_idx_t idx) {
   time_t now = time(NULL);
 
   /* Scan newest-first: start at head-1 and decrement. */
-  int slot = (p->head - 1 + CURL_POOL_CAP) % CURL_POOL_CAP;
-  for (int i = 0; i < p->count && found == NULL;
-       i++, slot = (slot - 1 + CURL_POOL_CAP) % CURL_POOL_CAP) {
+  int slot = p->head - 1;
+  for (int i = 0; i < p->count; i++, slot--) {
+    if (slot < 0) {
+      slot += CURL_POOL_CAP;
+    }
     curl_pool_entry_t *e = &p->slots[slot];
-    if (e->handle == NULL) {
-      null_count++;
-    } else if (e->expire_time <= now) {
-      curl_easy_cleanup(e->handle);
+    if (e->handle == NULL || e->expire_time <= now) {
+      if (e->handle)
+        curl_easy_cleanup(e->handle);
       e->handle = NULL;
+      e->nodeid = NODEID_NONE;
       null_count++;
-    } else if (nodeid_eq(e->nodeid, idx)) {
+      continue;
+    }
+    if (nodeid_eq(e->nodeid, idx)) {
       found = e->handle;
       e->handle = NULL;
       null_count++;
+      break;
     }
   }
 

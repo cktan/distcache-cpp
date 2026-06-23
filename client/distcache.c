@@ -235,6 +235,7 @@ static int parse_redirect_payload(const char *payload, int plen, char *name_out,
   return 1;
 }
 
+#ifdef DC_TESTING
 /* Parse NODES payload (newline-terminated lines) into names[]. Returns
  * count. */
 static int parse_nodes_payload(const char *payload, int plen,
@@ -254,6 +255,7 @@ static int parse_nodes_payload(const char *payload, int plen,
   }
   return count;
 }
+#endif /* DC_TESTING */
 
 /* ── Streaming wire-protocol parser ─────────────────────────────────────── */
 
@@ -306,14 +308,14 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
         return 0;
       }
     } else if (strncmp(st->fp.raw, "ERROR:", 6) == 0) {
-      strncpy(st->status, "error", sizeof(st->status) - 1);
+      memcpy(st->status, "error", sizeof("error"));
       parse_error_payload(payload, plen, st->err_type, sizeof(st->err_type),
                           st->err_msg, sizeof(st->err_msg));
     } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
-      strncpy(st->status, "redirect", sizeof(st->status) - 1);
+      memcpy(st->status, "redirect", sizeof("redirect"));
       parse_redirect_payload(payload, plen, st->redir_name, DC_NODE_NAME_MAX);
     } else {
-      strncpy(st->status, "unknown", sizeof(st->status) - 1);
+      memcpy(st->status, "unknown", sizeof("unknown"));
     }
 
     push_frame_init(&st->fp);
@@ -429,8 +431,11 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
     }
 
     if (strcmp(st.status, "redirect") == 0) {
-      strncpy(redir_name, st.redir_name, DC_NODE_NAME_MAX - 1);
-      redir_name[DC_NODE_NAME_MAX - 1] = '\0';
+      size_t rn_len = strlen(st.redir_name);
+      if (rn_len >= DC_NODE_NAME_MAX)
+        rn_len = DC_NODE_NAME_MAX - 1;
+      memcpy(redir_name, st.redir_name, rn_len);
+      redir_name[rn_len] = '\0';
       if (is_redirect) {
         *is_redirect = 1;
       }
@@ -469,26 +474,31 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
  * Uses a one-shot curl handle (not the pool) to avoid pool interactions
  * during housekeeping.
  */
-/*
-  TODO:
-  1. change fetch_nodes to
-        int fetch_nodes(nodeid_idx, char** ret);
+/* GET /_nodes from nodeid; return \n-separated node list in *ret. Caller frees.
+ */
+static int fetch_nodes(nodeid_idx_t nodeid, char **ret) {
+  *ret = NULL;
 
-  2. ret is a list of nodeid separated by \n
-  3. for each NODES frame, just cat it to the end of *ret.
-  4. return 0 on success, -1 otherwise.
-  5. caller must free(*ret)
-  6. fill myerror, myerrmsg on error.
-*/
-static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
-                       int *n_names, char *errbuf, int errsz) {
+  const char *name = nodeid_lookup(nodeid);
+  char addr[DC_NODE_NAME_MAX];
+  size_t addr_len = strlen(name);
+  if (addr_len >= DC_NODE_NAME_MAX)
+    addr_len = DC_NODE_NAME_MAX - 1;
+  memcpy(addr, name, addr_len);
+  addr[addr_len] = '\0';
+  char *slash = strchr(addr, '/');
+  if (slash)
+    *slash = '\0';
+
   char url[1536];
-  snprintf(url, sizeof(url), "http://%s/_nodes", node_name);
+  snprintf(url, sizeof(url), "http://%s/_nodes", addr);
 
+  // TODO: this is a really stupid way to use curl. The curl callback
   CURL *h = curl_easy_init();
   if (!h) {
-    snprintf(errbuf, errsz, "curl_easy_init failed");
-    return DCERR_NETWORK;
+    myerrno = DCERR_NETWORK;
+    snprintf(myerrmsg, sizeof(myerrmsg), "curl_easy_init failed");
+    return -1;
   }
 
   growbuf_t body = {0};
@@ -498,25 +508,24 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
   curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
   curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
 
-  CURLcode rc = curl_easy_perform(h);
-  curl_easy_cleanup(h); /* done with handle regardless of outcome */
+  CURLcode crc = curl_easy_perform(h);
+  curl_easy_cleanup(h);
 
-  if (rc != CURLE_OK) {
+  if (crc != CURLE_OK) {
     free(body.data);
-    snprintf(errbuf, errsz, "curl error (%s/_nodes): %s", node_name,
-             curl_easy_strerror(rc));
-    return DCERR_NETWORK;
+    myerrno = DCERR_NETWORK;
+    snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%s/_nodes): %s", addr,
+             curl_easy_strerror(crc));
+    return -1;
   }
 
-  /* Walk the response body frame by frame using the push parser.
-   * stream_in_push consumes as many bytes as it needs and sets
-   * fp.complete when a full frame is ready. */
+  /* Walk frames; cat each NODES payload into out. */
+  growbuf_t out = {0};
   push_frame_t fp;
   push_frame_init(&fp);
   const char *rp = body.data;
   size_t rrem = body.len;
-  int found = 0; /* set when we see a NODES frame */
-  int ret = DCERR_PROTOCOL;
+  int found = 0;
 
   while (rrem > 0) {
     int rc2 = stream_in_push(&fp, rp, rrem);
@@ -536,20 +545,37 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
     if (strncmp(fp.raw, "FIN:", 4) == 0)
       break;
     if (strncmp(fp.raw, "NODES:", 6) == 0) {
-      *n_names = parse_nodes_payload(payload, plen, names, DC_MAX_REDIR_NODES);
+      growbuf_write_cb((char *)payload, 1, (size_t)plen, &out);
       found = 1;
-      ret = 0;
     }
-    push_frame_init(&fp); /* reset parser for next frame */
+    push_frame_init(&fp);
   }
 
   free(body.data);
 
-  /* A valid response must contain a NODES frame before FIN. */
-  if (!found)
-    snprintf(errbuf, errsz, "no NODES frame in /_nodes from %s", node_name);
+  if (!found) {
+    free(out.data);
+    myerrno = DCERR_PROTOCOL;
+    snprintf(myerrmsg, sizeof(myerrmsg), "no NODES frame in /_nodes from %s",
+             addr);
+    return -1;
+  }
 
-  return ret;
+  /* NUL-terminate */
+  if (out.cap == out.len) {
+    char *tmp = realloc(out.data, out.len + 1);
+    if (!tmp) {
+      free(out.data);
+      myerrno = DCERR_NOMEM;
+      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
+      return -1;
+    }
+    out.data = tmp;
+  }
+  out.data[out.len] = '\0';
+
+  *ret = out.data;
+  return 0;
 }
 
 /* ── dc_housekeeping ────────────────────────────────────────────────────── */
@@ -603,48 +629,43 @@ int dc_housekeeping(void) {
   }
 
   /* ── Step 2: Fetch /_nodes from each picked node until one succeeds ── */
-  char new_names[DC_MAX_REDIR_NODES][DC_NODE_NAME_MAX];
-  int n_new = 0;
+  char *nodes_str = NULL;
   int fetch_ok = 0;
-  char fetch_err[256] = "";
 
   for (int i = 0; i < attempts; i++) {
-    /* nodeid_idx_t are stable globals; safe to look up without ring lock */
-    const char *name = nodeid_lookup(picks[i]);
-    char addr[DC_NODE_NAME_MAX];
-    strncpy(addr, name, DC_NODE_NAME_MAX - 1);
-    addr[DC_NODE_NAME_MAX - 1] = '\0';
-    /* Strip /first_id suffix if present — fetch_nodes wants host:port */
-    char *slash = strchr(addr, '/');
-    if (slash)
-      *slash = '\0';
-    if (fetch_nodes(addr, new_names, &n_new, fetch_err, sizeof(fetch_err)) ==
-        0) {
+    if (fetch_nodes(picks[i], &nodes_str) == 0) {
       fetch_ok = 1;
       break;
     }
   }
 
   int hk_rc = 0;
-  if (!fetch_ok) {
-    myerrno = DCERR_NO_NODE;
-    snprintf(myerrmsg, sizeof(myerrmsg), "ring refresh failed: %.170s",
-             fetch_err);
-    hk_rc = -1;
-  }
+  if (!fetch_ok)
+    hk_rc = -1; /* myerrno/myerrmsg already set by fetch_nodes */
 
   /* ── Step 3: Replace ring with the fetched node list ────────────────── */
   pthread_mutex_lock(&g_dctab.mutex);
 
-  if (fetch_ok && n_new > 0) {
+  if (fetch_ok && nodes_str) {
     nodeid_idx_t nodes[DC_MAX_REDIR_NODES];
     int n = 0;
-    for (int j = 0; j < n_new; j++) {
-      nodeid_idx_t idx = nodeid_register(new_names[j]);
-      if (nodeid_valid(idx))
-        nodes[n++] = idx;
+    char *p = nodes_str;
+    while (*p && n < DC_MAX_REDIR_NODES) {
+      char *nl = strchr(p, '\n');
+      if (nl)
+        *nl = '\0';
+      if (*p) {
+        nodeid_idx_t idx = nodeid_register(p);
+        if (nodeid_valid(idx))
+          nodes[n++] = idx;
+      }
+      if (!nl)
+        break;
+      p = nl + 1;
     }
-    ring_rebuild(nodes, n);
+    free(nodes_str);
+    if (n > 0)
+      ring_rebuild(nodes, n);
   }
 
   nodeid_bloom_t bf;

@@ -537,7 +537,7 @@ and performing the atomic rename on success.
 | `wire.h/.cpp` | plain | TYPE:LENGTH encode (`wire_redirect`, `wire_err`); `WIRE_FIN` constant |
 | `http.h/.cpp` | class | cpp-httplib routes; `/_health` + GET/PUT/DELETE + 2 POST inter-node |
 | `rebalance.h/.cpp` | class | `Rebalancer`: scan_for_peer, pull_one, claim_sweep; drives `node.jobq` |
-| `client/distcache.h` | C API | C client public API + `DCERR_*` error codes + `DC_NODE_NAME_MAX` |
+| `client/distcache.h` | C API | C client public API + `DCERR_*` error codes |
 | `client/distcache.c` | C impl | C client: libcurl connection pool, ring, `dc_init/final/get/node/health/housekeeping`; uses `url_get` for `/_health` and `/_nodes` |
 | `client/distcache.py` | Python | Python client: HTTP connection pool, ring, same API surface as C client |
 

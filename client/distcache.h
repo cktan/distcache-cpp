@@ -124,9 +124,6 @@ const char *dc_errmsg(void);
 
 /* ── Error codes ────────────────────────────────────────────────────────── */
 
-/* Maximum length of a node address string "host:port[/first_id]" + NUL. */
-#define DC_NODE_NAME_MAX 100
-
 /* Server-originated (mirror ERR_* strings from the server) */
 #define DCERR_UNKNOWN_COMMAND 1
 #define DCERR_BAD_OBJECT_NAME 2

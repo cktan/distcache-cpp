@@ -27,7 +27,7 @@ extern void dc_test_parse_error(const char *payload, int plen, char *type_out,
 extern int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
                                   size_t name_sz);
 extern int dc_test_parse_nodes(const char *payload, int plen,
-                               char names[][DC_NODE_NAME_MAX], int max_names);
+                               char names[][1024], int max_names);
 extern int dc_test_server_errcode(const char *s);
 extern int dc_test_fin_callback(void);
 
@@ -205,7 +205,7 @@ static void test_wire_parsing(void) {
   CHECK(type[0] == '\0', "ERROR: no newline gives empty type");
 
   /* REDIRECT: single plain-text node line */
-  char name[DC_NODE_NAME_MAX];
+  char name[1024];
   int ok;
   ok = dc_test_parse_redirect("127.0.0.1:4002/7\n", 17, name, sizeof(name));
   CHECK(ok == 1, "REDIRECT: returns 1 on success");
@@ -229,7 +229,7 @@ static void test_wire_parsing(void) {
 static void test_nodes_parsing(void) {
   section("Wire protocol parsing (NODES frame)");
 
-  char names[64][DC_NODE_NAME_MAX];
+  char names[64][1024];
   int n;
 
   /* Two nodes */

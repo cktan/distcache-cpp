@@ -252,3 +252,77 @@ TEST_CASE("bloom from distinct: absent node tests negative") {
   ring_destroy(r);
   nodeid_destroy();
 }
+
+TEST_CASE("ring_pick: empty ring returns 0") {
+  ring_t *r = ring_create();
+  ring_finalize(r);
+  int picks[5];
+  CHECK(ring_pick(r, 5, picks) == 0);
+  ring_destroy(r);
+}
+
+TEST_CASE("ring_pick: single node ring returns 1") {
+  ring_t *r = ring_create();
+  nodeid_idx_t n = nodeid_register("solo");
+  ring_add(r, n);
+  ring_finalize(r);
+  int picks[3];
+
+  // Ask for 1 node
+  CHECK(ring_pick(r, 1, picks) == 1);
+  CHECK(nodeid_eq(r->distinct.entries[picks[0]].node, n));
+
+  // Ask for 3 nodes (only 1 exists)
+  CHECK(ring_pick(r, 3, picks) == 1);
+  CHECK(nodeid_eq(r->distinct.entries[picks[0]].node, n));
+
+  ring_destroy(r);
+  nodeid_destroy();
+}
+
+TEST_CASE(
+    "ring_pick: multi-node ring returns correct number of distinct nodes") {
+  ring_t *r = ring_create();
+  nodeid_idx_t nodes[5];
+  nodes[0] = nodeid_register("node0");
+  nodes[1] = nodeid_register("node1");
+  nodes[2] = nodeid_register("node2");
+  nodes[3] = nodeid_register("node3");
+  nodes[4] = nodeid_register("node4");
+
+  for (int i = 0; i < 5; i++) {
+    ring_add(r, nodes[i]);
+  }
+  ring_finalize(r);
+
+  int picks[3];
+  int count = ring_pick(r, 3, picks);
+  CHECK(count == 3);
+
+  // Verify all picked indices are valid and distinct
+  CHECK(picks[0] >= 0);
+  CHECK(picks[0] < 5);
+  CHECK(picks[1] >= 0);
+  CHECK(picks[1] < 5);
+  CHECK(picks[2] >= 0);
+  CHECK(picks[2] < 5);
+  CHECK(picks[0] != picks[1]);
+  CHECK(picks[0] != picks[2]);
+  CHECK(picks[1] != picks[2]);
+
+  // Verify picked nodes belong to the set of registered nodes
+  for (int i = 0; i < 3; i++) {
+    nodeid_idx_t node = r->distinct.entries[picks[i]].node;
+    bool found = false;
+    for (int j = 0; j < 5; j++) {
+      if (nodeid_eq(node, nodes[j])) {
+        found = true;
+        break;
+      }
+    }
+    CHECK(found);
+  }
+
+  ring_destroy(r);
+  nodeid_destroy();
+}

@@ -40,7 +40,6 @@
 
 #define DC_POSITIONS_PER_NODE 10 /* must match ring.c */
 #define DC_MAX_REDIRECTS 5
-#define DC_MAX_REDIR_NODES 64
 #define DC_CONN_EXPIRE_SECS 300 /* 5 minutes */
 
 /* ── Checked-out connection ─────────────────────────────────────────────── */
@@ -105,13 +104,17 @@ static void curl_pool_final(void);
 static CURL *curl_pool_get(nodeid_idx_t idx);
 static void curl_pool_put(CURL *handle, nodeid_idx_t idx);
 static void curl_pool_gc(const nodeid_bloom_t *bf);
+static void curl_pool_reap_expired(void);
 
-/* Fetch a connection handle from the pool or create a fresh one. */
+/* Fetch a connection handle from the pool or create a fresh one.
+ * 1% of the time, sweep the whole pool to reap expired handles. */
 static void node_checkout(nodeid_idx_t idx, dc_conn_t *conn) {
   conn->nodeid = idx;
   conn->curl = curl_pool_get(idx);
   if (!conn->curl)
     conn->curl = curl_handle_init();
+  if (rand() % 100 == 0)
+    curl_pool_reap_expired();
 }
 
 /* Return handle to the pool for reuse. */
@@ -966,6 +969,28 @@ static void curl_pool_gc(const nodeid_bloom_t *bf) {
   }
   /* Release pool lock */
   pthread_mutex_unlock(&p->mu);
+}
+
+/* Scan all pool slots and clean up expired handles. */
+static void curl_pool_reap_expired(void) {
+  curl_pool_t *p = &g_curl_pool;
+  pthread_mutex_lock(&p->mu); /* acquire pool lock */
+  int null_count = 0;
+  time_t now = time(NULL);
+  for (int i = 0; i < p->count; i++) {
+    int slot = (p->tail + i) % CURL_POOL_CAP;
+    curl_pool_entry_t *e = &p->slots[slot];
+    if (e->handle == NULL) {
+      null_count++;
+    } else if (e->expire_time <= now) {
+      curl_easy_cleanup(e->handle);
+      e->handle = NULL;
+      null_count++;
+    }
+  }
+  if (null_count > CURL_POOL_COMPACT)
+    curl_pool_compact();
+  pthread_mutex_unlock(&p->mu); /* release pool lock */
 }
 
 /* Return the thread-local error number from the last failed call. */

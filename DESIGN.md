@@ -16,19 +16,19 @@ responsible node on a cache miss.
 
 ## Node Identity
 
-A node ID has the form `host:port` or `host:port/first_id`.
-`first_id` is an optional 32-bit unsigned integer that
+A node ID has the form `host:port` or `host:port/first_pos`.
+`first_pos` is an optional 32-bit unsigned integer that
 overrides the node's first ring position; when absent all
 10 ring positions are derived by the FNV-1a chain (see
 "Node identity and chord ring" below).
 
 ```
 127.0.0.1:4001           # no placement override
-127.0.0.1:4001/805306368 # first ring ID pinned to 0x30000000
+127.0.0.1:4001/805306368 # first ring position pinned to 0x30000000
 ```
 
-The `/first_id` suffix is preserved in SWIM gossip so that
-peers can reconstruct the full 10-ID ring chain without
+The `/first_pos` suffix is preserved in SWIM gossip so that
+peers can reconstruct the full 10-position ring chain without
 extra coordination.
 
 ---
@@ -36,14 +36,14 @@ extra coordination.
 ## Startup
 
 ```
-./distcache -D <homedir> -N <host:port[/first_id]> [-p <seed>]...
+./distcache -D <homedir> -N <host:port[/first_pos]> [-p <seed>]...
 ```
 
 | Flag | Required | Description |
 |------|----------|-------------|
 | `-D <homedir>` | yes | Root for `cache/`, `tmp/` |
-| `-N <host:port[/first_id]>` | yes | Node identity (nodeid); sets HTTP listen address |
-| `-p <host:port[/first_id]>` | no, repeatable | Bootstrap SWIM peer(s) |
+| `-N <host:port[/first_pos]>` | yes | Node identity (nodeid); sets HTTP listen address |
+| `-p <host:port[/first_pos]>` | no, repeatable | Bootstrap SWIM peer(s) |
 
 **Startup sequence:**
 
@@ -111,37 +111,37 @@ next startup.
 
 ## Node identity and chord ring
 
-Each node is identified by `"host:port[/first_id]"` from the
+Each node is identified by `"host:port[/first_pos]"` from the
 `-N` flag.
 
-### Ring IDs (10 per node)
+### Ring positions (10 per node)
 
 ```
 hash(prev, input) = FNV-1a-64(str(prev) + ":" + input) mod 2^32
 
-id[0] = first_id  (if /first_id given in nodeid)  OR  hash(0, "host:port")
-id[n] = hash(id[n-1], "host:port:" + str(id[n-1]))   n ≥ 1
+pos[0] = first_pos  (if /first_pos given in nodeid)  OR  hash(0, "host:port")
+pos[n] = hash(pos[n-1], "host:port:" + str(pos[n-1]))   n ≥ 1
 
-When /first_id is present the chain uses the bare "host:port" address
-(without the /first_id suffix) as the chain_name in subsequent IDs.
+When /first_pos is present the chain uses the bare "host:port" address
+(without the /first_pos suffix) as the chain_name in subsequent positions.
 ```
 
-Ring space: `[0, 2^32)`. On ID collision, the
+Ring space: `[0, 2^32)`. On position collision, the
 lexicographically smaller node name wins.
 
-**Surgical placement:** The `/first_id` suffix in `-N`
+**Surgical placement:** The `/first_pos` suffix in `-N`
 lets an operator place a node at a specific ring position.
 Choosing an ID between an overloaded node and its
 predecessor splits that node's keyspace without touching
-anyone else's. All 10 IDs shift together since they
-chain from `id[0]`.
+anyone else's. All 10 positions shift together since they
+chain from `pos[0]`.
 
 ### Key routing
 
 ```
 relpath    = "cache/{bucket}/{key}"
-relpath_id = hash(0, relpath)        # deterministic; same on every node
-dest_node  = first ring point with id >= relpath_id (wraps)
+relpath_pos = hash(0, relpath)        # deterministic; same on every node
+dest_node  = first ring point with pos >= relpath_pos (wraps)
 ```
 
 The ring is a heap-allocated `ring_t` (sorted
@@ -151,14 +151,12 @@ read on the hot path, atomic-swap on membership
 change.
 
 Each `ring_entry_t::node` holds the full nodeid
-(`host:port` or `host:port/first_id`), so
+(`host:port` or `host:port/first_pos`), so
 `ring_successor()` returns a full nodeid. The GET
 handler compares it directly to `node.nodeid` to
 decide whether to redirect.
 
-Successor lookup: O(log N) binary search
-(`bisect_left`). `ring_next_after()` is O(log N + K)
-where K is the number of excluded nodes to skip.
+Successor lookup: O(log N) binary search (`bisect_left`).
 
 ---
 
@@ -172,7 +170,7 @@ isolation.
 ```
 struct node_t {
     std::string homedir;   // absolute root; all file ops use abspath()
-    nodeid_idx_t nodeid;   // registered pool index for "host:port[/first_id]"
+    nodeid_idx_t nodeid;   // registered pool index for "host:port[/first_pos]"
     std::vector<std::string> seeds; // SWIM bootstrap peers
     keylock_t keylock;     // serialises concurrent S3 fetches per key
     cache_t   cache;       // file cache; owns lru_t internally
@@ -268,10 +266,10 @@ field supplies the key; every node must use the same string
 (`"distcache"`). Mismatched names silently drop each other's
 messages.
 
-**Cookie:** Each node encodes its `first_id` as a decimal
+**Cookie:** Each node encodes its `first_pos` as a decimal
 string in the SWIM cookie. Peers extract it from
 `"host:port/cookie"` via `parse_peer()` to reconstruct the
-correct 10-ID ring chain without extra coordination.
+correct 10-position ring chain without extra coordination.
 
 **Feed:** swimc17 delivers events (node-up, node-down,
 cluster-size, warning) via `swim_feed_t`. `node.feed`
@@ -285,8 +283,8 @@ and a `put(n, ...)` method.
 injected-but-not-yet-converged nodes (`injected_` vector),
 and atomic-stores a new `shared_ptr<ring_t>` into
 `node_.ring`. Ring keys are full nodeids (`host:port` or
-`host:port/first_id`); the ring ID chain is computed from
-the bare address and first_id.
+`host:port/first_pos`); the ring position chain is computed from
+the bare address and first_pos.
 
 **Pre-convergence injection:** `inject_node(nodeid)` appends
 a nodeid string to the `injected_` vector and triggers an
@@ -393,7 +391,7 @@ last waiter or owner exits.
 ## LRU eviction
 
 `node.cache` owns `lru_t`, which tracks
-`{relpath → {mtime_posix, relpath_id}}` under a single
+`{relpath → {mtime_posix, relpath_pos}}` under a single
 `std::mutex`. LRU heat is approximated by mtime: hits call
 `touch()` (sets mtime to `time(nullptr)`).
 
@@ -420,7 +418,7 @@ build).
 polling thread — the check is cheap and inline.
 
 **LRU scan:** `scan(cb)` iterates every entry under the
-lock, calling `cb(relpath, mtime, relpath_id)`. Used by the
+lock, calling `cb(relpath, mtime, relpath_pos)`. Used by the
 rebalance claim sweep. `get_mtime(relpath)` is an O(1)
 lookup.
 
@@ -520,7 +518,7 @@ and performing the atomic rename on success.
 | `main.cpp` | entry point | flag parsing, node construction, logger setup, pidlock, lifecycle |
 | `node.h/.cpp` | struct | owns all shared state; `start/stop/join`; `abspath()` |
 | `fnv.h` | inline | FNV-1a-64, `ring_hash(prev, input)` |
-| `ring.h/.c` | C | chord ring: sorted `ring_entry_t` array, binary search, 10-ID chain |
+| `ring.h/.c` | C | chord ring: sorted `ring_entry_t` array, binary search, 10-position chain |
 | `relpath.h/.cpp` | plain | `compute_relpath`, path validation |
 | `rc.h/.cpp` | plain | `rc_t` typed error result; `fd_t` RAII file descriptor |
 | `unique.h/.cpp` | plain | `unique_get()` — atomic monotonic counter for tmp names |
@@ -614,8 +612,8 @@ start real node processes. The rebalance smoke test
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `-D <homedir>` | _(required)_ | Root for `cache/`, `tmp/` |
-| `-N <host:port[/first_id]>` | _(required)_ | Node identity (nodeid); HTTP listen address |
-| `-p <host:port[/first_id]>` | _(repeatable)_ | SWIM bootstrap peers |
+| `-N <host:port[/first_pos]>` | _(required)_ | Node identity (nodeid); HTTP listen address |
+| `-p <host:port[/first_pos]>` | _(repeatable)_ | SWIM bootstrap peers |
 | `S3COPY_URL` | `http://localhost:7777` | s3copy sidecar base URL |
 | `DC_CLAIM_DELAY_MS` | 20000 | Max startup claim-sweep delay (ms) |
 

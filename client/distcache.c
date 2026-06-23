@@ -245,6 +245,7 @@ typedef struct {
 } stream_state_t;
 
 /* libcurl write callback: parse incoming stream frames and dispatch to st->cb.
+ * Returns the number of bytes processed on success, or 0 on error to abort.
  */
 static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
   stream_state_t *st = ud;
@@ -301,7 +302,9 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
 
 /* ── do_get_streaming ───────────────────────────────────────────────────── */
 
-/* Perform one HTTP GET, streaming DATA frames to cb. */
+/* Perform one HTTP GET, streaming DATA frames to cb.
+ * Returns 0 on success (whether data was fetched or redirected),
+ * or -1 on error (setting thread-local myerrno and myerrmsg). */
 static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
                             int (*cb)(void *ctx, const char *buf, int bufsz),
                             nodeid_idx_t *ret_redirect) {

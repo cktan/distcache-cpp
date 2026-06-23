@@ -184,29 +184,6 @@ nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id) {
   return r->entries.entries[idx].node;
 }
 
-/* Return first successor not in the excluded list. */
-nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
-                             size_t excl_n, uint32_t target_id) {
-  int i, start;
-  size_t j;
-  if (r->entries.top == 0)
-    return NODEID_NONE;
-  if (excl_n == 0)
-    return ring_successor(r, target_id);
-  start = bisect_left(r, target_id);
-  if (start == r->entries.top)
-    start = 0;
-  for (i = 0; i < r->entries.top; i++) {
-    nodeid_idx_t node = r->entries.entries[(start + i) % r->entries.top].node;
-    for (j = 0; j < excl_n; j++)
-      if (nodeid_eq(node, excluded[j]))
-        break;
-    if (j == excl_n)
-      return node;
-  }
-  return NODEID_NONE;
-}
-
 /* Randomly select up to N distinct physical nodes from the ring. */
 int ring_select(const ring_t *r, int N, int *ret) {
   if (!r || r->distinct.top <= 0 || N <= 0)

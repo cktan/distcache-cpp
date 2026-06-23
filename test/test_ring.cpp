@@ -78,30 +78,6 @@ TEST_CASE("ring successor: wrap-around at max id") {
   nodeid_destroy();
 }
 
-TEST_CASE("ring next_after: skips excluded nodes") {
-  const uint32_t x_ids[] = {100};
-  const uint32_t y_ids[] = {200};
-  const uint32_t z_ids[] = {300};
-  ring_t *r = ring_create();
-  nodeid_idx_t node_x = nodeid_register("X");
-  nodeid_idx_t node_y = nodeid_register("Y");
-  nodeid_idx_t node_z = nodeid_register("Z");
-  ring_add_ex(r, node_x, x_ids, 1);
-  ring_add_ex(r, node_y, y_ids, 1);
-  ring_add_ex(r, node_z, z_ids, 1);
-  ring_finalize(r);
-
-  const nodeid_idx_t excl_x[] = {node_x};
-  const nodeid_idx_t excl_xy[] = {node_x, node_y};
-  const nodeid_idx_t excl_xyz[] = {node_x, node_y, node_z};
-
-  CHECK(nodeid_eq(ring_next_after(r, excl_x, 1, 0), node_y));
-  CHECK(nodeid_eq(ring_next_after(r, excl_xy, 2, 0), node_z));
-  CHECK(!nodeid_valid(ring_next_after(r, excl_xyz, 3, 0)));
-  ring_destroy(r);
-  nodeid_destroy();
-}
-
 TEST_CASE("ring build: collision resolved by smaller name") {
   const uint32_t ids[] = {500};
   ring_t *r = ring_create();

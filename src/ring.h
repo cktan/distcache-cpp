@@ -68,11 +68,6 @@ void ring_finalize(ring_t *r);
 /* Chord successor of target_id. Returns NODEID_NONE if the ring is empty. */
 nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id);
 
-/* Successor skipping nodes in excluded[0..excl_n-1].
- * Returns NODEID_NONE if the ring is empty or all nodes are excluded. */
-nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
-                             size_t excl_n, uint32_t target_id);
-
 /* Randomly select up to N distinct physical nodes from the ring.
  * Returns the actual number of nodes selected. ret[i] contains indices into
  * r->distinct.entries. */

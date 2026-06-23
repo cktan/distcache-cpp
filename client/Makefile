@@ -1,6 +1,6 @@
-HFILES  := distcache.h ../src/stream.h ../src/ring.h ../src/nodeid.h
+HFILES  := distcache.h ../src/stream.h ../src/ring.h ../src/nodeid.h ../src/url.h
 CFILES  := distcache.c
-OBJ     := distcache.o stream.o ring.o nodeid.o
+OBJ     := distcache.o stream.o ring.o nodeid.o url.o
 EXEC    := test_distcache
 LIB     := libdistcache.a
 
@@ -28,7 +28,10 @@ ring.o: ../src/ring.c ../src/ring.h
 nodeid.o: ../src/nodeid.c ../src/nodeid.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(EXEC): test_distcache.c distcache.c ../src/stream.c ../src/ring.c ../src/nodeid.c
+url.o: ../src/url.c ../src/url.h
+	$(CC) $(CFLAGS) -c -o $@ $<
+
+$(EXEC): test_distcache.c distcache.c ../src/stream.c ../src/ring.c ../src/nodeid.c ../src/url.c
 	$(CC) $(CFLAGS) -DDC_TESTING -o $@ $^ $(LDFLAGS)
 
 *.o: $(HFILES)

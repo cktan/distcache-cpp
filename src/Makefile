@@ -15,12 +15,12 @@ else
     SAN       :=
 endif
 
-LDFLAGS := $(SAN) -L$(HOME)/.local/lib -lswimc17 -pthread
+LDFLAGS := $(SAN) -L$(HOME)/.local/lib -lswimc17 -pthread -lcurl
 
 EXEC    := distcache
 LIB     := libdistcache.a
 MAINOBJ := main.o
-LIBOBJ  := stream.o ring.o nodeid.o $(patsubst %.cpp,%.o,$(filter-out main.cpp,$(wildcard *.cpp)))
+LIBOBJ  := stream.o ring.o nodeid.o url.o $(patsubst %.cpp,%.o,$(filter-out main.cpp,$(wildcard *.cpp)))
 
 all: $(EXEC)
 

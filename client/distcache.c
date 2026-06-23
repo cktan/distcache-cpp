@@ -109,12 +109,12 @@ static void curl_pool_reap_expired(void);
 /* Fetch a connection handle from the pool or create a fresh one.
  * 1% of the time, sweep the whole pool to reap expired handles. */
 static void node_checkout(nodeid_idx_t idx, dc_conn_t *conn) {
+  if (rand() % 100 == 0)
+    curl_pool_reap_expired();
   conn->nodeid = idx;
   conn->curl = curl_pool_get(idx);
   if (!conn->curl)
     conn->curl = curl_handle_init();
-  if (rand() % 100 == 0)
-    curl_pool_reap_expired();
 }
 
 /* Return handle to the pool for reuse. */
@@ -862,9 +862,10 @@ static CURL *curl_pool_get(nodeid_idx_t idx) {
   int null_count = 0;
   time_t now = time(NULL);
 
-  for (int i = 0; i < p->count && found == NULL; i++) {
-    /* Scan newest-first so the freshest connection is returned. */
-    int slot = (p->head - 1 - i + CURL_POOL_CAP * 2) % CURL_POOL_CAP;
+  /* Scan newest-first: start at head-1 and decrement. */
+  int slot = (p->head - 1 + CURL_POOL_CAP) % CURL_POOL_CAP;
+  for (int i = 0; i < p->count && found == NULL;
+       i++, slot = (slot - 1 + CURL_POOL_CAP) % CURL_POOL_CAP) {
     curl_pool_entry_t *e = &p->slots[slot];
     if (e->handle == NULL) {
       null_count++;

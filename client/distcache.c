@@ -469,6 +469,17 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
  * Uses a one-shot curl handle (not the pool) to avoid pool interactions
  * during housekeeping.
  */
+/*
+  TODO:
+  1. change fetch_nodes to
+        int fetch_nodes(nodeid_idx, char** ret);
+
+  2. ret is a list of nodeid separated by \n
+  3. for each NODES frame, just cat it to the end of *ret.
+  4. return 0 on success, -1 otherwise.
+  5. caller must free(*ret)
+  6. fill myerror, myerrmsg on error.
+*/
 static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
                        int *n_names, char *errbuf, int errsz) {
   char url[1536];
@@ -544,15 +555,14 @@ static int fetch_nodes(const char *node_name, char names[][DC_NODE_NAME_MAX],
 /* ── dc_housekeeping ────────────────────────────────────────────────────── */
 
 /*
- * Refresh the client's ring by polling one known node's /_nodes
- * endpoint and reconciling the result with the current ring.
+ * Refresh the client's ring by polling a known node's /_nodes endpoint
+ * and replacing the current ring with the result.
  *
  * Steps:
- *   1. Snapshot the current node indices (under the ring lock).
- *   2. Pick a random node from the snapshot and call GET /_nodes.
- *      Retry the remaining nodes in order until one succeeds.
- *   3. Rebuild the ring: retain existing nodes that appear in the
- *      new list, then append any new nodes from the response.
+ *   1. Pick up to 3 distinct random nodeid_idx_t from the ring
+ *      (under the ring lock; indices are stable globals).
+ *   2. Call GET /_nodes on each until one succeeds.
+ *   3. Replace the ring with the fetched node list.
  *   4. GC connection-pool handles for nodes no longer in the ring.
  *
  * A static mutex prevents concurrent runs: if housekeeping is already
@@ -565,105 +575,76 @@ int dc_housekeeping(void) {
   if (pthread_mutex_trylock(&housekeeping_mutex) != 0)
     return 0;
 
-  int hk_rc = 0;
+  /* ── Step 1: Pick up to 3 distinct random nodes from the ring ──────── */
+  nodeid_idx_t picks[3];
+  int attempts = 0;
 
-  /* ── Step 1: Snapshot node indices for /_nodes probe ────────────────── */
   pthread_mutex_lock(&g_dctab.mutex);
-  int snap_n = g_dctab.ring ? g_dctab.ring->distinct.top : 0;
-  nodeid_idx_t *snap_names = NULL;
-  if (snap_n > 0) {
-    snap_names = malloc((size_t)snap_n * sizeof(nodeid_idx_t));
-    if (!snap_names) {
-      pthread_mutex_unlock(&g_dctab.mutex);
-      pthread_mutex_unlock(&housekeeping_mutex);
-      myerrno = DCERR_NOMEM;
-      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
-      return -1;
+  if (g_dctab.ring) {
+    int n = g_dctab.ring->distinct.top;
+    int order[DC_MAX_REDIR_NODES];
+    for (int i = 0; i < n; i++)
+      order[i] = i;
+    attempts = n < 3 ? n : 3;
+    /* Partial Fisher-Yates to select `attempts` distinct indices */
+    for (int i = 0; i < attempts; i++) {
+      int j = i + rand() % (n - i);
+      int tmp = order[i];
+      order[i] = order[j];
+      order[j] = tmp;
+      picks[i] = g_dctab.ring->distinct.entries[order[i]].node;
     }
-    for (int i = 0; i < snap_n; i++)
-      snap_names[i] = g_dctab.ring->distinct.entries[i].node;
   }
   pthread_mutex_unlock(&g_dctab.mutex);
 
-  /* ── Step 2: Fetch /_nodes from a random non-dead node ─────────────── */
+  if (attempts == 0) {
+    pthread_mutex_unlock(&housekeeping_mutex);
+    return 0;
+  }
+
+  /* ── Step 2: Fetch /_nodes from each picked node until one succeeds ── */
   char new_names[DC_MAX_REDIR_NODES][DC_NODE_NAME_MAX];
   int n_new = 0;
   int fetch_ok = 0;
+  char fetch_err[256] = "";
 
-  if (snap_n > 0) {
-    int start = snap_n > 1 ? rand() % snap_n : 0;
-    char fetch_err[256] = "";
-    int fetch_rc = DCERR_NO_NODE;
-    for (int i = 0; i < snap_n; i++) {
-      int idx = (start + i) % snap_n;
-      char host[254];
-      int port = 0;
-      int first_id = 0;
-      if (nodeid_split(snap_names[idx], host, &port, &first_id) == 0) {
-        char snap_addr[300];
-        snprintf(snap_addr, sizeof(snap_addr), "%s:%d", host, port);
-        fetch_rc = fetch_nodes(snap_addr, new_names, &n_new, fetch_err,
-                               sizeof(fetch_err));
-      } else {
-        fetch_rc = DCERR_NO_NODE;
-      }
-      if (fetch_rc == 0) {
-        fetch_ok = 1;
-        break;
-      }
-    }
-    if (!fetch_ok) {
-      myerrno = fetch_rc;
-      snprintf(myerrmsg, sizeof(myerrmsg), "ring refresh failed: %.170s",
-               fetch_err);
-      hk_rc = -1;
+  for (int i = 0; i < attempts; i++) {
+    /* nodeid_idx_t are stable globals; safe to look up without ring lock */
+    const char *name = nodeid_lookup(picks[i]);
+    char addr[DC_NODE_NAME_MAX];
+    strncpy(addr, name, DC_NODE_NAME_MAX - 1);
+    addr[DC_NODE_NAME_MAX - 1] = '\0';
+    /* Strip /first_id suffix if present — fetch_nodes wants host:port */
+    char *slash = strchr(addr, '/');
+    if (slash)
+      *slash = '\0';
+    if (fetch_nodes(addr, new_names, &n_new, fetch_err, sizeof(fetch_err)) ==
+        0) {
+      fetch_ok = 1;
+      break;
     }
   }
-  free(snap_names);
 
-  /* ── Step 3: Rebuild ring from merged node list ──────────────────────── */
+  int hk_rc = 0;
+  if (!fetch_ok) {
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "ring refresh failed: %.170s",
+             fetch_err);
+    hk_rc = -1;
+  }
+
+  /* ── Step 3: Replace ring with the fetched node list ────────────────── */
   pthread_mutex_lock(&g_dctab.mutex);
 
   if (fetch_ok && n_new > 0) {
-    /* Keep existing ring nodes that appear in new_names; add any new ones. */
-    int old_n = g_dctab.ring ? g_dctab.ring->distinct.top : 0;
-    nodeid_idx_t *nodes =
-        malloc((size_t)(old_n + n_new) * sizeof(nodeid_idx_t));
-    if (nodes) {
-      int n = 0;
-
-      /* Retain existing nodes that are still present. */
-      for (int i = 0; i < old_n; i++) {
-        nodeid_idx_t idx = g_dctab.ring->distinct.entries[i].node;
-        const char *s = nodeid_lookup(idx);
-        for (int j = 0; j < n_new; j++) {
-          if (strcmp(s, new_names[j]) == 0) {
-            nodes[n++] = idx;
-            break;
-          }
-        }
-      }
-
-      /* Append nodes from new_names not already retained. */
-      for (int j = 0; j < n_new; j++) {
-        int found = 0;
-        for (int i = 0; i < n; i++) {
-          if (strcmp(nodeid_lookup(nodes[i]), new_names[j]) == 0) {
-            found = 1;
-            break;
-          }
-        }
-        if (!found) {
-          nodeid_idx_t idx = nodeid_register(new_names[j]);
-          if (nodeid_valid(idx))
-            nodes[n++] = idx;
-        }
-      }
-
-      ring_rebuild(nodes, n);
-      free(nodes);
+    nodeid_idx_t nodes[DC_MAX_REDIR_NODES];
+    int n = 0;
+    for (int j = 0; j < n_new; j++) {
+      nodeid_idx_t idx = nodeid_register(new_names[j]);
+      if (nodeid_valid(idx))
+        nodes[n++] = idx;
     }
-    /* On malloc failure, leave current ring unchanged. */
+    ring_rebuild(nodes, n);
   }
 
   nodeid_bloom_t bf;
@@ -673,7 +654,7 @@ int dc_housekeeping(void) {
 
   pthread_mutex_unlock(&g_dctab.mutex);
 
-  /* GC connections from nodes no longer present in the ring */
+  /* ── Step 4: GC connections to nodes no longer in the ring ──────────── */
   curl_pool_gc(&bf);
 
   pthread_mutex_unlock(&housekeeping_mutex);

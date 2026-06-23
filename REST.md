@@ -59,7 +59,10 @@ a numeric error code; unknown types map to `DCERR_PROTOCOL`.
 Returns node health and statistics as **plain JSON** (not
 wire-framed). Intended for monitoring tools and shell scripts.
 
-**Response body** (Content-Type: `application/json`):
+**Response headers**: `Content-Type: application/json`,
+`Content-Length` (always present).
+
+**Response body**:
 
 ```json
 {
@@ -92,7 +95,10 @@ self.
 Returns current cluster membership. Used by the client
 libraries for ring housekeeping.
 
-**Response** (`text/plain`, no framing):
+**Response headers**: `Content-Type: text/plain`,
+`Content-Length` (always present).
+
+**Response body** (no framing):
 
 ```
 node1:4001/0

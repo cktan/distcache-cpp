@@ -61,10 +61,6 @@ void ring_destroy(ring_t *r);
  * Duplicates resolved in ring_finalize. */
 void ring_add(ring_t *r, nodeid_idx_t node);
 
-/* Add a node with caller-supplied virtual IDs (for testing). */
-void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
-                 size_t nids);
-
 /* Sort entries by id and deduplicate (smaller node name wins on tie).
  * Must be called exactly once after all ring_add calls. */
 void ring_finalize(ring_t *r);

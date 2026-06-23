@@ -5,6 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
+                 size_t nids);
+
 /* Allocate a zeroed ring_t on the heap. */
 ring_t *ring_create(void) { return calloc(1, sizeof(ring_t)); }
 
@@ -51,14 +54,29 @@ void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
   r->dirty = 1;
 }
 
-/* Derive 10 virtual IDs from node. */
+/* Derive 10 virtual IDs from node and add to the ring if not duplicate. */
 void ring_add(ring_t *r, nodeid_idx_t node) {
   const char *node_str = nodeid_lookup(node);
   if (!node_str)
     return;
+
+  /* Check for duplicate in distinct */
+  for (int i = 0; i < r->distinct.top; i++) {
+    if (nodeid_eq(r->distinct.entries[i].node, node))
+      return;
+  }
+
   uint32_t ids[10];
   ring_compute_ids(node_str, ids);
-  ring_add_ex(r, node, ids, 10);
+
+  /* Insert 10 entries in entries[] */
+  for (int i = 0; i < 10; i++)
+    ring_entryvec_append(&r->entries, ids[i], node);
+
+  /* Insert 1 entry in distinct[] */
+  ring_entryvec_append(&r->distinct, ids[0], node);
+
+  r->dirty = 1;
 }
 
 /* qsort comparator: ascending by id; smaller node name first on tie. */

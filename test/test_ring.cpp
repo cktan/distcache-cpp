@@ -4,6 +4,11 @@
 #include "ring.h"
 #include <string>
 
+extern "C" {
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
+                 size_t nids);
+}
+
 // Reference vectors computed from Elixir DistCache.Ring.hash/2:
 //   ring_hash(0, "127.0.0.1:4001")             == 3190356085
 //   ring_hash(0, "cache/my-bucket/photo.jpg")   == 2752153653
@@ -323,6 +328,18 @@ TEST_CASE(
     CHECK(found);
   }
 
+  ring_destroy(r);
+  nodeid_destroy();
+}
+
+TEST_CASE("ring_add: duplicates are ignored") {
+  ring_t *r = ring_create();
+  nodeid_idx_t node = nodeid_register("duplicate_node");
+  ring_add(r, node);
+  ring_add(r, node); // duplicate add
+  ring_finalize(r);
+  CHECK(ring_node_count(r) == 1);
+  CHECK(ring_size(r) == 10);
   ring_destroy(r);
   nodeid_destroy();
 }

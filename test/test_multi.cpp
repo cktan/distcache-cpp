@@ -62,8 +62,8 @@ static std::string url_del(const std::string &host, int port,
   return url_request("DELETE", host, port, path);
 }
 
-// Parse "REDIRECT:N\nhost:port/first_id\nFIN:0\n" → "host:port".
-// Strips the /first_id suffix that SWIM appends to nodeids.
+// Parse "REDIRECT:N\nhost:port/first_pos\nFIN:0\n" → "host:port".
+// Strips the /first_pos suffix that SWIM appends to nodeids.
 static std::string parse_redirect(const std::string &body) {
   auto nl = body.find('\n');
   if (nl == std::string::npos)

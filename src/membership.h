@@ -14,12 +14,12 @@
 // Dynamic Ring Reconstruction:
 //   When the SWIM membership feed notifies of node status changes (e.g. node
 //   join, node down), rebuild_ring() is triggered. It computes the virtual
-//   node IDs on the ring for all alive nodes (plus any injected nodes)
+//   node positions on the ring for all alive nodes (plus any injected nodes)
 //   and updates node_.ring atomically.
 //
 // Peer Parsing:
-//   Parses SWIM peer string representation of form "host:port/first_id",
-//   where first_id is the custom placement ID on the Chord ring.
+//   Parses SWIM peer string representation of form "host:port/first_pos",
+//   where first_pos is the custom placement ID on the Chord ring.
 //
 // Pre-convergence Injection:
 //   inject_node() appends a nodeid to the injected_ vector and triggers an

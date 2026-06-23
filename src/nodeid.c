@@ -107,8 +107,9 @@ void nodeid_destroy(void) {
   pthread_mutex_destroy(&g_mu); /* destroy pool mutex */
 }
 
-/* Parse a nodeid index back into its host name, port, and optional first_id. */
-int nodeid_split(nodeid_idx_t idx, char host[254], int *port, int *first_id) {
+/* Parse a nodeid index back into its host name, port, and optional first_pos.
+ */
+int nodeid_split(nodeid_idx_t idx, char host[254], int *port, int *first_pos) {
   const char *node_str = nodeid_lookup(idx);
   if (!node_str)
     return -1;
@@ -128,11 +129,11 @@ int nodeid_split(nodeid_idx_t idx, char host[254], int *port, int *first_id) {
   if (port)
     *port = atoi(colon + 1);
 
-  if (first_id) {
+  if (first_pos) {
     if (slash)
-      *first_id = atoi(slash + 1);
+      *first_pos = atoi(slash + 1);
     else
-      *first_id = 0;
+      *first_pos = 0;
   }
 
   return 0;

@@ -29,8 +29,8 @@ TEST_CASE("lru scan returns inserted entries") {
       {{"cache/b/k1", 1000}, {"cache/b/k2", 2000}, {"cache/b/k3", 3000}});
 
   std::vector<std::tuple<std::string, time_t, uint32_t>> got;
-  node.cache.scan([&](const std::string &rp, time_t mt, uint32_t id) {
-    got.push_back({rp, mt, id});
+  node.cache.scan([&](const std::string &rp, time_t mt, uint32_t pos) {
+    got.push_back({rp, mt, pos});
   });
 
   CHECK(got.size() == 3);
@@ -166,43 +166,45 @@ TEST_CASE("pull_one returns early on bad relpath") {
 TEST_CASE("rebalancer split_nodeid parses various formats") {
   std::string host;
   int port = 0;
-  uint32_t first_id = 0;
+  uint32_t first_pos = 0;
 
   // 1. Valid address only
-  CHECK(rebalancer_t::split_nodeid("127.0.0.1:4001", host, port, first_id));
+  CHECK(rebalancer_t::split_nodeid("127.0.0.1:4001", host, port, first_pos));
   CHECK(host == "127.0.0.1");
   CHECK(port == 4001);
-  CHECK(first_id == 0);
+  CHECK(first_pos == 0);
 
-  // 2. Valid address and first_id
-  CHECK(
-      rebalancer_t::split_nodeid("127.0.0.1:4001/12345", host, port, first_id));
+  // 2. Valid address and first_pos
+  CHECK(rebalancer_t::split_nodeid("127.0.0.1:4001/12345", host, port,
+                                   first_pos));
   CHECK(host == "127.0.0.1");
   CHECK(port == 4001);
-  CHECK(first_id == 12345);
+  CHECK(first_pos == 12345);
 
   // 3. Valid named host and placement ID 0
-  CHECK(rebalancer_t::split_nodeid("node1:80/0", host, port, first_id));
+  CHECK(rebalancer_t::split_nodeid("node1:80/0", host, port, first_pos));
   CHECK(host == "node1");
   CHECK(port == 80);
-  CHECK(first_id == 0);
+  CHECK(first_pos == 0);
 
   // 4. Invalid format (no port)
-  CHECK_FALSE(rebalancer_t::split_nodeid("127.0.0.1", host, port, first_id));
+  CHECK_FALSE(rebalancer_t::split_nodeid("127.0.0.1", host, port, first_pos));
 
   // 5. Invalid format (non-numeric port)
   CHECK_FALSE(
-      rebalancer_t::split_nodeid("127.0.0.1:abc", host, port, first_id));
+      rebalancer_t::split_nodeid("127.0.0.1:abc", host, port, first_pos));
 
   // 6. Out of range port
   CHECK_FALSE(
-      rebalancer_t::split_nodeid("127.0.0.1:99999", host, port, first_id));
-  CHECK_FALSE(rebalancer_t::split_nodeid("127.0.0.1:0", host, port, first_id));
-  CHECK_FALSE(rebalancer_t::split_nodeid("127.0.0.1:-5", host, port, first_id));
+      rebalancer_t::split_nodeid("127.0.0.1:99999", host, port, first_pos));
+  CHECK_FALSE(rebalancer_t::split_nodeid("127.0.0.1:0", host, port, first_pos));
+  CHECK_FALSE(
+      rebalancer_t::split_nodeid("127.0.0.1:-5", host, port, first_pos));
 
-  // 7. Non-numeric first_id should fallback/parse but return 0 first_id
-  CHECK(rebalancer_t::split_nodeid("127.0.0.1:4001/abc", host, port, first_id));
+  // 7. Non-numeric first_pos should fallback/parse but return 0 first_pos
+  CHECK(
+      rebalancer_t::split_nodeid("127.0.0.1:4001/abc", host, port, first_pos));
   CHECK(host == "127.0.0.1");
   CHECK(port == 4001);
-  CHECK(first_id == 0);
+  CHECK(first_pos == 0);
 }

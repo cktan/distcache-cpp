@@ -23,14 +23,14 @@ from distcache import (
     DistCacheError,
     HealthResult,
     find_successor,
-    node_ids,
-    dest_id,
+    node_positions,
+    dest_pos,
     DCERR_NOT_CACHED,
     DCERR_NOT_FOUND,
     DCERR_NO_NODE,
     DCERR_REDIRECT_LOOP,
     DCERR_NETWORK,
-    _IDS_PER_NODE,
+    _POSITIONS_PER_NODE,
     _RING_SIZE,
 )
 
@@ -138,21 +138,21 @@ class TestChunkProtocol(unittest.TestCase):
 class TestRingAlgorithm(unittest.TestCase):
 
     def test_compute_ids_returns_correct_count(self):
-        self.assertEqual(len(node_ids("node:4001")), _IDS_PER_NODE)
+        self.assertEqual(len(node_positions("node:4001")), _POSITIONS_PER_NODE)
 
     def test_compute_ids_all_in_ring_space(self):
-        for id_ in node_ids("node:4001"):
+        for id_ in node_positions("node:4001"):
             self.assertGreaterEqual(id_, 0)
             self.assertLess(id_, _RING_SIZE)
 
     def test_compute_ids_deterministic(self):
-        self.assertEqual(node_ids("node:4001"), node_ids("node:4001"))
+        self.assertEqual(node_positions("node:4001"), node_positions("node:4001"))
 
     def test_compute_ids_different_nodes(self):
-        self.assertNotEqual(set(node_ids("a:1")), set(node_ids("b:2")))
+        self.assertNotEqual(set(node_positions("a:1")), set(node_positions("b:2")))
 
     def test_build_ring_sorted(self):
-        members = {"a:1": node_ids("a:1"), "b:2": node_ids("b:2")}
+        members = {"a:1": node_positions("a:1"), "b:2": node_positions("b:2")}
         ring    = _build_sorted_ring(members)
         ids     = [id_ for id_, _ in ring]
         self.assertEqual(ids, sorted(ids))
@@ -173,9 +173,9 @@ class TestRingAlgorithm(unittest.TestCase):
         ring = [(100, "a"), (300, "b"), (600, "c")]
         self.assertEqual(find_successor(ring, 50), "a")
 
-    def test_dest_id_leading_slash_stripped(self):
-        self.assertEqual(dest_id("b", "key"), dest_id("b", "/key"))
-        self.assertEqual(dest_id("b", "key"), dest_id("b", "//key"))
+    def test_dest_pos_leading_slash_stripped(self):
+        self.assertEqual(dest_pos("b", "key"), dest_pos("b", "/key"))
+        self.assertEqual(dest_pos("b", "key"), dest_pos("b", "//key"))
 
     def test_fnv1a_cross_verified(self):
         """Cross-verify with C client expected value: hash(0, "test") == 0x0eb0635b"""

@@ -96,7 +96,7 @@ int dc_get(const char *bucket, const char *key, void *context,
  * dc_node — return a buffer listing all known nodes, one per line.
  *
  * On success: returns 0, sets *buf to a malloc'd null-terminated string of the
- * form "host:port[/first_id]\nhost:port[/first_id]\n...", and sets *n to the
+ * form "host:port[/first_pos]\nhost:port[/first_pos]\n...", and sets *n to the
  * number of nodes.
  * Caller must free(*buf) after use.
  * On failure: returns -1 (setting dc_errno() to DCERR_NOMEM).

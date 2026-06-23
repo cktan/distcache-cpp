@@ -31,10 +31,10 @@ public:
   // Guarded by keylock to prevent duplicate concurrent fetches.
   void pull_one(const std::string &src_addr, const std::string &relpath);
 
-  // Splits a nodeid ("host:port/first_id" or "host:port") into host, port,
-  // and first_id. Returns false if parsing fails or port is out of range.
+  // Splits a nodeid ("host:port/first_pos" or "host:port") into host, port,
+  // and first_pos. Returns false if parsing fails or port is out of range.
   static bool split_nodeid(const std::string &nodeid, std::string &host,
-                           int &port, uint32_t &first_id);
+                           int &port, uint32_t &first_pos);
 
 private:
   node_t &node_; // owning node; provides ring, LRU, and peer connections

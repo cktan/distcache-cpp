@@ -15,8 +15,8 @@
 #include <vector>
 
 struct node_t {
-  std::string homedir;            // absolute root; all file ops use abspath()
-  nodeid_idx_t nodeid;            // registered index for "host:port[/first_id]"
+  std::string homedir; // absolute root; all file ops use abspath()
+  nodeid_idx_t nodeid; // registered index for "host:port[/first_pos]"
   std::vector<std::string> seeds; // SWIM bootstrap peers
   keylock_t keylock;              // serialises concurrent S3 fetches per key
   cache_t cache;                  // file cache; owns lru_t internally

@@ -107,24 +107,24 @@ TEST_CASE("nodeid_split: registers and splits different formats") {
 
   char host[254];
   int port = -1;
-  int first_id = -1;
+  int first_pos = -1;
 
-  int rc = nodeid_split(idx1, host, &port, &first_id);
+  int rc = nodeid_split(idx1, host, &port, &first_pos);
   REQUIRE(rc == 0);
   CHECK(std::string(host) == "127.0.0.1");
   CHECK(port == 4001);
-  CHECK(first_id == 0);
+  CHECK(first_pos == 0);
 
   nodeid_idx_t idx2 = nodeid_register("192.168.0.1:8080/12345");
   REQUIRE(nodeid_valid(idx2));
 
-  rc = nodeid_split(idx2, host, &port, &first_id);
+  rc = nodeid_split(idx2, host, &port, &first_pos);
   REQUIRE(rc == 0);
   CHECK(std::string(host) == "192.168.0.1");
   CHECK(port == 8080);
-  CHECK(first_id == 12345);
+  CHECK(first_pos == 12345);
 
-  rc = nodeid_split(NODEID_NONE, host, &port, &first_id);
+  rc = nodeid_split(NODEID_NONE, host, &port, &first_pos);
   CHECK(rc == -1);
 
   nodeid_destroy();

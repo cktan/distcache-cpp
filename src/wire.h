@@ -5,7 +5,7 @@
 
 extern const std::string WIRE_FIN;
 
-// Encode a REDIRECT frame: "REDIRECT:<n>\nhost:port/first_id\n"
+// Encode a REDIRECT frame: "REDIRECT:<n>\nhost:port/first_pos\n"
 std::string wire_redirect(const std::string &node);
 
 // Encode an ERROR frame: "ERROR:<n>\n<type>\n<message>\n"

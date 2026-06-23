@@ -328,8 +328,8 @@ static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
                             nodeid_idx_t *ret_redirect) {
   char host[254];
   int port = 0;
-  int first_id = 0;
-  if (nodeid_split(nodeid, host, &port, &first_id) != 0) {
+  int first_pos = 0;
+  if (nodeid_split(nodeid, host, &port, &first_pos) != 0) {
     myerrno = DCERR_NO_NODE;
     snprintf(myerrmsg, sizeof(myerrmsg), "invalid node index");
     return -1;
@@ -473,8 +473,8 @@ static int fetch_nodes(nodeid_idx_t nodeid, char **ret) {
 
   char host[254];
   int port = 0;
-  int first_id = 0;
-  if (nodeid_split(nodeid, host, &port, &first_id) != 0) {
+  int first_pos = 0;
+  if (nodeid_split(nodeid, host, &port, &first_pos) != 0) {
     myerrno = DCERR_NO_NODE;
     snprintf(myerrmsg, sizeof(myerrmsg), "invalid node index");
     return -1;
@@ -696,7 +696,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 
     // ------ We have been redirected! ----------------------------
     // 1. Add the redirect node to the ring
-    // 2. Re-lookup the object id using the new ring
+    // 2. Re-lookup the object position using the new ring
 
     /* Acquire ring lock to add redirect node and update ring */
     pthread_mutex_lock(&g_dctab.mutex);

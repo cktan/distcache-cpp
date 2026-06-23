@@ -21,7 +21,7 @@ static void on_signal(int) { sem_post(&g_stop_sem); }
 // Print usage message to stderr.
 static void usage(const char *prog) {
   fprintf(stderr,
-          "Usage: %s -D <homedir> -N <host:port[/first_id]> [-p <seed>]...\n"
+          "Usage: %s -D <homedir> -N <host:port[/first_pos]> [-p <seed>]...\n"
           "\n"
           "distcache is a node in a distributed cache cluster. Each node\n"
           "stores its cached objects under <homedir> and serves them over\n"
@@ -29,10 +29,10 @@ static void usage(const char *prog) {
           "\n"
           "  -D <homedir>          directory to store this node's cache,\n"
           "                        logs, and lock file\n"
-          "  -N <host:port[/first_id]>\n"
+          "  -N <host:port[/first_pos]>\n"
           "                        address this node listens on; an\n"
-          "                        optional /first_id sets its first ring\n"
-          "                        id instead of deriving one\n"
+          "                        optional /first_pos sets its first ring\n"
+          "                        position instead of deriving one\n"
           "  -p <seed>             address of an existing cluster member\n"
           "                        to join through; may be repeated\n",
           prog);

@@ -217,8 +217,8 @@ static void test_wire_parsing(void) {
         "REDIRECT: node name parsed correctly");
 
   ok = dc_test_parse_redirect("node:4001\n", 10, name);
-  CHECK(ok == 0, "REDIRECT: node without first_id parsed");
-  CHECK(strcmp(name, "node:4001") == 0, "REDIRECT: name without first_id");
+  CHECK(ok == 0, "REDIRECT: node without first_pos parsed");
+  CHECK(strcmp(name, "node:4001") == 0, "REDIRECT: name without first_pos");
 
   /* REDIRECT: no trailing newline — still parses */
   ok = dc_test_parse_redirect("node:4001", 9, name);
@@ -242,10 +242,11 @@ static void test_nodes_parsing(void) {
   CHECK(strcmp(names[0], "node1:4001") == 0, "NODES: first node correct");
   CHECK(strcmp(names[1], "node2:4002") == 0, "NODES: second node correct");
 
-  /* Single node with first_id */
+  /* Single node with first_pos */
   n = dc_test_parse_nodes("node1:4001/12345\n", 17, names, 64);
   CHECK(n == 1, "NODES: single node gives count 1");
-  CHECK(strcmp(names[0], "node1:4001/12345") == 0, "NODES: first_id preserved");
+  CHECK(strcmp(names[0], "node1:4001/12345") == 0,
+        "NODES: first_pos preserved");
 
   /* Empty payload */
   n = dc_test_parse_nodes("", 0, names, 64);

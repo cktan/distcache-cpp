@@ -111,7 +111,7 @@ class HealthResult:
 # ---------------------------------------------------------------------------
 
 _RING_SIZE        = 0x100000000   # 2^32
-_IDS_PER_NODE     = 10
+_POSITIONS_PER_NODE     = 10
 _MAX_REDIRECTS    = 5
 _POOL_SIZE        = 4             # connection slots per node
 _CONN_EXPIRE_SECS = 300           # 5 minutes
@@ -136,7 +136,7 @@ def _fnv1a_mod(prev: int, input_str: str) -> int:
 # ---------------------------------------------------------------------------
 
 def _strip_nodeid(s: str) -> tuple[str, int]:
-    """Split 'host:port[/first_id]' into (host:port, first_id)."""
+    """Split 'host:port[/first_pos]' into (host:port, first_pos)."""
     slash = s.find('/')
     if slash >= 0:
         try:
@@ -146,18 +146,18 @@ def _strip_nodeid(s: str) -> tuple[str, int]:
     return s, 0
 
 
-def node_ids(node_name: str, first_id: int = 0) -> list[int]:
-    """Compute the 10 ring IDs for a node (matches server and C client)."""
-    ids:  list[int] = []
-    prev: int = first_id if first_id != 0 else _fnv1a_mod(0, node_name)
-    ids.append(prev)
-    for _ in range(1, _IDS_PER_NODE):
+def node_positions(node_name: str, first_pos: int = 0) -> list[int]:
+    """Compute the 10 ring positions for a node (matches server and C client)."""
+    positions: list[int] = []
+    prev: int = first_pos if first_pos != 0 else _fnv1a_mod(0, node_name)
+    positions.append(prev)
+    for _ in range(1, _POSITIONS_PER_NODE):
         prev = _fnv1a_mod(prev, f"{node_name}:{prev}")
-        ids.append(prev)
-    return ids
+        positions.append(prev)
+    return positions
 
 
-def dest_id(bucket: str, key: str) -> int:
+def dest_pos(bucket: str, key: str) -> int:
     """Compute the destination ring ID for (bucket, key)."""
     relpath = f"cache/{bucket}/{key.lstrip('/')}"
     return _fnv1a_mod(0, relpath)
@@ -213,7 +213,7 @@ class _Node:
         clean, fid         = _strip_nodeid(raw_name)
         host, port_str     = clean.rsplit(":", 1)
         self.name          = clean
-        self.first_id      = fid
+        self.first_pos      = fid
         self.dead          = False
         self._host         = host
         self._port         = int(port_str)
@@ -342,12 +342,12 @@ def _ring_update(names: list[str]) -> None:
             if n.dead:
                 with n._cv:
                     n.dead = False
-            n.first_id = fid
+            n.first_pos = fid
         else:
             new_node = _Node(raw)
             _nodes.append(new_node)
             existing[addr] = new_node
-    members = {n.name: node_ids(n.name, n.first_id) for n in _nodes if not n.dead}
+    members = {n.name: node_positions(n.name, n.first_pos) for n in _nodes if not n.dead}
     _ring.clear()
     _ring.extend(_build_sorted_ring(members))
 
@@ -609,7 +609,7 @@ def housekeeping() -> None:
                         if existing[addr].dead:
                             with existing[addr]._cv:
                                 existing[addr].dead = False
-                        existing[addr].first_id = fid
+                        existing[addr].first_pos = fid
                     else:
                         new_node = _Node(raw)
                         _nodes.append(new_node)
@@ -628,7 +628,7 @@ def housekeeping() -> None:
                 i += 1
 
             # Rebuild ring from live nodes
-            members = {n.name: node_ids(n.name, n.first_id) for n in _nodes if not n.dead}
+            members = {n.name: node_positions(n.name, n.first_pos) for n in _nodes if not n.dead}
             _ring.clear()
             _ring.extend(_build_sorted_ring(members))
 
@@ -657,7 +657,7 @@ def get(bucket: str, key: str,
     on_data = lambda data: callback(context, data)
 
     with _ring_lock:
-        target = find_successor(_ring, dest_id(bucket, key))
+        target = find_successor(_ring, dest_pos(bucket, key))
         if target is None:
             raise DistCacheError("empty ring", DCERR_NO_NODE)
         node = _find_node(target)
@@ -672,7 +672,7 @@ def get(bucket: str, key: str,
             names = result.get("nodes", [])
             with _ring_lock:
                 _ring_update(names)
-                new_target = find_successor(_ring, dest_id(bucket, key))
+                new_target = find_successor(_ring, dest_pos(bucket, key))
                 new_node   = _find_node(new_target) if new_target else None
             if new_node is None or new_target == target:
                 raise DistCacheError(

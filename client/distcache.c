@@ -268,32 +268,50 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
     const char *payload = st->fp.newline + 1;
 
     if (strncmp(st->fp.raw, "DATA:", 5) == 0) {
+      memcpy(st->status, "data", sizeof("data"));
       if (st->cb(st->ctx, payload, plen) != 0) {
         st->cb_failed = 1;
         return 0;
       }
       st->cb_called = 1;
-    } else if (strncmp(st->fp.raw, "FIN:", 4) == 0) {
+      goto next;
+    }
+
+    if (strncmp(st->fp.raw, "FIN:", 4) == 0) {
       st->got_fin = 1;
       /* bufsz==0 is the EOF signal to the caller's callback */
-      if (st->cb(st->ctx, payload, 0) != 0) {
-        st->cb_failed = 1;
-        return 0;
+      if (strcmp(st->status, "data") == 0) {
+        if (st->cb(st->ctx, payload, 0) != 0) {
+          st->cb_failed = 1;
+          return 0;
+        }
       }
-    } else if (strncmp(st->fp.raw, "ERROR:", 6) == 0) {
+      goto next;
+    }
+
+    if (strncmp(st->fp.raw, "ERROR:", 6) == 0) {
       memcpy(st->status, "error", sizeof("error"));
       parse_error_payload(payload, plen, st->err_type, sizeof(st->err_type),
                           st->err_msg, sizeof(st->err_msg));
-    } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
+      goto next;
+    }
+
+    if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
       if (parse_redirect_payload(payload, plen, st->redir_name) == 0) {
         memcpy(st->status, "redirect", sizeof("redirect"));
       } else {
-        memcpy(st->status, "unknown", sizeof("unknown"));
+        memcpy(st->status, "error", sizeof("error"));
+        memcpy(st->err_type, "ERR_PROTOCOL", sizeof("ERR_PROTOCOL"));
+        snprintf(st->err_msg, sizeof(st->err_msg), "invalid redirect payload");
       }
-    } else {
-      memcpy(st->status, "unknown", sizeof("unknown"));
+      goto next;
     }
 
+    memcpy(st->status, "error", sizeof("error"));
+    memcpy(st->err_type, "ERR_PROTOCOL", sizeof("ERR_PROTOCOL"));
+    snprintf(st->err_msg, sizeof(st->err_msg), "unknown frame type");
+
+  next:
     push_frame_init(&st->fp);
   }
 

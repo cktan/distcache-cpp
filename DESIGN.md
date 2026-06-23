@@ -141,7 +141,7 @@ chain from `pos[0]`.
 ```
 relpath    = "cache/{bucket}/{key}"
 relpath_pos = hash(0, relpath)        # deterministic; same on every node
-dest_node  = first ring point with pos >= relpath_pos (wraps)
+dest_node  = first ring position >= relpath_pos (wraps)
 ```
 
 The ring is a heap-allocated `ring_t` (sorted

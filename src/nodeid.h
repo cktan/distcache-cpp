@@ -43,7 +43,7 @@ void nodeid_destroy(void);
 int nodeid_split(nodeid_idx_t idx, char host[254], int *port, int *first_id);
 
 typedef struct {
-  uint8_t bits[512]; /* 4096-bit bloom filter */
+  uint8_t bits[512]; /* 4096-bit bloom filter; k=4, n<128 → ~0.02% FPR */
 } nodeid_bloom_t;
 
 /* Clear the Bloom filter. */

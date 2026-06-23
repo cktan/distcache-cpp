@@ -73,10 +73,10 @@ nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id);
 nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
                              size_t excl_n, uint32_t target_id);
 
-/* Randomly pick up to N distinct physical nodes from the ring.
- * Returns the actual number of nodes picked. ret[i] contains indices into
+/* Randomly select up to N distinct physical nodes from the ring.
+ * Returns the actual number of nodes selected. ret[i] contains indices into
  * r->distinct.entries. */
-int ring_pick(const ring_t *r, int N, int *ret);
+int ring_select(const ring_t *r, int N, int *ret);
 
 /* Number of virtual-node entries. */
 size_t ring_size(const ring_t *r);

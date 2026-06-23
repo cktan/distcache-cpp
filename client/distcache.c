@@ -502,7 +502,7 @@ int dc_housekeeping(void) {
   pthread_mutex_lock(&g_dctab.mutex);
   if (g_dctab.ring) {
     int indices[3];
-    attempts = ring_pick(g_dctab.ring, 3, indices);
+    attempts = ring_select(g_dctab.ring, 3, indices);
     for (int i = 0; i < attempts; i++)
       picks[i] = g_dctab.ring->distinct.entries[indices[i]].node;
   }
@@ -532,25 +532,27 @@ int dc_housekeeping(void) {
   pthread_mutex_lock(&g_dctab.mutex);
 
   if (fetch_ok && nodes_str) {
-    nodeid_idx_t nodes[DC_MAX_REDIR_NODES];
-    int n = 0;
-    char *p = nodes_str;
-    while (*p && n < DC_MAX_REDIR_NODES) {
-      char *nl = strchr(p, '\n');
-      if (nl)
-        *nl = '\0';
-      if (*p) {
-        nodeid_idx_t idx = nodeid_register(p);
-        if (nodeid_valid(idx))
-          nodes[n++] = idx;
+    ring_t *r = ring_create();
+    if (r) {
+      char *p = nodes_str;
+      while (*p) {
+        char *nl = strchr(p, '\n');
+        if (nl)
+          *nl = '\0';
+        if (*p) {
+          nodeid_idx_t idx = nodeid_register(p);
+          if (nodeid_valid(idx))
+            ring_add(r, idx);
+        }
+        if (!nl)
+          break;
+        p = nl + 1;
       }
-      if (!nl)
-        break;
-      p = nl + 1;
+      ring_finalize(r);
+      ring_destroy(g_dctab.ring);
+      g_dctab.ring = r;
     }
     free(nodes_str);
-    if (n > 0)
-      ring_rebuild(nodes, n);
   }
 
   nodeid_bloom_t bf;

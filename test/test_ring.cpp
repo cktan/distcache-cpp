@@ -258,15 +258,15 @@ TEST_CASE("bloom from distinct: absent node tests negative") {
   nodeid_destroy();
 }
 
-TEST_CASE("ring_pick: empty ring returns 0") {
+TEST_CASE("ring_select: empty ring returns 0") {
   ring_t *r = ring_create();
   ring_finalize(r);
   int picks[5];
-  CHECK(ring_pick(r, 5, picks) == 0);
+  CHECK(ring_select(r, 5, picks) == 0);
   ring_destroy(r);
 }
 
-TEST_CASE("ring_pick: single node ring returns 1") {
+TEST_CASE("ring_select: single node ring returns 1") {
   ring_t *r = ring_create();
   nodeid_idx_t n = nodeid_register("solo");
   ring_add(r, n);
@@ -274,11 +274,11 @@ TEST_CASE("ring_pick: single node ring returns 1") {
   int picks[3];
 
   // Ask for 1 node
-  CHECK(ring_pick(r, 1, picks) == 1);
+  CHECK(ring_select(r, 1, picks) == 1);
   CHECK(nodeid_eq(r->distinct.entries[picks[0]].node, n));
 
   // Ask for 3 nodes (only 1 exists)
-  CHECK(ring_pick(r, 3, picks) == 1);
+  CHECK(ring_select(r, 3, picks) == 1);
   CHECK(nodeid_eq(r->distinct.entries[picks[0]].node, n));
 
   ring_destroy(r);
@@ -286,7 +286,7 @@ TEST_CASE("ring_pick: single node ring returns 1") {
 }
 
 TEST_CASE(
-    "ring_pick: multi-node ring returns correct number of distinct nodes") {
+    "ring_select: multi-node ring returns correct number of distinct nodes") {
   ring_t *r = ring_create();
   nodeid_idx_t nodes[5];
   nodes[0] = nodeid_register("node0");
@@ -301,7 +301,7 @@ TEST_CASE(
   ring_finalize(r);
 
   int picks[3];
-  int count = ring_pick(r, 3, picks);
+  int count = ring_select(r, 3, picks);
   CHECK(count == 3);
 
   // Verify all picked indices are valid and distinct

@@ -207,13 +207,13 @@ nodeid_idx_t ring_next_after(const ring_t *r, const nodeid_idx_t *excluded,
   return NODEID_NONE;
 }
 
-/* Randomly pick up to N distinct physical nodes from the ring. */
-int ring_pick(const ring_t *r, int N, int *ret) {
+/* Randomly select up to N distinct physical nodes from the ring. */
+int ring_select(const ring_t *r, int N, int *ret) {
   if (!r || r->distinct.top <= 0 || N <= 0)
     return 0;
 
   int count = r->distinct.top;
-  int to_pick = (N < count) ? N : count;
+  int to_select = (N < count) ? N : count;
 
   /* Allocate buffer to keep track of indices to shuffle */
   int *indices = malloc((size_t)count * sizeof(int));
@@ -223,8 +223,8 @@ int ring_pick(const ring_t *r, int N, int *ret) {
   for (int i = 0; i < count; i++)
     indices[i] = i;
 
-  /* Run a partial Fisher-Yates shuffle to pick distinct indices */
-  for (int i = 0; i < to_pick; i++) {
+  /* Run a partial Fisher-Yates shuffle to select distinct indices */
+  for (int i = 0; i < to_select; i++) {
     int j = i + rand() % (count - i);
     int tmp = indices[i];
     indices[i] = indices[j];
@@ -234,7 +234,7 @@ int ring_pick(const ring_t *r, int N, int *ret) {
 
   /* Free index helper buffer */
   free(indices);
-  return to_pick;
+  return to_select;
 }
 
 /* Number of virtual-node entries. */

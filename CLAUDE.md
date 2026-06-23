@@ -10,6 +10,7 @@
   call itself looks self-explanatory
 - every function in `.cpp` or `.c` files needs a doc comment
   (one or two lines above the definition)
+- do not use strncpy(), instead memcpy and assign NUL-terminator.  
 
 
 ## Guidelines

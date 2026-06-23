@@ -625,8 +625,6 @@ int dc_init(int n, const char *const *node) {
 
   /* Replace existing ring with fresh one built from seed nodes */
   pthread_mutex_lock(&g_dctab.mutex);
-  ring_destroy(g_dctab.ring);
-  g_dctab.ring = NULL;
 
   if (ring_rebuild(indices, n) != 0) {
     free(indices);

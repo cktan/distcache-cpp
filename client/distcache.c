@@ -668,8 +668,13 @@ int dc_get(const char *bucket, const char *key, void *ctx,
       return -1;
     }
     if (!nodeid_valid(redirect_node)) {
+      // This is the normal successful GET return. We retrieved the object.
       return 0;
     }
+
+    // ------ We have been redirected! ----------------------------
+    // 1. Add the redirect node to the ring
+    // 2. Re-lookup the object id using the new ring
 
     /* Acquire ring lock to add redirect node and update ring */
     pthread_mutex_lock(&g_dctab.mutex);

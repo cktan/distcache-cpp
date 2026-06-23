@@ -41,6 +41,7 @@
 #define DC_POSITIONS_PER_NODE 10 /* must match ring.c */
 #define DC_MAX_REDIRECTS 5
 #define DC_CONN_EXPIRE_SECS 300 /* 5 minutes */
+#define DC_MAX_SEED_NODES 20    /* cap on seed nodes accepted by dc_init */
 
 /* ── Checked-out connection ─────────────────────────────────────────────── */
 
@@ -605,18 +606,14 @@ int dc_init(int n, const char *const *node) {
     snprintf(myerrmsg, sizeof(myerrmsg), "invalid arguments");
     return -1;
   }
+  if (n > DC_MAX_SEED_NODES)
+    n = DC_MAX_SEED_NODES;
 
   /* Register each seed node name, collecting stable indices */
-  nodeid_idx_t *indices = malloc((size_t)n * sizeof(nodeid_idx_t));
-  if (!indices) {
-    myerrno = DCERR_NOMEM;
-    snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
-    return -1;
-  }
+  nodeid_idx_t indices[DC_MAX_SEED_NODES];
   for (int i = 0; i < n; i++) {
     indices[i] = nodeid_register(node[i]);
     if (!nodeid_valid(indices[i])) {
-      free(indices);
       myerrno = DCERR_NOMEM;
       snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
       return -1;
@@ -627,13 +624,11 @@ int dc_init(int n, const char *const *node) {
   pthread_mutex_lock(&g_dctab.mutex);
 
   if (ring_rebuild(indices, n) != 0) {
-    free(indices);
     pthread_mutex_unlock(&g_dctab.mutex);
     myerrno = DCERR_NOMEM;
     snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
     return -1;
   }
-  free(indices);
   pthread_mutex_unlock(&g_dctab.mutex);
 
   /* Refresh ring from /_nodes; ignore errors (seed nodes are sufficient). */

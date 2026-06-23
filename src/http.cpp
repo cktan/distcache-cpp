@@ -294,11 +294,18 @@ static void handle_health(node_t &node, const httplib::Request &,
       node.stats.hint_pull.load(), peers_json);
 }
 
-// GET /_nodes: return all known ring members as a NODES frame.
+// GET /_nodes: return all known ring members as newline-separated nodeids.
 static void handle_nodes(node_t &node, const httplib::Request &,
                          httplib::Response &res) {
   auto peers = node.membership.raw_peers();
-  send_raw(res, wire_nodes(peers) + WIRE_FIN);
+  std::string body;
+  for (const auto &p : peers) {
+    body += p;
+    body += '\n';
+  }
+  res.status = 200;
+  res.set_header("Content-Type", "text/plain");
+  res.body = std::move(body);
 }
 
 // POST /_claim_keyspace: enqueue claim_scan for a joining node's keyspace.

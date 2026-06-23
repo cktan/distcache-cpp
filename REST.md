@@ -22,7 +22,6 @@ Frame types emitted by the server:
 | Type       | Payload                                       |
 |------------|-----------------------------------------------|
 | `DATA`     | raw file bytes (one frame per chunk)          |
-| `NODES`    | newline-delimited node IDs, one per line      |
 | `REDIRECT` | plain text: `host:port[/first_id]\n`          |
 | `ERROR`    | plain text: two lines — `type\nmessage\n`     |
 | `FIN`      | empty (LEN=0); marks end of response          |
@@ -90,18 +89,17 @@ self.
 
 ### `GET /_nodes`
 
-Returns current cluster membership as a wire-framed
-`NODES` response. Used by the client libraries for
-ring housekeeping.
+Returns current cluster membership. Used by the client
+libraries for ring housekeeping.
 
-**Response** (`NODES` frame, then `FIN`):
+**Response** (`text/plain`, no framing):
 
 ```
-node1:4001/0\n
-node2:4002/789\n
+node1:4001/0
+node2:4002/789
 ```
 
-Newline-delimited node IDs including self. Each ID is
+Newline-separated node IDs including self. Each ID is
 `host:port`, optionally suffixed with `/first_id`; clients
 use the suffix to place the node on the consistent-hash ring
 at the correct position.

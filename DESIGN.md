@@ -533,7 +533,7 @@ and performing the atomic rename on success.
 | `stats.h/.cpp` | struct | `Stats` — atomic hit/miss/served/redirect/error/hint_pull counters |
 | `s3copy.h/.cpp` | plain | POST to sidecar `/copy`; configurable via `S3COPY_URL` |
 | `stream.h/.c` | C API | wire framing: `stream_in/out`, fd wrappers, `push_frame_t`/`stream_in_push` |
-| `wire.h/.cpp` | plain | TYPE:LENGTH encode (`wire_redirect`, `wire_err`, `wire_nodes`); `WIRE_FIN` constant |
+| `wire.h/.cpp` | plain | TYPE:LENGTH encode (`wire_redirect`, `wire_err`); `WIRE_FIN` constant |
 | `http.h/.cpp` | class | cpp-httplib routes; `/_health` + GET/PUT/DELETE + 2 POST inter-node |
 | `rebalance.h/.cpp` | class | `Rebalancer`: scan_for_peer, pull_one, claim_sweep; drives `node.jobq` |
 | `client/distcache.h` | C API | C client public API + `DCERR_*` error codes + `DC_NODE_NAME_MAX` |

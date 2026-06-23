@@ -26,16 +26,3 @@ std::string wire_err(const std::string &type, const std::string &msg) {
   out += payload;
   return out;
 }
-
-// Encode a NODES frame listing peer node IDs, one per line.
-std::string wire_nodes(const std::vector<std::string> &peers) {
-  std::string payload;
-  for (const auto &p : peers)
-    payload += p + "\n";
-  std::string out;
-  out += "NODES:";
-  out += std::to_string(payload.size());
-  out += "\n";
-  out += payload;
-  return out;
-}

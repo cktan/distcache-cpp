@@ -469,13 +469,8 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
 
 /* ── fetch_nodes ────────────────────────────────────────────────────────── */
 
-/*
- * Call GET /_nodes on node_name and return the alive+suspect node names.
- * Uses a one-shot curl handle (not the pool) to avoid pool interactions
- * during housekeeping.
- */
-/* GET /_nodes from nodeid; return \n-separated node list in *ret. Caller frees.
- */
+/* GET /_nodes from nodeid; return plain-text \n-separated node list in *ret.
+ * Caller frees. Uses a one-shot curl handle to avoid pool interactions. */
 static int fetch_nodes(nodeid_idx_t nodeid, char **ret) {
   *ret = NULL;
 
@@ -519,62 +514,20 @@ static int fetch_nodes(nodeid_idx_t nodeid, char **ret) {
     return -1;
   }
 
-  /* Walk frames; cat each NODES payload into out. */
-  growbuf_t out = {0};
-  push_frame_t fp;
-  push_frame_init(&fp);
-  const char *rp = body.data;
-  size_t rrem = body.len;
-  int found = 0;
-
-  while (rrem > 0) {
-    int rc2 = stream_in_push(&fp, rp, rrem);
-    if (rc2 < 0)
-      break;
-    rp += rc2;
-    rrem -= (size_t)rc2;
-    if (!fp.complete) {
-      if (rc2 == 0)
-        break;
-      continue;
-    }
-
-    int plen = push_frame_length(&fp);
-    const char *payload = fp.newline + 1;
-
-    if (strncmp(fp.raw, "FIN:", 4) == 0)
-      break;
-    if (strncmp(fp.raw, "NODES:", 6) == 0) {
-      growbuf_write_cb((char *)payload, 1, (size_t)plen, &out);
-      found = 1;
-    }
-    push_frame_init(&fp);
-  }
-
-  free(body.data);
-
-  if (!found) {
-    free(out.data);
-    myerrno = DCERR_PROTOCOL;
-    snprintf(myerrmsg, sizeof(myerrmsg), "no NODES frame in /_nodes from %s",
-             addr);
-    return -1;
-  }
-
-  /* NUL-terminate */
-  if (out.cap == out.len) {
-    char *tmp = realloc(out.data, out.len + 1);
+  /* NUL-terminate the plain-text body. */
+  if (body.cap == body.len) {
+    char *tmp = realloc(body.data, body.len + 1);
     if (!tmp) {
-      free(out.data);
+      free(body.data);
       myerrno = DCERR_NOMEM;
       snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
       return -1;
     }
-    out.data = tmp;
+    body.data = tmp;
   }
-  out.data[out.len] = '\0';
+  body.data[body.len] = '\0';
 
-  *ret = out.data;
+  *ret = body.data;
   return 0;
 }
 

@@ -39,25 +39,6 @@ TEST_CASE("wire_err: correct framing") {
 }
 
 /**
- * @test wire_nodes: correct framing
- * @brief Tests that wire_nodes emits one host:port/id line per peer.
- *
- * Steps:
- * 1. Construct a NODES string for two peers.
- * 2. Verify header length and newline-terminated lines.
- * 3. Verify empty peer list produces NODES:0\n.
- */
-TEST_CASE("wire_nodes: correct framing") {
-  std::vector<std::string> peers = {"127.0.0.1:4001", "127.0.0.1:4002"};
-  std::string s = wire_nodes(peers);
-  CHECK(s == "NODES:30\n127.0.0.1:4001\n127.0.0.1:4002\n");
-  CHECK(s + WIRE_FIN == "NODES:30\n127.0.0.1:4001\n127.0.0.1:4002\nFIN:0\n");
-
-  std::string empty = wire_nodes({});
-  CHECK(empty == "NODES:0\n");
-}
-
-/**
  * @test WIRE_FIN: correct value
  * @brief Tests that WIRE_FIN is the canonical FIN:0\n terminator.
  *

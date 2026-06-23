@@ -9,6 +9,8 @@ extern "C" {
  * Unified nodeid pool backed by an open-addressing hash table.
  * nodeid_idx_t.v is the table slot (1..NODEID_TABLE_SIZE-1).
  * Arrays indexed by nodeid_idx_t must be NODEID_TABLE_SIZE elements wide.
+ *
+ * TODO: check that the range of nodeid_idx_t.v is not [0..NODEID_TABLE_SIZE).
  */
 #define NODEID_POOL_MAX 4000   /* max registered nodeids */
 #define NODEID_TABLE_SIZE 8192 /* hash table size; nodeid_idx_t.v < this */

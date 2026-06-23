@@ -301,7 +301,7 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
 /* Perform one HTTP GET, streaming DATA frames to cb. */
 static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
                             int (*cb)(void *ctx, const char *buf, int bufsz),
-                            char *redir_name, int *is_redirect) {
+                            nodeid_idx_t *ret_redirect) {
   char host[254];
   int port = 0;
   int first_id = 0;
@@ -316,8 +316,8 @@ static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
   char url[1536];
   snprintf(url, sizeof(url), "http://%s%s", node_name, path);
 
-  if (is_redirect) {
-    *is_redirect = 0;
+  if (ret_redirect) {
+    *ret_redirect = NODEID_NONE;
   }
 
   /* Check out connection from the pool */
@@ -388,10 +388,20 @@ static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
       size_t rn_len = strlen(st.redir_name);
       if (rn_len >= DC_NODE_NAME_MAX)
         rn_len = DC_NODE_NAME_MAX - 1;
+      char redir_name[DC_NODE_NAME_MAX];
       memcpy(redir_name, st.redir_name, rn_len);
       redir_name[rn_len] = '\0';
-      if (is_redirect) {
-        *is_redirect = 1;
+
+      nodeid_idx_t nodeidx = nodeid_register(redir_name);
+      if (!nodeid_valid(nodeidx)) {
+        myerrno = DCERR_NOMEM;
+        snprintf(myerrmsg, sizeof(myerrmsg),
+                 "out of memory registering redirect node");
+        ret = -1;
+        goto out;
+      }
+      if (ret_redirect) {
+        *ret_redirect = nodeidx;
       }
       ret = 0;
       goto out;
@@ -649,17 +659,15 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   url_encode(key, enc_key, sizeof(enc_key));
   snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
 
-  char redir_name[DC_NODE_NAME_MAX];
-
   /* Resolve redirects up to the maximum limit */
   for (int hop = 0; hop <= DC_MAX_REDIRECTS; hop++) {
-    int is_redirect = 0;
-    int rc = do_get_streaming(nid, path, ctx, cb, redir_name, &is_redirect);
+    nodeid_idx_t redirect_node = NODEID_NONE;
+    int rc = do_get_streaming(nid, path, ctx, cb, &redirect_node);
 
     if (rc == -1) {
       return -1;
     }
-    if (!is_redirect) {
+    if (!nodeid_valid(redirect_node)) {
       return 0;
     }
 
@@ -675,15 +683,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
         return -1;
       }
     }
-    nodeid_idx_t nodeidx = nodeid_register(redir_name);
-    if (!nodeid_valid(nodeidx)) {
-      /* Release ring lock if addition fails */
-      pthread_mutex_unlock(&g_dctab.mutex);
-      myerrno = DCERR_NOMEM;
-      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
-      return -1;
-    }
-    ring_add(g_dctab.ring, nodeidx);
+    ring_add(g_dctab.ring, redirect_node);
     ring_finalize(g_dctab.ring);
 
     // now look up dest using the new ring

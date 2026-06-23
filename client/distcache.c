@@ -631,30 +631,25 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   url_encode(key, enc_key, sizeof(enc_key));
   snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
 
-  /* Check out connection for the target successor node */
-  dc_conn_t conn;
-  node_checkout(nid, &conn);
-
   char redir_name[DC_NODE_NAME_MAX];
 
   /* Resolve redirects up to the maximum limit */
   for (int hop = 0; hop <= DC_MAX_REDIRECTS; hop++) {
+    dc_conn_t conn;
+    node_checkout(nid, &conn); // checkout a connection
+
     int is_redirect = 0;
     int rc = do_get_streaming(&conn, conn.nodeid, path, ctx, cb, redir_name,
                               &is_redirect);
+    node_checkin(&conn);
+
     if (rc == -1) {
-      /* Check in connection on fetch error */
-      node_checkin(&conn);
       return -1;
     }
     if (!is_redirect) {
       /* Check in connection on successful data retrieval */
-      node_checkin(&conn);
       return 0;
     }
-
-    /* Check in connection before redirecting to a new node */
-    node_checkin(&conn);
 
     /* Acquire ring lock to add redirect node and update ring */
     pthread_mutex_lock(&g_dctab.mutex);
@@ -690,13 +685,8 @@ int dc_get(const char *bucket, const char *key, void *ctx,
     }
     /* Release ring lock */
     pthread_mutex_unlock(&g_dctab.mutex);
-
-    /* Check out connection for the redirected successor node */
-    node_checkout(nid, &conn);
   }
 
-  /* Check in connection if too many redirection hops occur */
-  node_checkin(&conn);
   myerrno = DCERR_REDIRECT_LOOP;
   snprintf(myerrmsg, sizeof(myerrmsg), "exceeded %d redirects",
            DC_MAX_REDIRECTS);

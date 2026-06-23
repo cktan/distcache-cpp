@@ -1,3 +1,4 @@
+#define _POSIX_C_SOURCE 200809L
 #include "nodeid.h"
 
 #include <pthread.h>
@@ -57,20 +58,15 @@ nodeid_idx_t nodeid_find(const char *nodeid) {
 nodeid_idx_t nodeid_register(const char *nodeid) {
   pthread_mutex_lock(&g_mu); /* acquire registration lock */
   if (atomic_load_explicit(&g_count, memory_order_relaxed) >= NODEID_POOL_MAX) {
-    pthread_mutex_unlock(&g_mu); /* release registration lock */
-    return NODEID_NONE;
+    goto none;
   }
   uint16_t slot = hash_slot(nodeid_hash(nodeid));
   for (uint16_t i = 0; i < NODEID_TABLE_SIZE; i++) {
     char *p = atomic_load_explicit(&g_table[slot], memory_order_relaxed);
     if (!p) {
-      size_t len = strlen(nodeid) + 1;
-      char *s = malloc(len);
-      if (!s) {
-        pthread_mutex_unlock(&g_mu); /* release registration lock */
-        return NODEID_NONE;
-      }
-      memcpy(s, nodeid, len);
+      char *s = strdup(nodeid);
+      if (!s)
+        goto none;
       /* Publish with release so lock-free readers see the complete string. */
       atomic_store_explicit(&g_table[slot], s, memory_order_release);
       atomic_fetch_add_explicit(&g_count, 1, memory_order_relaxed);
@@ -83,6 +79,8 @@ nodeid_idx_t nodeid_register(const char *nodeid) {
     }
     slot = next_slot(slot);
   }
+
+none:
   pthread_mutex_unlock(&g_mu); /* release registration lock */
   return NODEID_NONE;
 }

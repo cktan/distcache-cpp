@@ -467,6 +467,87 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
   return -1;
 }
 
+/* ── url_get ────────────────────────────────────────────────────────────── */
+
+/* Header callback: pre-allocate growbuf from Content-Length if present. */
+static size_t content_length_header_cb(char *buf, size_t sz, size_t n,
+                                       void *ud) {
+  size_t len = sz * n;
+  if (len > 16 && strncmp(buf, "Content-Length:", 15) == 0) {
+    growbuf_t *gb = ud;
+    long cl = atol(buf + 15);
+    if (cl > 0 && gb->data == NULL) {
+      gb->data = malloc((size_t)cl + 1);
+      if (gb->data)
+        gb->cap = (size_t)cl + 1;
+    }
+  }
+  return len;
+}
+
+/*
+ * Perform a one-shot GET request to url. Does not touch myerrno/myerrmsg.
+ *
+ * Returns 0 on 2xx: *ret_status = HTTP code, *ret_size = body bytes
+ * (excl. NUL), *ret_body = NUL-terminated body (caller must free).
+ *
+ * Returns -1 on error or non-2xx: *ret_status = HTTP code if available else
+ * 0, *ret_size = 0, *ret_body = NULL.
+ */
+static int url_get(const char *url, int *ret_status, int *ret_size,
+                   char **ret_body) {
+  *ret_status = 0;
+  *ret_size = 0;
+  *ret_body = NULL;
+
+  CURL *h = curl_easy_init();
+  if (!h)
+    return -1;
+
+  growbuf_t body = {0};
+  curl_easy_setopt(h, CURLOPT_URL, url);
+  curl_easy_setopt(h, CURLOPT_HEADERFUNCTION, content_length_header_cb);
+  curl_easy_setopt(h, CURLOPT_HEADERDATA, &body);
+  curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, growbuf_write_cb);
+  curl_easy_setopt(h, CURLOPT_WRITEDATA, &body);
+  curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
+  curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
+
+  CURLcode crc = curl_easy_perform(h);
+  long http_code = 0;
+  curl_easy_getinfo(h, CURLINFO_RESPONSE_CODE, &http_code);
+  curl_easy_cleanup(h);
+
+  if (crc != CURLE_OK) {
+    free(body.data);
+    return -1;
+  }
+
+  *ret_status = (int)http_code;
+
+  if (http_code < 200 || http_code >= 300) {
+    free(body.data);
+    *ret_size = 0;
+    return -1;
+  }
+
+  /* NUL-terminate. */
+  if (body.cap == body.len) {
+    char *tmp = realloc(body.data, body.len + 1);
+    if (!tmp) {
+      free(body.data);
+      *ret_status = 0;
+      return -1;
+    }
+    body.data = tmp;
+  }
+  body.data[body.len] = '\0';
+
+  *ret_size = (int)body.len;
+  *ret_body = body.data;
+  return 0;
+}
+
 /* ── fetch_nodes ────────────────────────────────────────────────────────── */
 
 /* GET /_nodes from nodeid; return plain-text \n-separated node list in *ret.
@@ -488,46 +569,13 @@ static int fetch_nodes(nodeid_idx_t nodeid, char **ret) {
   char url[1536];
   snprintf(url, sizeof(url), "http://%s/_nodes", addr);
 
-  // TODO: this is a really stupid way to use curl. The curl callback
-  CURL *h = curl_easy_init();
-  if (!h) {
-    myerrno = DCERR_NETWORK;
-    snprintf(myerrmsg, sizeof(myerrmsg), "curl_easy_init failed");
+  int status, size;
+  if (url_get(url, &status, &size, ret) != 0) {
+    myerrno = status ? DCERR_PROTOCOL : DCERR_NETWORK;
+    snprintf(myerrmsg, sizeof(myerrmsg), "/_nodes from %s failed (http %d)",
+             addr, status);
     return -1;
   }
-
-  growbuf_t body = {0};
-  curl_easy_setopt(h, CURLOPT_URL, url);
-  curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, growbuf_write_cb);
-  curl_easy_setopt(h, CURLOPT_WRITEDATA, &body);
-  curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
-  curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-
-  CURLcode crc = curl_easy_perform(h);
-  curl_easy_cleanup(h);
-
-  if (crc != CURLE_OK) {
-    free(body.data);
-    myerrno = DCERR_NETWORK;
-    snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%s/_nodes): %s", addr,
-             curl_easy_strerror(crc));
-    return -1;
-  }
-
-  /* NUL-terminate the plain-text body. */
-  if (body.cap == body.len) {
-    char *tmp = realloc(body.data, body.len + 1);
-    if (!tmp) {
-      free(body.data);
-      myerrno = DCERR_NOMEM;
-      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
-      return -1;
-    }
-    body.data = tmp;
-  }
-  body.data[body.len] = '\0';
-
-  *ret = body.data;
   return 0;
 }
 
@@ -852,56 +900,13 @@ int dc_health(const char *node_name, char **out_buf) {
   char url[1536];
   snprintf(url, sizeof(url), "http://%s/_health", node_name);
 
-  /* One-shot handle; no pool interaction needed for a single health fetch. */
-  CURL *h = curl_easy_init();
-  if (!h) {
-    myerrno = DCERR_NETWORK;
-    snprintf(myerrmsg, sizeof(myerrmsg), "curl_easy_init failed");
+  int status, size;
+  if (url_get(url, &status, &size, out_buf) != 0) {
+    myerrno = status ? DCERR_PROTOCOL : DCERR_NETWORK;
+    snprintf(myerrmsg, sizeof(myerrmsg), "/_health from %s failed (http %d)",
+             node_name, status);
     return -1;
   }
-
-  growbuf_t body = {0};
-  curl_easy_setopt(h, CURLOPT_URL, url);
-  curl_easy_setopt(h, CURLOPT_WRITEFUNCTION, growbuf_write_cb);
-  curl_easy_setopt(h, CURLOPT_WRITEDATA, &body);
-  curl_easy_setopt(h, CURLOPT_FOLLOWLOCATION, 0L);
-  curl_easy_setopt(h, CURLOPT_HTTP_VERSION, CURL_HTTP_VERSION_1_1);
-
-  CURLcode crc = curl_easy_perform(h);
-  curl_easy_cleanup(h);
-
-  if (crc != CURLE_OK) {
-    free(body.data);
-    myerrno = DCERR_NETWORK;
-    snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%s): %s", node_name,
-             curl_easy_strerror(crc));
-    return -1;
-  }
-
-  /* /_health returns plain JSON */
-  if (!body.data || body.len == 0) {
-    free(body.data);
-    myerrno = DCERR_PROTOCOL;
-    snprintf(myerrmsg, sizeof(myerrmsg), "empty health response from %s",
-             node_name);
-    return -1;
-  }
-
-  // need to add NUL terminator.
-  char *ret = body.data;
-  if (body.cap == body.len) {
-    char *tmp = realloc(body.data, body.len + 1);
-    if (!tmp) {
-      free(body.data);
-      myerrno = DCERR_NOMEM;
-      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");
-      return -1;
-    }
-    ret = tmp;
-  }
-  ret[body.len] = '\0';
-
-  *out_buf = ret;
   return 0;
 }
 

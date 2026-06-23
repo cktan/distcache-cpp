@@ -263,7 +263,7 @@ class TestModuleAPI(unittest.TestCase):
     def test_health_unknown_node_raises(self):
         with self.assertRaises(DistCacheError) as ctx:
             dc.health("unknown:9999")
-        self.assertEqual(ctx.exception.code, DCERR_NO_NODE)
+        self.assertEqual(ctx.exception.code, DCERR_NETWORK)
 
     # ---- init / final ----
 

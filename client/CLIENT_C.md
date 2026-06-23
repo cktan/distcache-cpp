@@ -26,9 +26,8 @@ Link your program against `libdistcache.a` and `-lcurl -pthread`.
 
 /* Initialise once at startup. */
 const char *nodes[] = {"node1:4001", "node2:4002"};
-char errmsg[256];
-if (dc_init(2, nodes, errmsg, sizeof(errmsg)) != 0) {
-    fprintf(stderr, "dc_init: %s\n", errmsg);
+if (dc_init(2, nodes) != 0) {
+    fprintf(stderr, "dc_init failed: %s\n", dc_errmsg());
     exit(1);
 }
 
@@ -38,10 +37,9 @@ int write_cb(void *ctx, const char *buf, int len) {
     return 0;   /* return -1 to abort */
 }
 
-int rc = dc_get("my-bucket", "path/to/object", stdout, write_cb,
-                errmsg, sizeof(errmsg));
+int rc = dc_get("my-bucket", "path/to/object", stdout, write_cb);
 if (rc != 0)
-    fprintf(stderr, "dc_get error %d: %s\n", rc, errmsg);
+    fprintf(stderr, "dc_get error %d: %s\n", rc, dc_errmsg());
 
 /* Enumerate nodes for health checks. */
 char *nodes_buf = NULL;
@@ -55,28 +53,30 @@ if (dc_node(&nodes_buf, &nodes_n) == 0) {
 dc_final();
 ```
 
-One cluster per process. Each node owns its mutex and a pool of `DC_POOL_SIZE`
-(default 4) libcurl handles; concurrent `dc_get` calls proceed in parallel. The
-ring mutex is released before any network I/O or callback invocation. Connections
-are lazy-initialised and expire after 5 minutes; expired idle handles are reaped
-at checkout and by `dc_housekeeping`. Stale-connection errors are retried once if
-no data has been delivered yet. Up to 5 redirect hops are followed transparently,
-updating the ring with newly discovered nodes. Nodes absent from the server ring
-are marked dead and their connections are closed.
+One cluster per process. Each node owns its mutex and a
+pool of `DC_POOL_SIZE` (default 4) libcurl handles;
+concurrent `dc_get` calls proceed in parallel. The ring
+mutex is released before any network I/O or callback
+invocation. Connections are lazy-initialised and expire
+after 5 minutes; expired idle handles are reaped at
+checkout and by `dc_housekeeping`. Stale-connection
+errors are retried once if no data has been delivered
+yet. Up to 5 redirect hops are followed transparently,
+updating the ring with newly discovered nodes. Nodes
+absent from the server ring are marked dead and their
+connections are closed.
 
 ## API
 
 ```c
 /* Lifecycle — NOT thread-safe; call from one thread only. */
-int  dc_init(int n, const char * const *node, char *errmsg, int errsz);
-void dc_final(void);
+int dc_init(int n, const char *const *node);
+int dc_final(void);
 
 /* Fetch an object; callback is invoked once per DATA frame.
    Returns 0 on success or a DCERR_* code on failure. */
-int dc_get(const char *bucket, const char *key,
-           void *context,
-           int (*callback)(void *context, const char *buf, int bufsz),
-           char *errmsg, int errsz);
+int dc_get(const char *bucket, const char *key, void *context,
+           int (*callback)(void *context, const char *buf, int bufsz));
 
 /* List all known live nodes as "host:port\n..." in a malloc'd, null-terminated
    buffer. Sets *n to the node count. Caller must free(*buf).
@@ -87,13 +87,13 @@ int dc_node(char **buf, int *n);
    On success, *out_buf is set to a growable, null-terminated JSON buffer.
    Caller must free(*out_buf) when done.
    Returns 0 on success or a DCERR_* code on failure. */
-int dc_health(const char *node, char **out_buf, char *errmsg, int errsz);
+int dc_health(const char *node, char **out_buf);
 
 /* Refresh the ring and reap stale connections. Thread-safe; fully re-entrant.
    Call periodically (e.g. every minute) from any thread.
    Returns 0 on success, or a DCERR_* code if /_nodes was unreachable
    (connection cleanup still runs regardless). */
-int dc_housekeeping(char *errbuf, int errsz);
+int dc_housekeeping(void);
 ```
 
 ### Error codes

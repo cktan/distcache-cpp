@@ -672,9 +672,14 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   /* Release ring lock */
   pthread_mutex_unlock(&g_dctab.mutex);
 
+  const char *stripped_key = key;
+  while (*stripped_key == '/') {
+    stripped_key++;
+  }
+
   char enc_bucket[512], enc_key[512], path[1100];
   url_encode(bucket, enc_bucket, sizeof(enc_bucket));
-  url_encode(key, enc_key, sizeof(enc_key));
+  url_encode(stripped_key, enc_key, sizeof(enc_key));
   snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
 
   /* Resolve redirects up to the maximum limit */

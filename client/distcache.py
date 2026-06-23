@@ -380,10 +380,14 @@ def ring_rebuild(node_names: list[str]) -> None:
     _g_members = {}
     for raw in node_names:
         addr, first_pos = _strip_first_pos(raw)
-        _g_members[addr] = first_pos
-    _g_ring = _build_sorted_ring(
-        {addr: node_positions(addr, fp) for addr, fp in _g_members.items()}
-    )
+        _g_members[raw] = first_pos
+
+    members_positions = {}
+    for raw, fp in _g_members.items():
+        addr, _ = _strip_first_pos(raw)
+        members_positions[raw] = node_positions(addr, fp)
+
+    _g_ring = _build_sorted_ring(members_positions)
 
 
 # ---------------------------------------------------------------------------
@@ -750,7 +754,8 @@ def dc_get(
         if nid is None:
             raise DistCacheError("no nodes in ring", DCERR_NO_NODE)
 
-    path = f"/{_url_encode(bucket)}/{_url_encode(key)}"
+    stripped_key = key.lstrip('/')
+    path         = f"/{_url_encode(bucket)}/{_url_encode(stripped_key)}"
 
     for _hop in range(_DC_MAX_REDIRECTS + 1):
         redirect_node = do_get_streaming(nid, path, ctx, cb)
@@ -763,13 +768,13 @@ def dc_get(
         #          nid = ring_successor(ring, dest);
         with _g_dctab_mutex:
             addr, first_pos = _strip_first_pos(redirect_node)
-            if addr not in _g_members:
-                _g_members[addr] = first_pos
+            if redirect_node not in _g_members:
+                _g_members[redirect_node] = first_pos
                 new_positions    = node_positions(addr, first_pos)
                 points           = dict(_g_ring)
                 for pos in new_positions:
-                    if pos not in points or addr < points[pos]:
-                        points[pos] = addr
+                    if pos not in points or redirect_node < points[pos]:
+                        points[pos] = redirect_node
                 _g_ring = sorted(points.items())
             nid = find_successor(_g_ring, dest)
             if nid is None:
@@ -787,17 +792,19 @@ def dc_node() -> list[str]:
 
 
 def dc_health(node_name: str) -> HealthResult:
-    """Query /_health on node_name.
-    Raises DistCacheError(DCERR_NO_NODE) if node is not in the ring."""
-    with _g_dctab_mutex:
-        known = set(_g_members.keys())
-    if node_name not in known:
-        raise DistCacheError(f"unknown node: {node_name}", DCERR_NO_NODE)
+    """Query /_health on node_name."""
+    slash = node_name.find('/')
+    if slash >= 0:
+        addr = node_name[:slash]
+        path_suffix = node_name[slash:] + "/_health"
+    else:
+        addr = node_name
+        path_suffix = "/_health"
 
-    host, port_str = node_name.rsplit(":", 1)
+    host, port_str = addr.rsplit(":", 1)
     conn = http.client.HTTPConnection(host, int(port_str))
     try:
-        conn.request("GET", "/_health")
+        conn.request("GET", path_suffix)
         response = conn.getresponse()
         result   = _ChunkReader(response).read_response()
     except (OSError, http.client.HTTPException, EOFError) as exc:

@@ -5,6 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+/* Sentinel 0xFFFF must not be a valid slot index. */
+_Static_assert(NODEID_TABLE_SIZE <= 0xFFFF,
+               "NODEID_TABLE_SIZE must be <= 0xFFFF to keep sentinel valid");
+
 /*
  * g_table[slot] holds the registered nodeid string; NULL means empty.
  * All slots 0..NODEID_TABLE_SIZE-1 are usable.

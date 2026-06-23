@@ -501,19 +501,10 @@ int dc_housekeeping(void) {
 
   pthread_mutex_lock(&g_dctab.mutex);
   if (g_dctab.ring) {
-    int n = g_dctab.ring->distinct.top;
-    int order[DC_MAX_REDIR_NODES];
-    for (int i = 0; i < n; i++)
-      order[i] = i;
-    attempts = n < 3 ? n : 3;
-    /* Partial Fisher-Yates to select `attempts` distinct indices */
-    for (int i = 0; i < attempts; i++) {
-      int j = i + rand() % (n - i);
-      int tmp = order[i];
-      order[i] = order[j];
-      order[j] = tmp;
-      picks[i] = g_dctab.ring->distinct.entries[order[i]].node;
-    }
+    int indices[3];
+    attempts = ring_pick(g_dctab.ring, 3, indices);
+    for (int i = 0; i < attempts; i++)
+      picks[i] = g_dctab.ring->distinct.entries[indices[i]].node;
   }
   pthread_mutex_unlock(&g_dctab.mutex);
 

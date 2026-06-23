@@ -48,6 +48,7 @@ typedef struct {
   ring_entryvec_t entries;  /* sorted ascending by id after ring_finalize */
   ring_entryvec_t distinct; /* one entry per physical node, sorted by nodeidx */
   nodeid_bloom_t bloom;     /* Bloom filter for nodes in the ring */
+  int dirty;                /* dirty flag set on modifications */
 } ring_t;
 
 /* Allocate an empty ring. */

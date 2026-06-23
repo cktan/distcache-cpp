@@ -48,6 +48,7 @@ void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
   /* Seed distinct with ids[0] as a placeholder; node.v is what matters. */
   if (nids > 0)
     ring_entryvec_append(&r->distinct, ids[0], node);
+  r->dirty = 1;
 }
 
 /* Derive 10 virtual IDs from node. */
@@ -90,8 +91,12 @@ static int distinct_cmp(const void *a, const void *b) {
  * Build distinct (one entry per physical node), then set Bloom filter. */
 void ring_finalize(ring_t *r) {
   int i, out;
-  if (r->entries.top == 0)
+  if (!r->dirty)
     return;
+  if (r->entries.top == 0) {
+    r->dirty = 0;
+    return;
+  }
 
   /* Sort virtual-node entries by id; deduplicate. */
   qsort(r->entries.entries, (size_t)r->entries.top, sizeof(*r->entries.entries),
@@ -128,6 +133,7 @@ void ring_finalize(ring_t *r) {
     if (node_str)
       nodeid_bloom_add(&r->bloom, node_str);
   }
+  r->dirty = 0;
 }
 
 /* First index where entries[i].id >= target, or n if none. */

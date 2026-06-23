@@ -823,9 +823,14 @@ typedef struct {
 
 typedef struct {
   curl_pool_entry_t slots[CURL_POOL_CAP];
-  int head;  /* next write index */
-  int tail;  /* oldest entry index */
-  int count; /* total entries (valid + NULL) between tail..head */
+  /* Ring buffer: tail is oldest, head is next-empty.
+   * Entries occupy slots[tail], slots[tail+1], ..., slots[head-1] (mod CAP).
+   * get() scans newest-first: starts at head-1, decrements toward tail.
+   * put() writes at head, then advances head.
+   * count includes NULL (reaped) slots within [tail, head). */
+  int head;
+  int tail;
+  int count;
   pthread_mutex_t mu;
 } curl_pool_t;
 

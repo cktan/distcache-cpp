@@ -121,35 +121,6 @@ static void node_checkin(dc_conn_t *conn) {
   conn->curl = NULL;
 }
 
-/* ── ring_add_node ──────────────────────────────────────────────────────── */
-
-/* Add a newly discovered node and rebuild the ring.
- * Caller must hold g_dctab.mutex. */
-static int ring_add_node(const char *name) {
-  /* Register the node (idempotent). */
-  nodeid_idx_t new_idx = nodeid_register(name);
-  if (!nodeid_valid(new_idx))
-    return -1;
-
-  /* Collect existing nodes from the ring; append new_idx if absent. */
-  int n = g_dctab.ring ? g_dctab.ring->distinct.top : 0;
-  nodeid_idx_t *nodes = malloc((size_t)(n + 1) * sizeof(nodeid_idx_t));
-  if (!nodes)
-    return -1;
-  int already_in = 0;
-  for (int i = 0; i < n; i++) {
-    nodes[i] = g_dctab.ring->distinct.entries[i].node;
-    if (nodeid_eq(nodes[i], new_idx))
-      already_in = 1;
-  }
-  if (!already_in)
-    nodes[n++] = new_idx;
-
-  int rc = ring_rebuild(nodes, n);
-  free(nodes);
-  return rc;
-}
-
 /* ── URL encoding ───────────────────────────────────────────────────────── */
 
 /* Percent-encode src into dst, leaving URL-safe characters unescaped. */
@@ -687,12 +658,20 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 
     /* Acquire ring lock to add redirect node and update ring */
     pthread_mutex_lock(&g_dctab.mutex);
-    if (ring_add_node(redir_name) != 0) {
-      /* Release ring lock if addition fails */
-      pthread_mutex_unlock(&g_dctab.mutex);
-      myerrno = DCERR_NOMEM;
-      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
-      return -1;
+    if (!g_dctab.ring) {
+      g_dctab.ring = ring_create();
+    }
+    if (g_dctab.ring) {
+      nodeid_idx_t idx = nodeid_register(redir_name);
+      if (!nodeid_valid(idx)) {
+        /* Release ring lock if addition fails */
+        pthread_mutex_unlock(&g_dctab.mutex);
+        myerrno = DCERR_NOMEM;
+        snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
+        return -1;
+      }
+      ring_add(g_dctab.ring, idx);
+      ring_finalize(g_dctab.ring);
     }
     if (!g_dctab.ring) {
       /* Release ring lock if ring is empty */

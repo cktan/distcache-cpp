@@ -20,8 +20,8 @@
 
 /* ── Test-only internal API (needs -DDC_TESTING) ─────────────────────────── */
 extern uint32_t dc_test_fnv1a(uint32_t prev, const char *input);
-extern void dc_test_node_ids(const char *name, uint32_t ids[10]);
-extern uint32_t dc_test_dest_id(const char *bucket, const char *key);
+extern void dc_test_node_positions(const char *name, uint32_t positions[10]);
+extern uint32_t dc_test_dest_pos(const char *bucket, const char *key);
 extern void dc_test_parse_error(const char *payload, int plen, char *type_out,
                                 size_t type_sz, char *msg_out, size_t msg_sz);
 extern int dc_test_parse_redirect(const char *payload, int plen,
@@ -87,55 +87,59 @@ static void test_fnv1a(void) {
   CHECK(h < UINT32_MAX, "result in [0, 2^32)");
 }
 
-/* ── Ring ID tests ──────────────────────────────────────────────────────────
+/* ── Ring position tests ────────────────────────────────────────────────────
  */
 
-static void test_node_ids(void) {
-  section("Node ring IDs (cross-verified with Python)");
+static void test_node_positions(void) {
+  section("Node ring positions (cross-verified with Python)");
 
-  uint32_t ids[10];
-  dc_test_node_ids("node1:4001", ids);
+  uint32_t positions[10];
+  dc_test_node_positions("node1:4001", positions);
 
-  /* Python: node_ids("node1:4001")[0] == 0xc28f1d57 */
-  CHECK_EQ(ids[0], 0xc28f1d57u, "node_ids(\"node1:4001\")[0] == 0xc28f1d57");
+  /* Python: node_positions("node1:4001")[0] == 0xc28f1d57 */
+  CHECK_EQ(positions[0], 0xc28f1d57u,
+           "node_positions(\"node1:4001\")[0] == 0xc28f1d57");
 
-  /* Python: node_ids("node1:4001")[1] == 0x0f6d52d1 */
-  CHECK_EQ(ids[1], 0x0f6d52d1u, "node_ids(\"node1:4001\")[1] == 0x0f6d52d1");
+  /* Python: node_positions("node1:4001")[1] == 0x0f6d52d1 */
+  CHECK_EQ(positions[1], 0x0f6d52d1u,
+           "node_positions(\"node1:4001\")[1] == 0x0f6d52d1");
 
   int all_in_range = 1;
   for (int i = 0; i < 10; i++) {
-    if (ids[i] > UINT32_MAX)
+    if (positions[i] > UINT32_MAX)
       all_in_range = 0;
   }
-  CHECK(all_in_range, "all 10 IDs in [0, 2^32)");
+  CHECK(all_in_range, "all 10 positions in [0, 2^32)");
 
-  uint32_t ids2[10];
-  dc_test_node_ids("node2:4002", ids2);
-  CHECK(ids[0] != ids2[0], "different nodes -> different first ID");
+  uint32_t positions2[10];
+  dc_test_node_positions("node2:4002", positions2);
+  CHECK(positions[0] != positions2[0],
+        "different nodes -> different first position");
 
-  uint32_t ids3[10];
-  dc_test_node_ids("node1:4001", ids3);
-  CHECK(memcmp(ids, ids3, sizeof(ids)) == 0, "deterministic across calls");
+  uint32_t positions3[10];
+  dc_test_node_positions("node1:4001", positions3);
+  CHECK(memcmp(positions, positions3, sizeof(positions)) == 0,
+        "deterministic across calls");
 }
 
-/* ── Dest ID tests ──────────────────────────────────────────────────────────
+/* ── Dest position tests ────────────────────────────────────────────────────
  */
 
-static void test_dest_id(void) {
-  section("Destination ring IDs (cross-verified with Python)");
+static void test_dest_pos(void) {
+  section("Destination ring positions (cross-verified with Python)");
 
-  /* Python: dest_id("bucket","key") == 0x6f7df6c6 */
-  CHECK_EQ(dc_test_dest_id("bucket", "key"), 0x6f7df6c6u,
-           "dest_id(\"bucket\",\"key\") == 0x6f7df6c6");
+  /* Python: dest_pos("bucket","key") == 0x6f7df6c6 */
+  CHECK_EQ(dc_test_dest_pos("bucket", "key"), 0x6f7df6c6u,
+           "dest_pos(\"bucket\",\"key\") == 0x6f7df6c6");
 
-  /* Python: dest_id("bucket","path/to/obj") == 0xc1a677d6 */
-  CHECK_EQ(dc_test_dest_id("bucket", "path/to/obj"), 0xc1a677d6u,
-           "dest_id(\"bucket\",\"path/to/obj\") == 0xc1a677d6");
+  /* Python: dest_pos("bucket","path/to/obj") == 0xc1a677d6 */
+  CHECK_EQ(dc_test_dest_pos("bucket", "path/to/obj"), 0xc1a677d6u,
+           "dest_pos(\"bucket\",\"path/to/obj\") == 0xc1a677d6");
 
-  CHECK(dc_test_dest_id("b", "key") == dc_test_dest_id("b", "/key"),
+  CHECK(dc_test_dest_pos("b", "key") == dc_test_dest_pos("b", "/key"),
         "leading slash in key is stripped");
 
-  CHECK(dc_test_dest_id("b", "key") == dc_test_dest_id("b", "//key"),
+  CHECK(dc_test_dest_pos("b", "key") == dc_test_dest_pos("b", "//key"),
         "multiple leading slashes stripped");
 }
 
@@ -380,8 +384,8 @@ int main(void) {
   printf("========================\n");
 
   test_fnv1a();
-  test_node_ids();
-  test_dest_id();
+  test_node_positions();
+  test_dest_pos();
   test_lifecycle();
   test_wire_parsing();
   test_nodes_parsing();

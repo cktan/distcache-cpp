@@ -118,8 +118,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
                        httplib::Response &res) {
   fd_t fd;
 
-  // Obtain bucket & key, form relpath, and compute relpath_id.
-  // We need the relpath_id to interrogate ring for the responsible node.
+  // Obtain bucket & key, form relpath, and compute relpath_pos.
+  // We need the relpath_pos to interrogate ring for the responsible node.
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
@@ -133,7 +133,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     return;
   }
   const relpath_t &relpath = *relpath_opt;
-  uint32_t rp_id = ring_compute_id(relpath.str().c_str());
+  uint32_t rp_pos = ring_compute_pos(relpath.str().c_str());
 
   // Check for flags
   bool local_only = req.has_param("local");
@@ -144,7 +144,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     // The normal case! We need to redirect if this node is not dest.
 
     auto ring = node.ring.load();
-    nodeid_idx_t dest_idx = ring_successor(ring.get(), rp_id);
+    nodeid_idx_t dest_idx = ring_successor(ring.get(), rp_pos);
     if (nodeid_valid(dest_idx) && !nodeid_eq(dest_idx, node.nodeid)) {
       // Key belongs to another ring node; look up string only for network ops.
       char host[254];

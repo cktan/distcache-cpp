@@ -64,7 +64,7 @@ public:
   void maybe_evict(const std::function<void(const std::string &)> &del_cb);
 
   void scan(const std::function<void(const std::string &relpath, time_t mtime,
-                                     uint32_t relpath_id)> &cb);
+                                     uint32_t relpath_pos)> &cb);
 
   time_t get_mtime(const std::string &relpath);
 

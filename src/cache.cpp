@@ -74,7 +74,7 @@ cache_t::cache_t(keylock_t &keylock, std::string homedir)
     : homedir_(std::move(homedir)),
       lru_(
           keylock,
-          [](const std::string &s) { return ring_compute_id(s.c_str()); },
+          [](const std::string &s) { return ring_compute_pos(s.c_str()); },
           homedir_) {}
 
 // Resolve relpath to an absolute filesystem path under homedir.
@@ -152,10 +152,10 @@ void cache_t::maybe_evict(
   lru_.maybe_evict(del_cb);
 }
 
-// Iterate all lru entries, calling cb(relpath, mtime, relpath_id) for each.
+// Iterate all lru entries, calling cb(relpath, mtime, relpath_pos) for each.
 void cache_t::scan(
     const std::function<void(const std::string &relpath, time_t mtime,
-                             uint32_t relpath_id)> &cb) {
+                             uint32_t relpath_pos)> &cb) {
   lru_.scan(cb);
 }
 

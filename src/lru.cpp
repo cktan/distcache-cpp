@@ -14,7 +14,7 @@ lru_t::lru_t(keylock_t &keylock,
     : keylock_(keylock), id_fn_(std::move(id_fn)),
       homedir_(std::move(homedir)) {}
 
-// Insert or update entry with given mtime and computed relpath_id.
+// Insert or update entry with given mtime and computed relpath_pos.
 void lru_t::put(const relpath_t &relpath, time_t mtime) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   map_.insert_or_assign(relpath.str(), LRUEntry{mtime, id_fn_(relpath.str())});
@@ -148,12 +148,12 @@ bool lru_t::evict_one(const std::function<void(const std::string &)> &del_cb) {
   return false;
 }
 
-// Iterate all entries, calling cb(relpath, mtime, relpath_id) for each.
+// Iterate all entries, calling cb(relpath, mtime, relpath_pos) for each.
 void lru_t::scan(
     const std::function<void(const std::string &, time_t, uint32_t)> &cb) {
   std::lock_guard<std::mutex> map_lock(map_mtx_);
   for (const auto &[relpath, entry] : map_)
-    cb(relpath, entry.mtime, entry.relpath_id);
+    cb(relpath, entry.mtime, entry.relpath_pos);
 }
 
 // Return mtime for relpath, or 0 if not tracked.

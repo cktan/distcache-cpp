@@ -5,14 +5,14 @@
 #include <string>
 
 extern "C" {
-void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
-                 size_t nids);
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t positions[],
+                 size_t npos);
 }
 
 // Reference vectors computed from Elixir DistCache.Ring.hash/2:
 //   ring_hash(0, "127.0.0.1:4001")             == 3190356085
 //   ring_hash(0, "cache/my-bucket/photo.jpg")   == 2752153653
-//   compute_ids("127.0.0.1:4001")[0..3]         == {3190356085, 3608826095,
+//   compute_positions("127.0.0.1:4001")[0..3]   == {3190356085, 3608826095,
 //   1457009015, 2552795351}
 
 TEST_CASE("FNV hash matches Elixir reference vectors") {
@@ -20,17 +20,17 @@ TEST_CASE("FNV hash matches Elixir reference vectors") {
   CHECK(ring_hash(0, "cache/my-bucket/photo.jpg") == 2752153653U);
 }
 
-TEST_CASE("compute_ids: first 4 IDs match Elixir") {
-  uint32_t ids[10];
-  ring_compute_ids("127.0.0.1:4001", ids);
-  CHECK(ids[0] == 3190356085U);
-  CHECK(ids[1] == 3608826095U);
-  CHECK(ids[2] == 1457009015U);
-  CHECK(ids[3] == 2552795351U);
+TEST_CASE("compute_positions: first 4 positions match Elixir") {
+  uint32_t positions[10];
+  ring_compute_positions("127.0.0.1:4001", positions);
+  CHECK(positions[0] == 3190356085U);
+  CHECK(positions[1] == 3608826095U);
+  CHECK(positions[2] == 1457009015U);
+  CHECK(positions[3] == 2552795351U);
 }
 
-TEST_CASE("compute_id matches Elixir") {
-  CHECK(ring_compute_id("cache/my-bucket/photo.jpg") == 2752153653U);
+TEST_CASE("compute_pos matches Elixir") {
+  CHECK(ring_compute_pos("cache/my-bucket/photo.jpg") == 2752153653U);
 }
 
 TEST_CASE("ring successor: single node always returns that node") {
@@ -61,14 +61,14 @@ TEST_CASE("ring successor: two nodes split keyspace") {
   nodeid_destroy();
 }
 
-TEST_CASE("ring successor: wrap-around at max id") {
-  const uint32_t x_ids[] = {100, 300, 600};
-  const uint32_t y_ids[] = {200, 500, 900};
+TEST_CASE("ring successor: wrap-around at max pos") {
+  const uint32_t x_positions[] = {100, 300, 600};
+  const uint32_t y_positions[] = {200, 500, 900};
   ring_t *r = ring_create();
   nodeid_idx_t node_x = nodeid_register("X");
   nodeid_idx_t node_y = nodeid_register("Y");
-  ring_add_ex(r, node_x, x_ids, 3);
-  ring_add_ex(r, node_y, y_ids, 3);
+  ring_add_ex(r, node_x, x_positions, 3);
+  ring_add_ex(r, node_y, y_positions, 3);
   ring_finalize(r);
   CHECK(nodeid_eq(ring_successor(r, 1000), node_x));
   CHECK(nodeid_eq(ring_successor(r, 0xFFFFFFFF), node_x));
@@ -79,12 +79,12 @@ TEST_CASE("ring successor: wrap-around at max id") {
 }
 
 TEST_CASE("ring build: collision resolved by smaller name") {
-  const uint32_t ids[] = {500};
+  const uint32_t positions[] = {500};
   ring_t *r = ring_create();
   nodeid_idx_t node_alpha = nodeid_register("alpha");
   nodeid_idx_t node_beta = nodeid_register("beta");
-  ring_add_ex(r, node_alpha, ids, 1);
-  ring_add_ex(r, node_beta, ids, 1);
+  ring_add_ex(r, node_alpha, positions, 1);
+  ring_add_ex(r, node_beta, positions, 1);
   ring_finalize(r);
   REQUIRE(ring_size(r) == 1);
   CHECK(nodeid_eq(ring_successor(r, 500), node_alpha));
@@ -92,13 +92,13 @@ TEST_CASE("ring build: collision resolved by smaller name") {
   nodeid_destroy();
 }
 
-TEST_CASE("first_id override changes id[0] but not chain formula") {
-  uint32_t ids_default[10], ids_custom[10];
-  ring_compute_ids("node", ids_default);
-  ring_compute_ids("node/999", ids_custom);
-  CHECK(ids_custom[0] == 999U);
-  CHECK(ids_custom[0] != ids_default[0]);
-  CHECK(ids_custom[1] != ids_default[1]);
+TEST_CASE("first_pos override changes positions[0] but not chain formula") {
+  uint32_t positions_default[10], positions_custom[10];
+  ring_compute_positions("node", positions_default);
+  ring_compute_positions("node/999", positions_custom);
+  CHECK(positions_custom[0] == 999U);
+  CHECK(positions_custom[0] != positions_default[0]);
+  CHECK(positions_custom[1] != positions_default[1]);
 }
 
 TEST_CASE("nodeid_split: registers and splits different formats") {
@@ -137,9 +137,9 @@ TEST_CASE("ring_entryvec_append: grows top and stores entries") {
   ring_entryvec_append(&vec, 200u, idx1);
   ring_entryvec_append(&vec, 300u, idx2);
   REQUIRE(vec.top == 3);
-  CHECK(vec.entries[0].id == 100u);
-  CHECK(vec.entries[1].id == 200u);
-  CHECK(vec.entries[2].id == 300u);
+  CHECK(vec.entries[0].pos == 100u);
+  CHECK(vec.entries[1].pos == 200u);
+  CHECK(vec.entries[2].pos == 300u);
   CHECK(vec.entries[0].node.v == 0);
   CHECK(vec.entries[1].node.v == 1);
   CHECK(vec.entries[2].node.v == 2);
@@ -155,7 +155,7 @@ TEST_CASE("ring_entryvec_append: handles capacity growth") {
   REQUIRE(vec.top == 20);
   CHECK(vec.max >= 20);
   for (int i = 0; i < 20; i++)
-    CHECK(vec.entries[i].id == (uint32_t)i);
+    CHECK(vec.entries[i].pos == (uint32_t)i);
   free(vec.entries);
 }
 

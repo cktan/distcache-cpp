@@ -38,7 +38,7 @@
 
 /* ── Constants ──────────────────────────────────────────────────────────── */
 
-#define DC_IDS_PER_NODE 10 /* must match ring.c */
+#define DC_POSITIONS_PER_NODE 10 /* must match ring.c */
 #define DC_MAX_REDIRECTS 5
 #define DC_MAX_REDIR_NODES 64
 #define DC_CONN_EXPIRE_SECS 300 /* 5 minutes */
@@ -63,12 +63,12 @@ static __thread int myerrno;
 static __thread char myerrmsg[1024];
 
 /* Hash bucket/key to the ring position that owns the object. */
-static uint32_t compute_dest_id(const char *bucket, const char *key) {
+static uint32_t compute_dest_pos(const char *bucket, const char *key) {
   while (*key == '/')
     key++;
   char relpath[1024];
   snprintf(relpath, sizeof(relpath), "cache/%s/%s", bucket, key);
-  return ring_compute_id(relpath);
+  return ring_compute_pos(relpath);
 }
 
 /* ── Ring management ────────────────────────────────────────────────────── */
@@ -664,7 +664,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
     snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
     return -1;
   }
-  uint32_t dest = compute_dest_id(bucket, key);
+  uint32_t dest = compute_dest_pos(bucket, key);
   nodeid_idx_t nid = ring_successor(g_dctab.ring, dest);
   if (!nodeid_valid(nid)) {
     /* Release ring lock on lookup failure */
@@ -977,8 +977,9 @@ const char *dc_errmsg(void) { return myerrmsg; }
 /* ── Test-only API (compiled in with -DDC_TESTING) ─────────────────────── */
 #ifdef DC_TESTING
 uint32_t dc_test_fnv1a(uint32_t prev, const char *input);
-void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]);
-uint32_t dc_test_dest_id(const char *bucket, const char *key);
+void dc_test_node_positions(const char *name,
+                            uint32_t positions[DC_POSITIONS_PER_NODE]);
+uint32_t dc_test_dest_pos(const char *bucket, const char *key);
 void dc_test_parse_error(const char *payload, int plen, char *type_out,
                          size_t type_sz, char *msg_out, size_t msg_sz);
 int dc_test_parse_redirect(const char *payload, int plen, char name_out[1024]);
@@ -990,11 +991,12 @@ int dc_test_fin_callback(void);
 uint32_t dc_test_fnv1a(uint32_t prev, const char *input) {
   return ring_hash(prev, input);
 }
-void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]) {
-  ring_compute_ids(name, ids);
+void dc_test_node_positions(const char *name,
+                            uint32_t positions[DC_POSITIONS_PER_NODE]) {
+  ring_compute_positions(name, positions);
 }
-uint32_t dc_test_dest_id(const char *bucket, const char *key) {
-  return compute_dest_id(bucket, key);
+uint32_t dc_test_dest_pos(const char *bucket, const char *key) {
+  return compute_dest_pos(bucket, key);
 }
 void dc_test_parse_error(const char *payload, int plen, char *type_out,
                          size_t type_sz, char *msg_out, size_t msg_sz) {

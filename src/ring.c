@@ -5,8 +5,12 @@
 #include <stdlib.h>
 #include <string.h>
 
-void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
-                 size_t nids);
+/* Sentinel 0xFFFF must not be a valid slot index. */
+_Static_assert(NODEID_TABLE_SIZE <= 0xFFFF,
+               "NODEID_TABLE_SIZE must be <= 0xFFFF to keep sentinel valid");
+
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t positions[],
+                 size_t npos);
 
 /* Allocate a zeroed ring_t on the heap. */
 ring_t *ring_create(void) { return calloc(1, sizeof(ring_t)); }
@@ -32,29 +36,31 @@ static void entryvec_ensure_cap(ring_entryvec_t *vec, int need) {
   vec->max = cap;
 }
 
-/* Append (id, nodeidx) to vec, growing as needed. */
-void ring_entryvec_append(ring_entryvec_t *vec, uint32_t id,
+/* Append (pos, nodeidx) to vec, growing as needed. */
+void ring_entryvec_append(ring_entryvec_t *vec, uint32_t pos,
                           nodeid_idx_t nodeidx) {
   entryvec_ensure_cap(vec, vec->top + 1);
-  vec->entries[vec->top].id = id;
+  vec->entries[vec->top].pos = pos;
   vec->entries[vec->top].node = nodeidx;
   vec->top++;
 }
 
-/* Append (id, node) pairs for each of the nids IDs.
+/* Append (pos, node) pairs for each of the npos positions.
  * Also records one entry in distinct[] (deduped in ring_finalize). */
-void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t ids[],
-                 size_t nids) {
+void ring_add_ex(ring_t *r, nodeid_idx_t node, const uint32_t positions[],
+                 size_t npos) {
   size_t i;
-  for (i = 0; i < nids; i++)
-    ring_entryvec_append(&r->entries, ids[i], node);
-  /* Seed distinct with ids[0] as a placeholder; node.v is what matters. */
-  if (nids > 0)
-    ring_entryvec_append(&r->distinct, ids[0], node);
+  for (i = 0; i < npos; i++)
+    ring_entryvec_append(&r->entries, positions[i], node);
+  /* Seed distinct with positions[0] as a placeholder; node.v is what matters.
+   */
+  if (npos > 0)
+    ring_entryvec_append(&r->distinct, positions[0], node);
   r->dirty = 1;
 }
 
-/* Derive 10 virtual IDs from node and add to the ring if not duplicate. */
+/* Derive 10 virtual positions from node and add to the ring if not duplicate.
+ */
 void ring_add(ring_t *r, nodeid_idx_t node) {
   const char *node_str = nodeid_lookup(node);
   if (!node_str)
@@ -66,15 +72,15 @@ void ring_add(ring_t *r, nodeid_idx_t node) {
       return;
   }
 
-  uint32_t ids[10];
-  ring_compute_ids(node_str, ids);
+  uint32_t positions[10];
+  ring_compute_positions(node_str, positions);
 
   /* Insert 10 entries in entries[] */
   for (int i = 0; i < 10; i++)
-    ring_entryvec_append(&r->entries, ids[i], node);
+    ring_entryvec_append(&r->entries, positions[i], node);
 
   /* Insert 1 entry in distinct[] */
-  ring_entryvec_append(&r->distinct, ids[0], node);
+  ring_entryvec_append(&r->distinct, positions[0], node);
 
   /* Insert into bloom filter */
   if (r->distinct.top == 1) {
@@ -85,12 +91,12 @@ void ring_add(ring_t *r, nodeid_idx_t node) {
   r->dirty = 1;
 }
 
-/* qsort comparator: ascending by id; smaller node name first on tie. */
+/* qsort comparator: ascending by pos; smaller node name first on tie. */
 static int entry_cmp(const void *a, const void *b) {
   const ring_entry_t *ea = a, *eb = b;
-  if (ea->id < eb->id)
+  if (ea->pos < eb->pos)
     return -1;
-  if (ea->id > eb->id)
+  if (ea->pos > eb->pos)
     return 1;
   const char *sa = nodeid_lookup(ea->node);
   const char *sb = nodeid_lookup(eb->node);
@@ -111,7 +117,7 @@ static int distinct_cmp(const void *a, const void *b) {
   return 0;
 }
 
-/* Sort then deduplicate: keep the first (smallest-name) entry per id.
+/* Sort then deduplicate: keep the first (smallest-name) entry per pos.
  * Build distinct (one entry per physical node), then set Bloom filter. */
 void ring_finalize(ring_t *r) {
   int i, out;
@@ -122,13 +128,13 @@ void ring_finalize(ring_t *r) {
     return;
   }
 
-  /* Sort virtual-node entries by id; deduplicate. */
+  /* Sort virtual-node entries by pos; deduplicate. */
   qsort(r->entries.entries, (size_t)r->entries.top, sizeof(*r->entries.entries),
         entry_cmp);
   out = 0;
   for (i = 0; i < r->entries.top; i++) {
     if (out == 0 ||
-        r->entries.entries[i].id != r->entries.entries[out - 1].id) {
+        r->entries.entries[i].pos != r->entries.entries[out - 1].pos) {
       if (i != out)
         r->entries.entries[out] = r->entries.entries[i];
       out++;
@@ -160,12 +166,12 @@ void ring_finalize(ring_t *r) {
   r->dirty = 0;
 }
 
-/* First index where entries[i].id >= target, or n if none. */
+/* First index where entries[i].pos >= target, or n if none. */
 static int bisect_left(const ring_t *r, uint32_t target) {
   int lo = 0, hi = r->entries.top;
   while (lo < hi) {
     int mid = lo + (hi - lo) / 2;
-    if (r->entries.entries[mid].id < target)
+    if (r->entries.entries[mid].pos < target)
       lo = mid + 1;
     else
       hi = mid;
@@ -173,12 +179,12 @@ static int bisect_left(const ring_t *r, uint32_t target) {
   return lo;
 }
 
-/* Return the successor node for target_id, wrapping around if needed. */
-nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_id) {
+/* Return the successor node for target_pos, wrapping around if needed. */
+nodeid_idx_t ring_successor(const ring_t *r, uint32_t target_pos) {
   int idx;
   if (r->entries.top == 0)
     return NODEID_NONE;
-  idx = bisect_left(r, target_id);
+  idx = bisect_left(r, target_pos);
   if (idx == r->entries.top)
     idx = 0;
   return r->entries.entries[idx].node;
@@ -220,9 +226,9 @@ size_t ring_size(const ring_t *r) { return (size_t)r->entries.top; }
 /* Number of distinct physical nodes. */
 size_t ring_node_count(const ring_t *r) { return (size_t)r->distinct.top; }
 
-/* Fill ids[10] with virtual-node IDs derived from node_name. */
-void ring_compute_ids(const char *nodeid, uint32_t ids[10]) {
-  uint32_t first_id = 0;
+/* Fill positions[10] with virtual-node positions derived from nodeid. */
+void ring_compute_positions(const char *nodeid, uint32_t positions[10]) {
+  uint32_t first_pos = 0;
   const char *chain_name = nodeid;
   char addr[300];
   const char *slash = strchr(nodeid, '/');
@@ -234,22 +240,22 @@ void ring_compute_ids(const char *nodeid, uint32_t ids[10]) {
       len = sizeof(addr) - 1;
     memcpy(addr, nodeid, len);
     addr[len] = '\0';
-    first_id = (uint32_t)strtoul(slash + 1, NULL, 10);
+    first_pos = (uint32_t)strtoul(slash + 1, NULL, 10);
     chain_name = addr;
   }
   for (i = 0; i < 10; i++) {
-    uint32_t id;
+    uint32_t pos;
     if (i == 0) {
-      id = first_id ? first_id : ring_hash(0, chain_name);
+      pos = first_pos ? first_pos : ring_hash(0, chain_name);
     } else {
       char buf[sizeof(addr) + 16];
       snprintf(buf, sizeof(buf), "%s:%u", chain_name, (unsigned)prev);
-      id = ring_hash(prev, buf);
+      pos = ring_hash(prev, buf);
     }
-    ids[i] = id;
-    prev = id;
+    positions[i] = pos;
+    prev = pos;
   }
 }
 
-/* Compute the ring ID for a relpath string. */
-uint32_t ring_compute_id(const char *str) { return ring_hash(0, str); }
+/* Compute the ring position for a relpath string. */
+uint32_t ring_compute_pos(const char *str) { return ring_hash(0, str); }

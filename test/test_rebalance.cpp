@@ -89,7 +89,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   for (int i = 0; i < 20; i++) {
     std::string rp = "cache/bucket/key" + std::to_string(i);
     nodeid_idx_t owner_idx =
-        ring_successor(ring.get(), ring_compute_id(rp.c_str()));
+        ring_successor(ring.get(), ring_compute_pos(rp.c_str()));
     const char *owner = nodeid_lookup(owner_idx);
     batch.push_back({rp, now - i * 3600});
     if (owner && node_b == owner)
@@ -101,7 +101,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
 
   for (const auto &[rp, mt] : result) {
     nodeid_idx_t s_idx =
-        ring_successor(ring.get(), ring_compute_id(rp.c_str()));
+        ring_successor(ring.get(), ring_compute_pos(rp.c_str()));
     const char *s = nodeid_lookup(s_idx);
     CHECK(s != nullptr);
     CHECK(node_b == s);
@@ -121,7 +121,7 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
   for (int i = 0; i < 100; i++) {
     std::string rp = "cache/old/key" + std::to_string(i);
     nodeid_idx_t s_idx =
-        ring_successor(ring.get(), ring_compute_id(rp.c_str()));
+        ring_successor(ring.get(), ring_compute_pos(rp.c_str()));
     const char *s = nodeid_lookup(s_idx);
     if (s && node_b == s) {
       old_rp = rp;

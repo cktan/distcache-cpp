@@ -12,8 +12,8 @@
 
 // Metadata stored per cached file.
 struct LRUEntry {
-  time_t mtime;        // last-access time (POSIX); used as LRU heat proxy
-  uint32_t relpath_id; // FNV ring hash of relpath; cached to avoid rehashing
+  time_t mtime;         // last-access time (POSIX); used as LRU heat proxy
+  uint32_t relpath_pos; // FNV ring hash of relpath; cached to avoid rehashing
 };
 
 // Tracks {relpath -> LRUEntry} for all files in the local cache and drives
@@ -36,12 +36,12 @@ struct LRUEntry {
 class lru_t {
 public:
   // keylock: coordinates eviction with in-flight S3 fetches.
-  // id_fn: computes the ring relpath_id for a given relpath.
+  // id_fn: computes the ring relpath_pos for a given relpath.
   // homedir: absolute path to the node's home directory; used for statvfs.
   lru_t(keylock_t &keylock, std::function<uint32_t(const std::string &)> id_fn,
         std::string homedir);
 
-  // Add or update an entry. relpath_id is computed via id_fn.
+  // Add or update an entry. relpath_pos is computed via id_fn.
   void put(const relpath_t &relpath, time_t mtime);
 
   // Delete an entry.
@@ -50,7 +50,7 @@ public:
   // Refresh mtime to now, recording a cache hit.
   void touch(const relpath_t &relpath);
 
-  // Bulk insert from the startup cache scan. relpath_id computed via id_fn.
+  // Bulk insert from the startup cache scan. relpath_pos computed via id_fn.
   void batch_put(const std::vector<std::pair<std::string, time_t>> &batch);
 
   // Evict the coldest eligible entry (mtime older than 5 minutes).
@@ -64,7 +64,7 @@ public:
   // Iterate every entry under the lock. Used by the rebalance claim sweep to
   // find keys whose ring successor has changed.
   void scan(const std::function<void(const std::string &relpath, time_t mtime,
-                                     uint32_t relpath_id)> &cb);
+                                     uint32_t relpath_pos)> &cb);
 
   // O(1) mtime lookup. Returns 0 if relpath is not tracked.
   time_t get_mtime(const relpath_t &relpath);
@@ -86,7 +86,7 @@ private:
   // touching either structure.
   std::mutex map_mtx_;
 
-  // Primary index: relpath -> {mtime, relpath_id}. Source of truth for what
+  // Primary index: relpath -> {mtime, relpath_pos}. Source of truth for what
   // is in the local cache. Entries are added on fetch/write, updated on touch,
   // removed on drop or successful eviction.
   std::unordered_map<std::string, LRUEntry> map_;

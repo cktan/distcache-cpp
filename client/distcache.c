@@ -299,8 +299,7 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
 /* ── do_get_streaming ───────────────────────────────────────────────────── */
 
 /* Perform one HTTP GET, streaming DATA frames to cb. */
-static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
-                            const char *path, void *ctx,
+static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
                             int (*cb)(void *ctx, const char *buf, int bufsz),
                             char *redir_name, int *is_redirect) {
   char host[254];
@@ -321,6 +320,12 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
     *is_redirect = 0;
   }
 
+  /* Check out connection from the pool */
+  dc_conn_t conn;
+  node_checkout(nodeid, &conn);
+
+  int ret = -1;
+
   /* Two attempts: the first may hit a stale keep-alive connection;
    * on a low-level socket error before any data reaches the callback,
    * drop the handle and retry once with a fresh connection. */
@@ -330,25 +335,27 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
     st.ctx = ctx;
     st.cb = cb;
 
-    if (!conn->curl) {
-      conn->curl = curl_handle_init();
-      if (!conn->curl) {
+    if (!conn.curl) {
+      conn.curl = curl_handle_init();
+      if (!conn.curl) {
         myerrno = DCERR_NETWORK;
         snprintf(myerrmsg, sizeof(myerrmsg), "curl_easy_init failed");
-        return -1;
+        ret = -1;
+        goto out;
       }
     }
 
-    curl_easy_setopt(conn->curl, CURLOPT_URL, url);
-    curl_easy_setopt(conn->curl, CURLOPT_WRITEFUNCTION, stream_write_cb);
-    curl_easy_setopt(conn->curl, CURLOPT_WRITEDATA, &st);
+    curl_easy_setopt(conn.curl, CURLOPT_URL, url);
+    curl_easy_setopt(conn.curl, CURLOPT_WRITEFUNCTION, stream_write_cb);
+    curl_easy_setopt(conn.curl, CURLOPT_WRITEDATA, &st);
 
-    CURLcode rc = curl_easy_perform(conn->curl);
+    CURLcode rc = curl_easy_perform(conn.curl);
 
     if (st.cb_failed) {
       myerrno = DCERR_CALLBACK_FAILED;
       snprintf(myerrmsg, sizeof(myerrmsg), "callback failed");
-      return -1;
+      ret = -1;
+      goto out;
     }
 
     if (rc != CURLE_OK && rc != CURLE_WRITE_ERROR) {
@@ -356,23 +363,25 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
        * flowing to the caller we cannot restart the request. */
       if (!st.cb_called && (rc == CURLE_RECV_ERROR || rc == CURLE_SEND_ERROR ||
                             rc == CURLE_COULDNT_CONNECT)) {
-        if (conn->curl) {
-          curl_easy_cleanup(conn->curl);
+        if (conn.curl) {
+          curl_easy_cleanup(conn.curl);
         }
-        conn->curl = NULL;
+        conn.curl = NULL;
         continue;
       }
       myerrno = DCERR_NETWORK;
       snprintf(myerrmsg, sizeof(myerrmsg), "curl error (%s): %s", node_name,
                curl_easy_strerror(rc));
-      return -1;
+      ret = -1;
+      goto out;
     }
 
     if (!st.got_fin) {
       myerrno = DCERR_PROTOCOL;
       snprintf(myerrmsg, sizeof(myerrmsg), "truncated response from %s",
                node_name);
-      return -1;
+      ret = -1;
+      goto out;
     }
 
     if (strcmp(st.status, "redirect") == 0) {
@@ -384,7 +393,8 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
       if (is_redirect) {
         *is_redirect = 1;
       }
-      return 0;
+      ret = 0;
+      goto out;
     }
 
     if (strcmp(st.status, "error") == 0) {
@@ -393,23 +403,31 @@ static int do_get_streaming(dc_conn_t *conn, nodeid_idx_t nodeid,
         snprintf(myerrmsg, sizeof(myerrmsg), "%s", st.err_msg);
       else
         snprintf(myerrmsg, sizeof(myerrmsg), "server error: %s", st.err_type);
-      return -1;
+      ret = -1;
+      goto out;
     }
 
     if (st.status[0] != '\0') {
       myerrno = DCERR_PROTOCOL;
       snprintf(myerrmsg, sizeof(myerrmsg), "unknown frame type from %s",
                node_name);
-      return -1;
+      ret = -1;
+      goto out;
     }
 
-    return 0;
+    ret = 0;
+    goto out;
   }
 
   myerrno = DCERR_NETWORK;
   snprintf(myerrmsg, sizeof(myerrmsg), "connection failed after retry: %s",
            node_name);
-  return -1;
+  ret = -1;
+
+out:
+  /* Check connection back in */
+  node_checkin(&conn);
+  return ret;
 }
 
 /* ── fetch_nodes ────────────────────────────────────────────────────────── */
@@ -635,19 +653,13 @@ int dc_get(const char *bucket, const char *key, void *ctx,
 
   /* Resolve redirects up to the maximum limit */
   for (int hop = 0; hop <= DC_MAX_REDIRECTS; hop++) {
-    dc_conn_t conn;
-    node_checkout(nid, &conn); // checkout a connection
-
     int is_redirect = 0;
-    int rc = do_get_streaming(&conn, conn.nodeid, path, ctx, cb, redir_name,
-                              &is_redirect);
-    node_checkin(&conn);
+    int rc = do_get_streaming(nid, path, ctx, cb, redir_name, &is_redirect);
 
     if (rc == -1) {
       return -1;
     }
     if (!is_redirect) {
-      /* Check in connection on successful data retrieval */
       return 0;
     }
 

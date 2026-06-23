@@ -194,31 +194,31 @@ static void parse_error_payload(const char *payload, int plen, char *type_out,
   }
 }
 
-/* Parse REDIRECT payload "host:port/id\n" into name_out. Returns 1 on
- * success. */
-static int parse_redirect_payload(const char *payload, int plen, char *name_out,
-                                  size_t name_sz) {
+/* Parse REDIRECT payload "host:port/id\n" into name_out. Returns 0 on
+ * success, -1 on error. */
+static int parse_redirect_payload(const char *payload, int plen,
+                                  char name_out[1024]) {
   const char *nl = memchr(payload, '\n', (size_t)plen);
   size_t nlen = nl ? (size_t)(nl - payload) : (size_t)plen;
-  if (nlen == 0 || nlen >= name_sz)
-    return 0;
+  if (nlen == 0 || nlen >= 1024)
+    return -1;
   memcpy(name_out, payload, nlen);
   name_out[nlen] = '\0';
-  return 1;
+  return 0;
 }
 
 #ifdef DC_TESTING
 /* Parse NODES payload (newline-terminated lines) into names[]. Returns
  * count. */
 static int parse_nodes_payload(const char *payload, int plen,
-                               char names[][DC_NODE_NAME_MAX], int max_names) {
+                               char names[][1024], int max_names) {
   int count = 0;
   const char *p = payload;
   const char *end = payload + plen;
   while (p < end && count < max_names) {
     const char *nl = memchr(p, '\n', (size_t)(end - p));
     size_t nlen = nl ? (size_t)(nl - p) : (size_t)(end - p);
-    if (nlen > 0 && nlen < DC_NODE_NAME_MAX) {
+    if (nlen > 0 && nlen < 1024) {
       memcpy(names[count], p, nlen);
       names[count][nlen] = '\0';
       count++;
@@ -238,7 +238,7 @@ typedef struct {
   char err_msg[512];
   int got_fin;
   int cb_called;
-  char redir_name[DC_NODE_NAME_MAX];
+  char redir_name[1024];
   void *ctx;
   int (*cb)(void *ctx, const char *buf, int bufsz);
   int cb_failed;
@@ -284,8 +284,11 @@ static size_t stream_write_cb(char *ptr, size_t sz, size_t nmemb, void *ud) {
       parse_error_payload(payload, plen, st->err_type, sizeof(st->err_type),
                           st->err_msg, sizeof(st->err_msg));
     } else if (strncmp(st->fp.raw, "REDIRECT:", 9) == 0) {
-      memcpy(st->status, "redirect", sizeof("redirect"));
-      parse_redirect_payload(payload, plen, st->redir_name, DC_NODE_NAME_MAX);
+      if (parse_redirect_payload(payload, plen, st->redir_name) == 0) {
+        memcpy(st->status, "redirect", sizeof("redirect"));
+      } else {
+        memcpy(st->status, "unknown", sizeof("unknown"));
+      }
     } else {
       memcpy(st->status, "unknown", sizeof("unknown"));
     }
@@ -386,9 +389,9 @@ static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
 
     if (strcmp(st.status, "redirect") == 0) {
       size_t rn_len = strlen(st.redir_name);
-      if (rn_len >= DC_NODE_NAME_MAX)
-        rn_len = DC_NODE_NAME_MAX - 1;
-      char redir_name[DC_NODE_NAME_MAX];
+      if (rn_len >= 1024)
+        rn_len = 1024 - 1;
+      char redir_name[1024];
       memcpy(redir_name, st.redir_name, rn_len);
       redir_name[rn_len] = '\0';
 
@@ -447,25 +450,23 @@ out:
 static int fetch_nodes(nodeid_idx_t nodeid, char **ret) {
   *ret = NULL;
 
-  const char *name = nodeid_lookup(nodeid);
-  char addr[DC_NODE_NAME_MAX];
-  size_t addr_len = strlen(name);
-  if (addr_len >= DC_NODE_NAME_MAX)
-    addr_len = DC_NODE_NAME_MAX - 1;
-  memcpy(addr, name, addr_len);
-  addr[addr_len] = '\0';
-  char *slash = strchr(addr, '/');
-  if (slash)
-    *slash = '\0';
+  char host[254];
+  int port = 0;
+  int first_id = 0;
+  if (nodeid_split(nodeid, host, &port, &first_id) != 0) {
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "invalid node index");
+    return -1;
+  }
 
   char url[1536];
-  snprintf(url, sizeof(url), "http://%s/_nodes", addr);
+  snprintf(url, sizeof(url), "http://%s:%d/_nodes", host, port);
 
   int status, size;
   if (url_get(url, &status, &size, ret) != 0) {
     myerrno = status ? DCERR_PROTOCOL : DCERR_NETWORK;
-    snprintf(myerrmsg, sizeof(myerrmsg), "/_nodes from %s failed (http %d)",
-             addr, status);
+    snprintf(myerrmsg, sizeof(myerrmsg), "/_nodes from %s:%d failed (http %d)",
+             host, port, status);
     return -1;
   }
   return 0;
@@ -959,10 +960,9 @@ void dc_test_node_ids(const char *name, uint32_t ids[DC_IDS_PER_NODE]);
 uint32_t dc_test_dest_id(const char *bucket, const char *key);
 void dc_test_parse_error(const char *payload, int plen, char *type_out,
                          size_t type_sz, char *msg_out, size_t msg_sz);
-int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
-                           size_t name_sz);
-int dc_test_parse_nodes(const char *payload, int plen,
-                        char names[][DC_NODE_NAME_MAX], int max_names);
+int dc_test_parse_redirect(const char *payload, int plen, char name_out[1024]);
+int dc_test_parse_nodes(const char *payload, int plen, char names[][1024],
+                        int max_names);
 int dc_test_server_errcode(const char *s);
 int dc_test_fin_callback(void);
 
@@ -979,12 +979,11 @@ void dc_test_parse_error(const char *payload, int plen, char *type_out,
                          size_t type_sz, char *msg_out, size_t msg_sz) {
   parse_error_payload(payload, plen, type_out, type_sz, msg_out, msg_sz);
 }
-int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
-                           size_t name_sz) {
-  return parse_redirect_payload(payload, plen, name_out, name_sz);
+int dc_test_parse_redirect(const char *payload, int plen, char name_out[1024]) {
+  return parse_redirect_payload(payload, plen, name_out);
 }
-int dc_test_parse_nodes(const char *payload, int plen,
-                        char names[][DC_NODE_NAME_MAX], int max_names) {
+int dc_test_parse_nodes(const char *payload, int plen, char names[][1024],
+                        int max_names) {
   return parse_nodes_payload(payload, plen, names, max_names);
 }
 int dc_test_server_errcode(const char *s) { return server_errcode(s); }

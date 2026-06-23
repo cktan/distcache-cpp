@@ -24,8 +24,8 @@ extern void dc_test_node_ids(const char *name, uint32_t ids[10]);
 extern uint32_t dc_test_dest_id(const char *bucket, const char *key);
 extern void dc_test_parse_error(const char *payload, int plen, char *type_out,
                                 size_t type_sz, char *msg_out, size_t msg_sz);
-extern int dc_test_parse_redirect(const char *payload, int plen, char *name_out,
-                                  size_t name_sz);
+extern int dc_test_parse_redirect(const char *payload, int plen,
+                                  char name_out[1024]);
 extern int dc_test_parse_nodes(const char *payload, int plen,
                                char names[][1024], int max_names);
 extern int dc_test_server_errcode(const char *s);
@@ -207,18 +207,18 @@ static void test_wire_parsing(void) {
   /* REDIRECT: single plain-text node line */
   char name[1024];
   int ok;
-  ok = dc_test_parse_redirect("127.0.0.1:4002/7\n", 17, name, sizeof(name));
-  CHECK(ok == 1, "REDIRECT: returns 1 on success");
+  ok = dc_test_parse_redirect("127.0.0.1:4002/7\n", 17, name);
+  CHECK(ok == 0, "REDIRECT: returns 0 on success");
   CHECK(strcmp(name, "127.0.0.1:4002/7") == 0,
         "REDIRECT: node name parsed correctly");
 
-  ok = dc_test_parse_redirect("node:4001\n", 10, name, sizeof(name));
-  CHECK(ok == 1, "REDIRECT: node without first_id parsed");
+  ok = dc_test_parse_redirect("node:4001\n", 10, name);
+  CHECK(ok == 0, "REDIRECT: node without first_id parsed");
   CHECK(strcmp(name, "node:4001") == 0, "REDIRECT: name without first_id");
 
   /* REDIRECT: no trailing newline — still parses */
-  ok = dc_test_parse_redirect("node:4001", 9, name, sizeof(name));
-  CHECK(ok == 1, "REDIRECT: no trailing newline still parses");
+  ok = dc_test_parse_redirect("node:4001", 9, name);
+  CHECK(ok == 0, "REDIRECT: no trailing newline still parses");
   CHECK(strcmp(name, "node:4001") == 0,
         "REDIRECT: value correct without newline");
 

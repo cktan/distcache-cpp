@@ -660,26 +660,26 @@ int dc_get(const char *bucket, const char *key, void *ctx,
     pthread_mutex_lock(&g_dctab.mutex);
     if (!g_dctab.ring) {
       g_dctab.ring = ring_create();
-    }
-    if (g_dctab.ring) {
-      nodeid_idx_t idx = nodeid_register(redir_name);
-      if (!nodeid_valid(idx)) {
-        /* Release ring lock if addition fails */
+      if (!g_dctab.ring) {
+        /* Release ring lock if ring is empty */
         pthread_mutex_unlock(&g_dctab.mutex);
-        myerrno = DCERR_NOMEM;
-        snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
+        myerrno = DCERR_NO_NODE;
+        snprintf(myerrmsg, sizeof(myerrmsg), "ring empty after redirect");
         return -1;
       }
-      ring_add(g_dctab.ring, idx);
-      ring_finalize(g_dctab.ring);
     }
-    if (!g_dctab.ring) {
-      /* Release ring lock if ring is empty */
+    nodeid_idx_t nodeidx = nodeid_register(redir_name);
+    if (!nodeid_valid(nodeidx)) {
+      /* Release ring lock if addition fails */
       pthread_mutex_unlock(&g_dctab.mutex);
-      myerrno = DCERR_NO_NODE;
-      snprintf(myerrmsg, sizeof(myerrmsg), "ring empty after redirect");
+      myerrno = DCERR_NOMEM;
+      snprintf(myerrmsg, sizeof(myerrmsg), "out of memory adding node");
       return -1;
     }
+    ring_add(g_dctab.ring, nodeidx);
+    ring_finalize(g_dctab.ring);
+
+    // now look up dest using the new ring
     nid = ring_successor(g_dctab.ring, dest);
     if (!nodeid_valid(nid)) {
       /* Release ring lock if successor search fails */

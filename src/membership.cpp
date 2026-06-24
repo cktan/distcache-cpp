@@ -94,6 +94,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
   opts.seeds = seed_ptrs.data();
   opts.feed = node_.feed.raw();
 
+  // TODO: comment here
   inst_ = swim_start(host, port, cookie.c_str(), &opts);
   if (!inst_) {
     fprintf(stderr, "swim_start failed: %s\n", swim_errmsg());
@@ -102,6 +103,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
 
   rebuild_ring();
 
+  // TODO: comment on what this does
   node_.feed.start([this](std::vector<std::string> rec) {
     if (rec.empty())
       return;
@@ -135,6 +137,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
     fprintf(stderr, "%s\n", line.c_str());
   });
 
+  // TODO: comment on what the thread does
   claim_thread_ = std::thread([this, nodeid]() {
     srand(static_cast<unsigned>(time(nullptr)) ^
           static_cast<unsigned>(getpid()));

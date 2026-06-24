@@ -3,6 +3,8 @@
 #include <optional>
 #include <string>
 
+// Validated cache or tmp path; construction asserts the "cache/" or "tmp/"
+// prefix so callers cannot construct a relpath_t from an arbitrary string.
 class relpath_t {
   std::string val_;
 

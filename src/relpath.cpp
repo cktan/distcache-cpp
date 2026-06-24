@@ -1,5 +1,6 @@
 #include "relpath.h"
 
+// Return true if s is a non-empty path with no empty segments, ".", or "..".
 static bool valid_component(const std::string &s) {
   if (s.empty())
     return false;
@@ -21,6 +22,7 @@ static bool valid_component(const std::string &s) {
   return true;
 }
 
+// Validate bucket and key, then return "cache/bucket/key" as a relpath_t.
 std::optional<relpath_t> compute_relpath(const std::string &bucket,
                                          const std::string &key) {
   if (!valid_component(bucket))

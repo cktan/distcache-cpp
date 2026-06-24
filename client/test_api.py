@@ -23,6 +23,7 @@ from distcache import (
     DistCacheError,
     HealthResult,
     find_successor,
+    fetch_nodes,
     node_positions,
     dest_pos,
     DCERR_NOT_CACHED,
@@ -30,6 +31,7 @@ from distcache import (
     DCERR_NO_NODE,
     DCERR_REDIRECT_LOOP,
     DCERR_NETWORK,
+    DCERR_PROTOCOL,
     _POSITIONS_PER_NODE,
     _RING_SIZE,
 )
@@ -180,6 +182,66 @@ class TestRingAlgorithm(unittest.TestCase):
     def test_fnv1a_cross_verified(self):
         """Cross-verify with C client expected value: hash(0, "test") == 0x0eb0635b"""
         self.assertEqual(_fnv1a_mod(0, "test"), 0x0eb0635b)
+
+
+# ---------------------------------------------------------------------------
+# TestFetchNodes
+# ---------------------------------------------------------------------------
+
+class TestFetchNodes(unittest.TestCase):
+
+    def _make_conn(self, body: bytes, status: int = 200) -> MagicMock:
+        response = MagicMock(spec=http.client.HTTPResponse)
+        response.read.return_value = body
+        response.status = status
+        conn = MagicMock(spec=http.client.HTTPConnection)
+        conn.getresponse.return_value = response
+        return conn
+
+    def test_returns_node_list(self):
+        # Verify that a plain-text newline-separated body is parsed into
+        # a list of node strings.
+        # 1. Mock the connection to return two node names.
+        # 2. Call fetch_nodes.
+        # 3. Confirm both names appear in the result.
+        conn = self._make_conn(b"node1:4001\nnode2:4002\n")
+        with patch("http.client.HTTPConnection", return_value=conn):
+            result = fetch_nodes("node1:4001")
+        self.assertEqual(result, ["node1:4001", "node2:4002"])
+
+    def test_empty_body_returns_empty_list(self):
+        # Verify that an empty response body yields an empty list (no members yet).
+        # 1. Mock the connection to return an empty body.
+        # 2. Call fetch_nodes.
+        # 3. Confirm the result is an empty list.
+        conn = self._make_conn(b"")
+        with patch("http.client.HTTPConnection", return_value=conn):
+            result = fetch_nodes("node1:4001")
+        self.assertEqual(result, [])
+
+    def test_http_error_raises_protocol_error(self):
+        # Verify that a non-200 status raises DistCacheError with DCERR_PROTOCOL.
+        # 1. Mock the connection to return HTTP 500.
+        # 2. Call fetch_nodes.
+        # 3. Confirm DistCacheError is raised with code DCERR_PROTOCOL.
+        conn = self._make_conn(b"Internal Server Error", status=500)
+        with patch("http.client.HTTPConnection", return_value=conn):
+            with self.assertRaises(DistCacheError) as ctx:
+                fetch_nodes("node1:4001")
+        self.assertEqual(ctx.exception.code, DCERR_PROTOCOL)
+
+    def test_network_error_raises_dcerr_network(self):
+        # Verify that an OSError during the request raises DistCacheError
+        # with DCERR_NETWORK.
+        # 1. Mock the connection so request() raises OSError.
+        # 2. Call fetch_nodes.
+        # 3. Confirm DistCacheError is raised with code DCERR_NETWORK.
+        conn = MagicMock(spec=http.client.HTTPConnection)
+        conn.request.side_effect = OSError("connection refused")
+        with patch("http.client.HTTPConnection", return_value=conn):
+            with self.assertRaises(DistCacheError) as ctx:
+                fetch_nodes("node1:4001")
+        self.assertEqual(ctx.exception.code, DCERR_NETWORK)
 
 
 # ---------------------------------------------------------------------------

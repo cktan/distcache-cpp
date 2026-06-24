@@ -37,4 +37,5 @@ SWIMC_A  := $(HOME)/.local/lib/libswimc17.a
 
 $(SWIM_H) $(SWIMC_A):
 	@echo building and installing swimc17
-	(cd $(HOME)/p/swimc17 && DEBUG=0 make clean install prefix=$(HOME)/.local)
+	cd /tmp && git clone https://github.com/cktan/swimc17
+	(cd /tmp/swimc17 && DEBUG=0 make clean install prefix=$(HOME)/.local)

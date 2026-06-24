@@ -5,8 +5,15 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 LOGDIR=/tmp/test_env_s3copy
 PORT=7777
 
+if ! command -v ss >/dev/null 2>&1; then
+    echo "ERROR: 'ss' (iproute2) is required but not installed" >&2
+    echo "  Install with: apt-get install iproute2  (Debian/Ubuntu)" >&2
+    echo "                yum install iproute        (RHEL/CentOS)" >&2
+    exit 1
+fi
+
 port_open() {
-    lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1
+    ss -tlnp 2>/dev/null | grep -q ":${PORT} "
 }
 
 # kill any active s3copy

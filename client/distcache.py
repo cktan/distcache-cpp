@@ -625,19 +625,18 @@ def fetch_nodes(nodeid: str) -> list[str]:
     try:
         conn.request("GET", "/_nodes")
         response = conn.getresponse()
-        result   = _ChunkReader(response).read_response()
-    except (OSError, http.client.HTTPException, EOFError) as exc:
+        body     = response.read().decode("ascii")
+        status   = response.status
+    except (OSError, http.client.HTTPException) as exc:
         raise DistCacheError(str(exc), DCERR_NETWORK) from exc
     finally:
         try:
             conn.close()
         except Exception:
             pass
-    if result.get("status") == "error":
-        raise DistCacheError(
-            result.get("message", "/_nodes error"), DCERR_PROTOCOL
-        )
-    return result.get("_list", [])
+    if status != 200:
+        raise DistCacheError(f"/_nodes returned HTTP {status}", DCERR_PROTOCOL)
+    return [line for line in body.splitlines() if line]
 
 
 # ---------------------------------------------------------------------------

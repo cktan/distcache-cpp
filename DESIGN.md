@@ -48,7 +48,7 @@ extra coordination.
 **Startup sequence:**
 
 1. Parse flags (order-independent).
-2. Call `nodeid_register(addr_str)` to get `nodeid_idx_t nid`.
+2. Call `nodeid_register(mynodeid)` to get `nodeid_idx_t nid`.
    Construct `node_t node(homedir, nid)`.
    Set `node.seeds`.
 3. `mkdir -p homedir/log` (needed before logger opens

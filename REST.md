@@ -1,6 +1,6 @@
 # DistCache HTTP API
 
-All endpoints listen on the address given to `-N host:port[/first_id]`.
+All endpoints listen on the address given to `-N host:port[/first_pos]`.
 
 ---
 
@@ -22,7 +22,7 @@ Frame types emitted by the server:
 | Type       | Payload                                       |
 |------------|-----------------------------------------------|
 | `DATA`     | raw file bytes (one frame per chunk)          |
-| `REDIRECT` | plain text: `host:port[/first_id]\n`          |
+| `REDIRECT` | plain text: `host:port[/first_pos]\n`          |
 | `ERROR`    | plain text: two lines — `type\nmessage\n`     |
 | `FIN`      | empty (LEN=0); marks end of response          |
 
@@ -106,7 +106,7 @@ node2:4002/789
 ```
 
 Newline-separated node IDs including self. Each ID is
-`host:port`, optionally suffixed with `/first_id`; clients
+`host:port`, optionally suffixed with `/first_pos`; clients
 use the suffix to place the node on the consistent-hash ring
 at the correct position.
 
@@ -130,7 +130,7 @@ components; `key` may contain `/`.
 - **Cache hit on this node** — one or more `DATA` frames
   containing the raw file bytes, terminated by `FIN`.
 - **Key owned by another node** — `REDIRECT` frame whose
-  payload is plain text `host:port[/first_id]\n`
+  payload is plain text `host:port[/first_pos]\n`
   identifying the responsible node. Followed by `FIN`.
 - **Error** — `ERROR` frame followed by `FIN`.
 
@@ -186,7 +186,7 @@ Called by the rebalancer during node join.
 **Request body** (JSON):
 
 ```json
-{"nodeid": "host:port[/first_id]"}
+{"nodeid": "host:port[/first_pos]"}
 ```
 
 **Responses:**
@@ -225,8 +225,8 @@ current time.
 
 ## Node IDs
 
-A node ID has the form `host:port` or `host:port/first_id`.
-`first_id` is an optional 32-bit decimal integer that pins
+A node ID has the form `host:port` or `host:port/first_pos`.
+`first_pos` is an optional 32-bit decimal integer that pins
 the node's first ring position; subsequent positions are
 derived via chained FNV-1a hashes. When absent, all 10 ring
 positions are computed from the address string.

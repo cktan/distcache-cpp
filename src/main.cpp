@@ -38,19 +38,19 @@ static void usage(const char *prog) {
           prog);
 }
 
-// Parse argc/argv; populate homedir, addr_str, and seeds.
+// Parse argc/argv; populate homedir, mynodeid, and seeds.
 // Returns false if required flags (-D, -N) are missing or an unknown
 // flag is encountered. Returns true with empty homedir on --version.
 static bool parse_arg(int argc, char **argv, std::string &homedir,
-                      std::string &addr_str, std::vector<std::string> &seeds) {
+                      std::string &mynodeid, std::vector<std::string> &seeds) {
   homedir = "";
-  addr_str = "";
+  mynodeid = "";
   seeds.clear();
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "-D") == 0 && i + 1 < argc) {
       homedir = argv[++i];
     } else if (strcmp(argv[i], "-N") == 0 && i + 1 < argc) {
-      addr_str = argv[++i];
+      mynodeid = argv[++i];
     } else if (strcmp(argv[i], "-p") == 0 && i + 1 < argc) {
       seeds.push_back(argv[++i]);
     } else if (strcmp(argv[i], "--version") == 0) {
@@ -61,7 +61,7 @@ static bool parse_arg(int argc, char **argv, std::string &homedir,
       return false;
     }
   }
-  if (homedir.empty() || addr_str.empty()) {
+  if (homedir.empty() || mynodeid.empty()) {
     return false;
   }
   return true;
@@ -69,19 +69,19 @@ static bool parse_arg(int argc, char **argv, std::string &homedir,
 
 int main(int argc, char **argv) {
   std::string homedir;
-  std::string addr_str;
+  std::string mynodeid;
   std::vector<std::string> seeds;
   std::error_code ec;
 
-  if (!parse_arg(argc, argv, homedir, addr_str, seeds)) {
+  if (!parse_arg(argc, argv, homedir, mynodeid, seeds)) {
     usage(argv[0]);
     return 1;
   }
 
-  nodeid_idx_t nid = nodeid_register(addr_str.c_str());
+  nodeid_idx_t nid = nodeid_register(mynodeid.c_str());
   if (!nodeid_valid(nid)) {
     fprintf(stderr, "Error: nodeid pool full, cannot register %s\n",
-            addr_str.c_str());
+            mynodeid.c_str());
     return 1;
   }
   node_t node(homedir, nid);
@@ -125,7 +125,7 @@ int main(int argc, char **argv) {
   }
 
   spdlog::info("distcache {} starting on {} homedir={}", DISTCACHE_VERSION,
-               addr_str, homedir);
+               mynodeid, homedir);
 
   // Starting here, write logs to file only
   spdlog::set_default_logger(file_logger);

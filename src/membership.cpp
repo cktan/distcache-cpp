@@ -14,16 +14,25 @@ membership_t::membership_t(node_t &n) : node_(n) {}
 
 // Rebuild consistent hash ring from live SWIM peers and injected nodes;
 // atomically replaces node_.ring.
+// 1. Bail early if SWIM is not running.
+// 2. Fetch the live peer list from SWIM (excludes dead nodes).
+// 3. Allocate a fresh ring and add self.
+// 4. Add each live SWIM peer to the ring.
+// 5. Add any injected nodes (e.g. test or forced members).
+// 6. Finalise the ring and atomically publish it.
 void membership_t::rebuild_ring() {
+  // 1. Bail early if SWIM is not running.
   std::lock_guard<std::mutex> lk(ring_mu_);
   if (!inst_)
     return;
 
+  // 2. Fetch the live peer list from SWIM (excludes dead nodes).
   char *peerlist = nullptr;
   int npeers = swim_peers(inst_, /*include_dead=*/false, &peerlist);
   if (npeers < 0)
     return;
 
+  // 3. Allocate a fresh ring and add self.
   ring_t *r = ring_create();
   if (!r) {
     free(peerlist);
@@ -32,6 +41,7 @@ void membership_t::rebuild_ring() {
 
   ring_add(r, node_.nodeid);
 
+  // 4. Add each live SWIM peer to the ring.
   if (npeers > 0) {
     const char *p = peerlist;
     for (int i = 0; i < npeers; i++) {
@@ -41,12 +51,14 @@ void membership_t::rebuild_ring() {
   }
   free(peerlist);
 
+  // 5. Add any injected nodes (e.g. test or forced members).
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
     for (const auto &node : injected_)
       ring_add(r, nodeid_register(node.c_str()));
   }
 
+  // 6. Finalise the ring and atomically publish it.
   ring_finalize(r);
   auto new_ring = std::shared_ptr<ring_t>(r, ring_destroy);
   node_.ring.store(new_ring);
@@ -94,7 +106,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
   opts.seeds = seed_ptrs.data();
   opts.feed = node_.feed.raw();
 
-  // TODO: comment here
+  // Start SWIM protocol; inst_ becomes the live handle for all peer queries.
   inst_ = swim_start(host, port, cookie.c_str(), &opts);
   if (!inst_) {
     fprintf(stderr, "swim_start failed: %s\n", swim_errmsg());
@@ -103,13 +115,14 @@ bool membership_t::start(nodeid_idx_t nodeid,
 
   rebuild_ring();
 
-  // TODO: comment on what this does
+  // Subscribe to SWIM events: rebuild the ring on node up/down, log warnings.
   node_.feed.start([this](std::vector<std::string> rec) {
     if (rec.empty())
       return;
 
     const std::string &type = rec[0];
 
+    // On node up/down: evict from injected_ if dead, then rebuild the ring.
     if (type == "node" && rec.size() >= 3) {
       const std::string &verb = rec[1];
       const std::string &peer = rec[2];
@@ -129,6 +142,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
       return;
     }
 
+    // Unknown event type: log all fields as a space-separated line.
     std::string line = timestamp();
     for (const auto &field : rec) {
       line += " ";
@@ -137,7 +151,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
     fprintf(stderr, "%s\n", line.c_str());
   });
 
-  // TODO: comment on what the thread does
+  // Delay claim sweep so the ring can stabilise before rebalancing keys.
   claim_thread_ = std::thread([this, nodeid]() {
     srand(static_cast<unsigned>(time(nullptr)) ^
           static_cast<unsigned>(getpid()));
@@ -175,6 +189,7 @@ void membership_t::leave() {
   if (claim_thread_.joinable())
     claim_thread_.join();
 
+  // Clear inst_ under lock, then call swim_leave outside to avoid deadlock.
   swim_t *tmp = nullptr;
   {
     std::lock_guard<std::mutex> lk(ring_mu_);
@@ -194,6 +209,7 @@ void membership_t::hint_alive(const std::string &peer_addr) {
 
 // Return addresses of all SWIM-alive peers (excludes self).
 std::vector<std::string> membership_t::alive_peers() {
+  // Snapshot inst_ under lock so we don't hold it during the SWIM call.
   swim_t *inst = nullptr;
   {
     std::lock_guard<std::mutex> lk(ring_mu_);
@@ -202,6 +218,7 @@ std::vector<std::string> membership_t::alive_peers() {
   if (!inst)
     return {};
 
+  // Query SWIM for live peers.
   char *buf = nullptr;
   int n = swim_peers(inst, false, &buf);
   if (n <= 0) {
@@ -209,6 +226,7 @@ std::vector<std::string> membership_t::alive_peers() {
     return {};
   }
 
+  // Parse the peer list into host:port strings.
   std::vector<std::string> result;
   result.reserve(n);
   const char *p = buf;
@@ -230,6 +248,7 @@ std::vector<std::string> membership_t::alive_peers() {
 // Return raw nodeids of all known peers including self, preserving cookie
 // suffixes.
 std::vector<std::string> membership_t::raw_peers() {
+  // Snapshot inst_ and seed result with self under lock.
   swim_t *inst = nullptr;
   std::vector<std::string> result;
   {
@@ -244,6 +263,7 @@ std::vector<std::string> membership_t::raw_peers() {
   if (!inst)
     return result;
 
+  // Query SWIM for live peers and append their raw nodeids.
   char *buf = nullptr;
   int n = swim_peers(inst, false, &buf);
   if (n > 0) {

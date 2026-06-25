@@ -4,7 +4,7 @@ DOCTEST_H := $(HOME)/.local/include/doctest.h
 
 $(DOCTEST_H):
 	@echo copying doctest.h to ~/.local/include
-	cd /tmp && git clone https://github.com/doctest/doctest.git
+	cd /tmp && rm -rf doctest && git clone https://github.com/doctest/doctest.git
 	mkdir -p $(dir $@)
 	cp /tmp/doctest/doctest/doctest.h $@
 
@@ -12,7 +12,7 @@ HTTPLIB_H := $(HOME)/.local/include/httplib.h
 
 $(HTTPLIB_H):
 	@echo copying httplib.h to ~/.local/include
-	cd /tmp && git clone https://github.com/yhirose/cpp-httplib.git
+	cd /tmp && rm -rf cpp-httplib && git clone https://github.com/yhirose/cpp-httplib.git
 	mkdir -p $(dir $@)
 	cp /tmp/cpp-httplib/httplib.h $@
 
@@ -20,7 +20,7 @@ SPDLOG_H := $(HOME)/.local/include/spdlog/spdlog.h
 
 $(SPDLOG_H):
 	@echo copying spdlog headers to ~/.local/include
-	cd /tmp && git clone https://github.com/gabime/spdlog.git
+	cd /tmp && rm -rf spdlog && git clone https://github.com/gabime/spdlog.git
 	mkdir -p $(HOME)/.local/include
 	cp -r /tmp/spdlog/include/spdlog $(HOME)/.local/include/
 
@@ -28,7 +28,7 @@ JSMN_H := $(HOME)/.local/include/jsmn.h
 
 $(JSMN_H):
 	@echo copying jsmn.h to ~/.local/include
-	cd /tmp && git clone https://github.com/zserge/jsmn.git
+	cd /tmp && rm -rf jsmn && git clone https://github.com/zserge/jsmn.git
 	mkdir -p $(dir $@)
 	cp /tmp/jsmn/jsmn.h $@
 
@@ -37,5 +37,5 @@ SWIMC_A  := $(HOME)/.local/lib/libswimc17.a
 
 $(SWIM_H) $(SWIMC_A):
 	@echo building and installing swimc17
-	cd /tmp && git clone https://github.com/cktan/swimc17
+	cd /tmp && rm -rf swimc17 && git clone https://github.com/cktan/swimc17
 	(cd /tmp/swimc17 && DEBUG=0 make clean install prefix=$(HOME)/.local)

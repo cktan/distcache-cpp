@@ -39,8 +39,6 @@ def get_s3_client(region):
 
 @app.route("/copy", methods=["POST"])
 def copy():
-    from botocore.exceptions import ClientError
-
     data = request.get_json()
     if not data:
         return jsonify({"ok": False, "errtype": "error", "errmsg": "missing request body"}), 400
@@ -67,6 +65,7 @@ def copy():
         logging.info(f"fake: served {bucket}/{key} → {dest}")
         return jsonify({"ok": True})
 
+    from botocore.exceptions import ClientError
     client = get_s3_client(data.get("region"))
 
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)

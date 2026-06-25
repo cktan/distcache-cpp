@@ -82,12 +82,6 @@ void ring_add(ring_t *r, nodeid_idx_t node) {
   /* Insert 1 entry in distinct[] */
   ring_entryvec_append(&r->distinct, positions[0], node);
 
-  /* Insert into bloom filter */
-  if (r->distinct.top == 1) {
-    nodeid_bloom_init(&r->bloom);
-  }
-  nodeid_bloom_add(&r->bloom, node_str);
-
   r->dirty = 1;
 }
 

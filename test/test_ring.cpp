@@ -35,7 +35,7 @@ TEST_CASE("compute_pos matches Elixir") {
 
 TEST_CASE("ring successor: single node always returns that node") {
   ring_t *r = ring_create();
-  nodeid_idx_t node = nodeid_register("only");
+  nodeid_idx_t node = nodeid_find("only");
   ring_add(r, node);
   ring_finalize(r);
   for (uint32_t t : {0U, 1000U, 0x7FFFFFFFU, 0xFFFFFFFFU})
@@ -46,8 +46,8 @@ TEST_CASE("ring successor: single node always returns that node") {
 
 TEST_CASE("ring successor: two nodes split keyspace") {
   ring_t *r = ring_create();
-  nodeid_idx_t node_a = nodeid_register("A");
-  nodeid_idx_t node_b = nodeid_register("B");
+  nodeid_idx_t node_a = nodeid_find("A");
+  nodeid_idx_t node_b = nodeid_find("B");
   ring_add(r, node_a);
   ring_add(r, node_b);
   ring_finalize(r);
@@ -65,8 +65,8 @@ TEST_CASE("ring successor: wrap-around at max pos") {
   const uint32_t x_positions[] = {100, 300, 600};
   const uint32_t y_positions[] = {200, 500, 900};
   ring_t *r = ring_create();
-  nodeid_idx_t node_x = nodeid_register("X");
-  nodeid_idx_t node_y = nodeid_register("Y");
+  nodeid_idx_t node_x = nodeid_find("X");
+  nodeid_idx_t node_y = nodeid_find("Y");
   ring_add_ex(r, node_x, x_positions, 3);
   ring_add_ex(r, node_y, y_positions, 3);
   ring_finalize(r);
@@ -81,8 +81,8 @@ TEST_CASE("ring successor: wrap-around at max pos") {
 TEST_CASE("ring build: collision resolved by smaller name") {
   const uint32_t positions[] = {500};
   ring_t *r = ring_create();
-  nodeid_idx_t node_alpha = nodeid_register("alpha");
-  nodeid_idx_t node_beta = nodeid_register("beta");
+  nodeid_idx_t node_alpha = nodeid_find("alpha");
+  nodeid_idx_t node_beta = nodeid_find("beta");
   ring_add_ex(r, node_alpha, positions, 1);
   ring_add_ex(r, node_beta, positions, 1);
   ring_finalize(r);
@@ -102,7 +102,7 @@ TEST_CASE("first_pos override changes positions[0] but not chain formula") {
 }
 
 TEST_CASE("nodeid_split: registers and splits different formats") {
-  nodeid_idx_t idx1 = nodeid_register("127.0.0.1:4001");
+  nodeid_idx_t idx1 = nodeid_find("127.0.0.1:4001");
   REQUIRE(nodeid_valid(idx1));
 
   char host[254];
@@ -115,7 +115,7 @@ TEST_CASE("nodeid_split: registers and splits different formats") {
   CHECK(port == 4001);
   CHECK(first_pos == 0);
 
-  nodeid_idx_t idx2 = nodeid_register("192.168.0.1:8080/12345");
+  nodeid_idx_t idx2 = nodeid_find("192.168.0.1:8080/12345");
   REQUIRE(nodeid_valid(idx2));
 
   rc = nodeid_split(idx2, host, &port, &first_pos);
@@ -161,9 +161,9 @@ TEST_CASE("ring_entryvec_append: handles capacity growth") {
 
 TEST_CASE("distinct: one entry per physical node after finalize") {
   ring_t *r = ring_create();
-  nodeid_idx_t a = nodeid_register("a");
-  nodeid_idx_t b = nodeid_register("b");
-  nodeid_idx_t c = nodeid_register("c");
+  nodeid_idx_t a = nodeid_find("a");
+  nodeid_idx_t b = nodeid_find("b");
+  nodeid_idx_t c = nodeid_find("c");
   ring_add(r, a);
   ring_add(r, b);
   ring_add(r, c);
@@ -177,9 +177,9 @@ TEST_CASE("distinct: one entry per physical node after finalize") {
 
 TEST_CASE("distinct: sorted ascending by nodeidx.v") {
   ring_t *r = ring_create();
-  nodeid_idx_t x = nodeid_register("x");
-  nodeid_idx_t y = nodeid_register("y");
-  nodeid_idx_t z = nodeid_register("z");
+  nodeid_idx_t x = nodeid_find("x");
+  nodeid_idx_t y = nodeid_find("y");
+  nodeid_idx_t z = nodeid_find("z");
   ring_add(r, x);
   ring_add(r, y);
   ring_add(r, z);
@@ -193,7 +193,7 @@ TEST_CASE("distinct: sorted ascending by nodeidx.v") {
 
 TEST_CASE("distinct: single node produces one distinct entry") {
   ring_t *r = ring_create();
-  nodeid_idx_t n = nodeid_register("solo");
+  nodeid_idx_t n = nodeid_find("solo");
   ring_add(r, n);
   ring_finalize(r);
   CHECK(r->distinct.top == 1);
@@ -211,8 +211,8 @@ TEST_CASE("ring_node_count: zero for empty ring") {
 
 TEST_CASE("bloom from distinct: registered nodes test positive") {
   ring_t *r = ring_create();
-  nodeid_idx_t p = nodeid_register("peer1");
-  nodeid_idx_t q = nodeid_register("peer2");
+  nodeid_idx_t p = nodeid_find("peer1");
+  nodeid_idx_t q = nodeid_find("peer2");
   ring_add(r, p);
   ring_add(r, q);
   ring_finalize(r);
@@ -224,7 +224,7 @@ TEST_CASE("bloom from distinct: registered nodes test positive") {
 
 TEST_CASE("bloom from distinct: absent node tests negative") {
   ring_t *r = ring_create();
-  nodeid_idx_t p = nodeid_register("present");
+  nodeid_idx_t p = nodeid_find("present");
   ring_add(r, p);
   ring_finalize(r);
   CHECK(nodeid_bloom_test(&r->bloom, "present") != 0);
@@ -244,7 +244,7 @@ TEST_CASE("ring_select: empty ring returns 0") {
 
 TEST_CASE("ring_select: single node ring returns 1") {
   ring_t *r = ring_create();
-  nodeid_idx_t n = nodeid_register("solo");
+  nodeid_idx_t n = nodeid_find("solo");
   ring_add(r, n);
   ring_finalize(r);
   int picks[3];
@@ -265,11 +265,11 @@ TEST_CASE(
     "ring_select: multi-node ring returns correct number of distinct nodes") {
   ring_t *r = ring_create();
   nodeid_idx_t nodes[5];
-  nodes[0] = nodeid_register("node0");
-  nodes[1] = nodeid_register("node1");
-  nodes[2] = nodeid_register("node2");
-  nodes[3] = nodeid_register("node3");
-  nodes[4] = nodeid_register("node4");
+  nodes[0] = nodeid_find("node0");
+  nodes[1] = nodeid_find("node1");
+  nodes[2] = nodeid_find("node2");
+  nodes[3] = nodeid_find("node3");
+  nodes[4] = nodeid_find("node4");
 
   for (int i = 0; i < 5; i++) {
     ring_add(r, nodes[i]);
@@ -310,7 +310,7 @@ TEST_CASE(
 
 TEST_CASE("ring_add: duplicates are ignored") {
   ring_t *r = ring_create();
-  nodeid_idx_t node = nodeid_register("duplicate_node");
+  nodeid_idx_t node = nodeid_find("duplicate_node");
   ring_add(r, node);
   ring_add(r, node); // duplicate add
   ring_finalize(r);

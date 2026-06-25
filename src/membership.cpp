@@ -45,7 +45,7 @@ void membership_t::rebuild_ring() {
   if (npeers > 0) {
     const char *p = peerlist;
     for (int i = 0; i < npeers; i++) {
-      ring_add(r, nodeid_register(p));
+      ring_add(r, nodeid_find(p));
       p += strlen(p) + 1;
     }
   }
@@ -55,7 +55,7 @@ void membership_t::rebuild_ring() {
   {
     std::lock_guard<std::mutex> lk(injected_mtx_);
     for (const auto &node : injected_)
-      ring_add(r, nodeid_register(node.c_str()));
+      ring_add(r, nodeid_find(node.c_str()));
   }
 
   // 6. Finalise the ring and atomically publish it.
@@ -231,7 +231,7 @@ std::vector<std::string> membership_t::alive_peers() {
   result.reserve(n);
   const char *p = buf;
   for (int i = 0; i < n; i++) {
-    nodeid_idx_t idx = nodeid_register(p);
+    nodeid_idx_t idx = nodeid_find(p);
     if (nodeid_valid(idx)) {
       char host[254];
       int port = 0;

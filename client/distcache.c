@@ -420,7 +420,7 @@ static int do_get_streaming(nodeid_idx_t nodeid, const char *path, void *ctx,
       memcpy(redir_name, st.redir_name, rn_len);
       redir_name[rn_len] = '\0';
 
-      nodeid_idx_t nodeidx = nodeid_register(redir_name);
+      nodeid_idx_t nodeidx = nodeid_find(redir_name);
       if (!nodeid_valid(nodeidx)) {
         myerrno = DCERR_NOMEM;
         snprintf(myerrmsg, sizeof(myerrmsg),
@@ -565,7 +565,7 @@ int dc_housekeeping(void) {
         if (nl)
           *nl = '\0';
         if (*p) {
-          nodeid_idx_t idx = nodeid_register(p);
+          nodeid_idx_t idx = nodeid_find(p);
           if (nodeid_valid(idx))
             ring_add(r, idx);
         }
@@ -612,7 +612,7 @@ int dc_init(int n, const char *const *node) {
   /* Register each seed node name, collecting stable indices */
   nodeid_idx_t indices[DC_MAX_SEED_NODES];
   for (int i = 0; i < n; i++) {
-    indices[i] = nodeid_register(node[i]);
+    indices[i] = nodeid_find(node[i]);
     if (!nodeid_valid(indices[i])) {
       myerrno = DCERR_NOMEM;
       snprintf(myerrmsg, sizeof(myerrmsg), "out of memory");

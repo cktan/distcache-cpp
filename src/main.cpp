@@ -78,7 +78,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  nodeid_idx_t nid = nodeid_register(mynodeid.c_str());
+  nodeid_idx_t nid = nodeid_find(mynodeid.c_str());
   if (!nodeid_valid(nid)) {
     fprintf(stderr, "Error: nodeid pool full, cannot register %s\n",
             mynodeid.c_str());

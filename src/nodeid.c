@@ -40,22 +40,8 @@ static inline uint16_t next_slot(uint16_t slot) {
   return (uint16_t)((slot + 1) & (NODEID_TABLE_SIZE - 1));
 }
 
-/* Find existing nodeid without registering; lock-free. */
-nodeid_idx_t nodeid_find(const char *nodeid) {
-  uint16_t slot = hash_slot(nodeid_hash(nodeid));
-  for (uint16_t i = 0; i < NODEID_TABLE_SIZE; i++) {
-    char *p = atomic_load_explicit(&g_table[slot], memory_order_acquire);
-    if (!p)
-      return NODEID_NONE;
-    if (strcmp(p, nodeid) == 0)
-      return (nodeid_idx_t){slot};
-    slot = next_slot(slot);
-  }
-  return NODEID_NONE;
-}
-
 /* Register nodeid; idempotent. Returns NODEID_NONE if pool is full. */
-nodeid_idx_t nodeid_register(const char *nodeid) {
+static nodeid_idx_t nodeid_register(const char *nodeid) {
   pthread_mutex_lock(&g_mu); /* acquire registration lock */
   if (atomic_load_explicit(&g_count, memory_order_relaxed) >= NODEID_POOL_MAX) {
     goto none;
@@ -83,6 +69,20 @@ nodeid_idx_t nodeid_register(const char *nodeid) {
 none:
   pthread_mutex_unlock(&g_mu); /* release registration lock */
   return NODEID_NONE;
+}
+
+/* Find or register a nodeid; registers on miss. */
+nodeid_idx_t nodeid_find(const char *nodeid) {
+  uint16_t slot = hash_slot(nodeid_hash(nodeid));
+  for (uint16_t i = 0; i < NODEID_TABLE_SIZE; i++) {
+    char *p = atomic_load_explicit(&g_table[slot], memory_order_acquire);
+    if (!p)
+      return nodeid_register(nodeid);
+    if (strcmp(p, nodeid) == 0)
+      return (nodeid_idx_t){slot};
+    slot = next_slot(slot);
+  }
+  return nodeid_register(nodeid);
 }
 
 /* Return nodeid string for idx; lock-free. */

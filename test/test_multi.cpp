@@ -188,7 +188,7 @@ struct ClusterFixture {
     for (int i = from; i < to; i++) {
       std::string hd = "/tmp/dc_qa_" + std::to_string(i);
       std::string addr = "127.0.0.1:" + std::to_string(4000 + i);
-      nodes[i] = std::make_unique<node_t>(hd, nodeid_register(addr.c_str()));
+      nodes[i] = std::make_unique<node_t>(hd, nodeid_find(addr.c_str()));
       if (i > 0)
         nodes[i]->seeds = {"127.0.0.1:4000"};
       nodes[i]->start();

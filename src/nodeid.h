@@ -27,13 +27,10 @@ static inline int nodeid_eq(nodeid_idx_t a, nodeid_idx_t b) {
   return a.v == b.v;
 }
 
-/* Register nodeid; idempotent. Returns NODEID_NONE if pool is full. */
-nodeid_idx_t nodeid_register(const char *nodeid);
-
 /* Return the nodeid string for idx, or NULL if idx is invalid. */
 const char *nodeid_lookup(nodeid_idx_t idx);
 
-/* Find existing nodeid without registering. Returns NODEID_NONE if absent. */
+/* Find or register a nodeid. Returns NODEID_NONE if pool is full. */
 nodeid_idx_t nodeid_find(const char *nodeid);
 
 /* Free all registered nodeids and destroy the pool mutex. Call at shutdown. */

@@ -120,7 +120,7 @@ void rebalancer_t::start() {
     // behalf and hint_pulls each one.
     if (type == "claim_scan" && rec.size() >= 2) {
       const std::string &nodeid = rec[1];
-      nodeid_idx_t idx = nodeid_register(nodeid.c_str());
+      nodeid_idx_t idx = nodeid_find(nodeid.c_str());
       node_.membership.inject_node(nodeid);
       char host[254];
       int port = 0;

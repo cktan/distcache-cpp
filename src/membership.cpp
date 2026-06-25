@@ -91,9 +91,9 @@ bool membership_t::start(nodeid_idx_t nodeid,
             nodeid_str ? nodeid_str : "(null)");
     return false;
   }
-  uint16_t port = static_cast<uint16_t>(port_val);
-
-  std::string cookie = fid_val ? std::to_string(fid_val) : "";
+  std::string mynodeid = std::string(host) + ":" + std::to_string(port_val);
+  if (fid_val)
+    mynodeid += "/" + std::to_string(fid_val);
 
   std::vector<const char *> seed_ptrs;
   for (const auto &s : seeds)
@@ -107,7 +107,7 @@ bool membership_t::start(nodeid_idx_t nodeid,
   opts.feed = node_.feed.raw();
 
   // Start SWIM protocol; inst_ becomes the live handle for all peer queries.
-  inst_ = swim_start(host, port, cookie.c_str(), &opts);
+  inst_ = swim_start(mynodeid.c_str(), &opts);
   if (!inst_) {
     fprintf(stderr, "swim_start failed: %s\n", swim_errmsg());
     return false;

@@ -1,3 +1,7 @@
+## Before Starting Any Work
+
+Read `DESIGN.md` before working on this project.
+
 ## C++/C Coding Style
 
 - use snake_case for names

@@ -22,15 +22,15 @@
 //   where first_pos is the custom placement ID on the Chord ring.
 //
 // Pre-convergence Injection:
-//   inject_node() appends a nodeid to the injected_ vector and triggers an
+//   inject_node() appends a nodeid to the m_injected_ vector and triggers an
 //   immediate ring rebuild. On a SWIM "down" event the entry is erased.
 //   This lets the ring reflect a joining node before SWIM has converged.
 //
 // Thread Safety & Concurrency:
 //   Rebuilding the ring publishes the new ring to node_.ring, which is an
 //   atomic pointer wrapper allowing lock-free reads on the routing path.
-//   ring_mu_ serializes rebuild_ring() calls; injected_mtx_ protects
-//   the injected_ vector.
+//   m_ring_mu_ serializes rebuild_ring() calls; m_injected_mtx_ protects
+//   the m_injected_ vector.
 
 #include "nodeid.h"
 #include <atomic>
@@ -60,14 +60,14 @@ public:
   static std::string timestamp();
 
 private:
-  node_t &node_;
-  swim_t *inst_ = nullptr;
-  std::mutex ring_mu_;
-  std::mutex injected_mtx_;
-  std::vector<std::string> injected_;
+  node_t &m_node_;
+  swim_t *m_inst_ = nullptr;
+  std::mutex m_ring_mu_;
+  std::mutex m_injected_mtx_;
+  std::vector<std::string> m_injected_;
 
-  std::mutex claim_mu_;
-  std::condition_variable claim_cv_;
-  std::atomic<bool> stopping_{false};
-  std::thread claim_thread_;
+  std::mutex m_claim_mu_;
+  std::condition_variable m_claim_cv_;
+  std::atomic<bool> m_stopping_{false};
+  std::thread m_claim_thread_;
 };

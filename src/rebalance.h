@@ -37,5 +37,5 @@ public:
                            int &port, uint32_t &first_pos);
 
 private:
-  node_t &node_; // owning node; provides ring, LRU, and peer connections
+  node_t &m_node_; // owning node; provides ring, LRU, and peer connections
 };

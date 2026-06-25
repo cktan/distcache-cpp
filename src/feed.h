@@ -32,14 +32,14 @@ public:
 
   // Enqueue a record with 1..SWIM_FEED_MAX_ELEMENTS const char* args.
   template <typename... Args> bool put(Args &&...args) {
-    return swim_feed_put(feed_, static_cast<int>(sizeof...(args)),
+    return swim_feed_put(m_feed_, static_cast<int>(sizeof...(args)),
                          std::forward<Args>(args)...) == 0;
   }
 
-  swim_feed_t *raw() { return feed_; }
+  swim_feed_t *raw() { return m_feed_; }
 
 private:
-  swim_feed_t *feed_ = nullptr;
-  std::thread thread_;
-  std::atomic<bool> running_ = false;
+  swim_feed_t *m_feed_ = nullptr;
+  std::thread m_thread_;
+  std::atomic<bool> m_running_ = false;
 };

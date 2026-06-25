@@ -1,24 +1,24 @@
 #include "keylock.h"
 
 auto keylock_t::alloc_entry() -> std::shared_ptr<Entry> {
-  if (freelist_.empty()) {
+  if (m_freelist_.empty()) {
     for (int i = 0; i < 8; i++)
-      freelist_.push_back(std::make_shared<Entry>());
+      m_freelist_.push_back(std::make_shared<Entry>());
   }
-  auto e = std::move(freelist_.back());
-  freelist_.pop_back();
+  auto e = std::move(m_freelist_.back());
+  m_freelist_.pop_back();
   return e;
 }
 
 void keylock_t::acquire(const std::string &relpath) {
   std::shared_ptr<Entry> e;
   {
-    std::lock_guard<std::mutex> map_lock(map_mtx_);
-    auto &slot = map_.try_emplace(relpath, nullptr).first->second;
+    std::lock_guard<std::mutex> map_lock(m_map_mtx_);
+    auto &slot = m_map_.try_emplace(relpath, nullptr).first->second;
     if (!slot)
       slot = alloc_entry();
     e = slot;
-    // Increment refs before dropping map_mtx_ so release() cannot erase the
+    // Increment refs before dropping m_map_mtx_ so release() cannot erase the
     // entry while we are still waiting on the cv.
     e->refs++;
   }
@@ -31,10 +31,10 @@ void keylock_t::acquire(const std::string &relpath) {
 }
 
 bool keylock_t::try_acquire(const std::string &relpath) {
-  // Hold map_mtx_ for the entire check-and-set to prevent a concurrent
+  // Hold m_map_mtx_ for the entire check-and-set to prevent a concurrent
   // acquire() from racing between try_emplace and the locked check.
-  std::lock_guard<std::mutex> map_lock(map_mtx_);
-  auto &slot = map_.try_emplace(relpath, nullptr).first->second;
+  std::lock_guard<std::mutex> map_lock(m_map_mtx_);
+  auto &slot = m_map_.try_emplace(relpath, nullptr).first->second;
   if (!slot) {
     slot = alloc_entry();
   }
@@ -48,9 +48,9 @@ bool keylock_t::try_acquire(const std::string &relpath) {
 }
 
 void keylock_t::release(const std::string &relpath) {
-  std::lock_guard<std::mutex> map_lock(map_mtx_);
-  auto it = map_.find(relpath);
-  if (it == map_.end())
+  std::lock_guard<std::mutex> map_lock(m_map_mtx_);
+  auto it = m_map_.find(relpath);
+  if (it == m_map_.end())
     return;
   auto e = it->second;
   {
@@ -62,7 +62,7 @@ void keylock_t::release(const std::string &relpath) {
   e->cv.notify_one();
   // When refs hits 0: locked=false and refs=0, entry is clean for reuse.
   if (--e->refs == 0) {
-    map_.erase(it);
-    freelist_.push_back(std::move(e));
+    m_map_.erase(it);
+    m_freelist_.push_back(std::move(e));
   }
 }

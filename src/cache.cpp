@@ -71,15 +71,15 @@ static rc_t errno_to_rc(const std::string &msg) {
 
 // Initialize cache rooted at homedir; keylock is shared with the lru.
 cache_t::cache_t(keylock_t &keylock, std::string homedir)
-    : homedir_(std::move(homedir)),
-      lru_(
+    : m_homedir_(std::move(homedir)),
+      m_lru_(
           keylock,
           [](const std::string &s) { return ring_compute_pos(s.c_str()); },
-          homedir_) {}
+          m_homedir_) {}
 
 // Resolve relpath to an absolute filesystem path under homedir.
 std::string cache_t::abspath(const relpath_t &relpath) const {
-  return homedir_ + "/" + relpath.str();
+  return m_homedir_ + "/" + relpath.str();
 }
 
 // Return true if relpath exists and is readable.
@@ -93,7 +93,7 @@ rc_t cache_t::read(const relpath_t &relpath, fd_t &out) {
   if (fd < 0)
     return errno_to_rc(strerror(errno));
   out = fd_t(fd);
-  lru_.touch(relpath);
+  m_lru_.touch(relpath);
   return {};
 }
 
@@ -105,14 +105,14 @@ rc_t cache_t::move(const relpath_t &src_relpath,
     return rc;
   if (rename(abspath(src_relpath).c_str(), abspath(dest_relpath).c_str()) < 0)
     return errno_to_rc(strerror(errno));
-  lru_.put(dest_relpath, time(nullptr));
+  m_lru_.put(dest_relpath, time(nullptr));
   return {};
 }
 
 // Unlink the file; ignore ENOENT (idempotent). Update lru regardless.
 void cache_t::drop(const relpath_t &relpath) {
   unlink(abspath(relpath).c_str());
-  lru_.drop(relpath);
+  m_lru_.drop(relpath);
 }
 
 // Generate a unique relpath under tmp/ for use as a staging file.
@@ -137,41 +137,41 @@ rc_t cache_t::mkdirs(const relpath_t &relpath) {
 // Walk the cache/ subtree, calling cb(relpath, mtime) for each file.
 void cache_t::scan_cache(
     const std::function<void(const std::string &, time_t)> &cb) {
-  walk(homedir_ + "/cache", "cache", cb);
+  walk(m_homedir_ + "/cache", "cache", cb);
 }
 
 // Bulk-insert (relpath, mtime) pairs into the lru at startup.
 void cache_t::batch_put(
     const std::vector<std::pair<std::string, time_t>> &batch) {
-  lru_.batch_put(batch);
+  m_lru_.batch_put(batch);
 }
 
 // Evict least-recently-used entries if disk pressure warrants it.
 void cache_t::maybe_evict(
     const std::function<void(const std::string &)> &del_cb) {
-  lru_.maybe_evict(del_cb);
+  m_lru_.maybe_evict(del_cb);
 }
 
 // Iterate all lru entries, calling cb(relpath, mtime, relpath_pos) for each.
 void cache_t::scan(
     const std::function<void(const std::string &relpath, time_t mtime,
                              uint32_t relpath_pos)> &cb) {
-  lru_.scan(cb);
+  m_lru_.scan(cb);
 }
 
 // Return the lru-recorded mtime for relpath, or 0 if not tracked.
 time_t cache_t::get_mtime(const std::string &relpath) {
-  return lru_.get_mtime(relpath_t{relpath});
+  return m_lru_.get_mtime(relpath_t{relpath});
 }
 
 // Number of entries currently tracked in the lru.
-size_t cache_t::size() { return lru_.size(); }
+size_t cache_t::size() { return m_lru_.size(); }
 
 // Disk usage as an integer percentage (0–100).
-int cache_t::disk_usepct() { return lru_.disk_usepct(); }
+int cache_t::disk_usepct() { return m_lru_.disk_usepct(); }
 
 // Disk usage in gibibytes.
-double cache_t::disk_used_gib() { return lru_.disk_used_gib(); }
+double cache_t::disk_used_gib() { return m_lru_.disk_used_gib(); }
 
 // True if a disk stat error was recorded during the last eviction check.
-bool cache_t::disk_error() { return lru_.disk_error(); }
+bool cache_t::disk_error() { return m_lru_.disk_error(); }

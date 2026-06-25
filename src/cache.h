@@ -27,8 +27,8 @@
 // automatically; callers do not touch the lru directly.
 
 class cache_t {
-  std::string homedir_;
-  lru_t lru_;
+  std::string m_homedir_;
+  lru_t m_lru_;
 
 public:
   cache_t(keylock_t &keylock, std::string homedir);

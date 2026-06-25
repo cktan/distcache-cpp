@@ -22,7 +22,7 @@
 //
 // Entries are reference-counted (refs) so the map entry is not erased while
 // threads are still waiting. On release, entries are returned to a freelist
-// (guarded by map_mtx_) and reused rather than destroyed; the freelist is
+// (guarded by m_map_mtx_) and reused rather than destroyed; the freelist is
 // batch-filled 8 entries at a time.
 class keylock_t {
 public:
@@ -47,12 +47,12 @@ private:
     int refs = 0; // number of threads holding a reference (owner + waiters)
   };
 
-  std::mutex map_mtx_;
-  std::unordered_map<std::string, std::shared_ptr<Entry>> map_;
-  std::vector<std::shared_ptr<Entry>> freelist_; // guarded by map_mtx_
+  std::mutex m_map_mtx_;
+  std::unordered_map<std::string, std::shared_ptr<Entry>> m_map_;
+  std::vector<std::shared_ptr<Entry>> m_freelist_; // guarded by m_map_mtx_
 
   // Pop one entry from freelist, filling it with 8 new entries if empty.
-  // Must be called under map_mtx_.
+  // Must be called under m_map_mtx_.
   std::shared_ptr<Entry> alloc_entry();
 };
 
@@ -60,8 +60,9 @@ private:
 // Call release() for early release; safe to call more than once.
 class keylock_guard_t {
 public:
-  keylock_guard_t(keylock_t &kl, const std::string &key) : kl_(kl), key_(key) {
-    kl_.acquire(key_);
+  keylock_guard_t(keylock_t &kl, const std::string &key)
+      : m_kl_(kl), m_key_(key) {
+    m_kl_.acquire(m_key_);
   }
   ~keylock_guard_t() { release(); }
 
@@ -69,14 +70,14 @@ public:
   keylock_guard_t &operator=(const keylock_guard_t &) = delete;
 
   void release() {
-    if (!released_) {
-      released_ = true;
-      kl_.release(key_);
+    if (!m_released_) {
+      m_released_ = true;
+      m_kl_.release(m_key_);
     }
   }
 
 private:
-  keylock_t &kl_;
-  std::string key_;
-  bool released_ = false;
+  keylock_t &m_kl_;
+  std::string m_key_;
+  bool m_released_ = false;
 };

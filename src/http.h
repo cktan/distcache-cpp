@@ -17,7 +17,7 @@ public:
   void stop();
 
 private:
-  node_t &node_;
-  time_t start_time_ = 0;
-  std::unique_ptr<httplib::Server> svr_;
+  node_t &m_node_;
+  time_t m_start_time_ = 0;
+  std::unique_ptr<httplib::Server> m_svr_;
 };

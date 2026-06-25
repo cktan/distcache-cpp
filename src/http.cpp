@@ -15,8 +15,8 @@
 #include <unistd.h>
 #include <vector>
 
-// Bind server to node_.
-http_server_t::http_server_t(node_t &n) : node_(n) {}
+// Bind server to m_node_.
+http_server_t::http_server_t(node_t &n) : m_node_(n) {}
 
 // Default — httplib::Server cleanup is handled by unique_ptr.
 http_server_t::~http_server_t() = default;
@@ -428,44 +428,46 @@ void http_server_t::start(nodeid_idx_t nodeid) {
     return;
   }
 
-  start_time_ = time(nullptr);
-  svr_ = std::make_unique<httplib::Server>();
+  // Record server start time for uptime reporting.
+  m_start_time_ = time(nullptr);
+  // Allocate HTTP server instance.
+  m_svr_ = std::make_unique<httplib::Server>();
 
-  svr_->Get("/_health",
-            [this](const httplib::Request &req, httplib::Response &res) {
-              handle_health(node_, req, res, start_time_);
-            });
-  svr_->Get("/_nodes",
-            [this](const httplib::Request &req, httplib::Response &res) {
-              handle_nodes(node_, req, res);
-            });
-  svr_->Post("/_claim_keyspace",
-             [this](const httplib::Request &req, httplib::Response &res) {
-               handle_claim_keyspace(node_, req, res);
-             });
-  svr_->Post("/_hint_pull",
-             [this](const httplib::Request &req, httplib::Response &res) {
-               handle_hint_pull(node_, req, res);
-             });
-  svr_->Get(R"(/[^/]+/.+)",
-            [this](const httplib::Request &req, httplib::Response &res) {
-              handle_get(node_, req, res);
-            });
-  svr_->Put(R"(/[^/]+/.+)",
-            [this](const httplib::Request &req, httplib::Response &res,
-                   const httplib::ContentReader &content_reader) {
-              handle_put(node_, req, res, content_reader);
-            });
-  svr_->Delete(R"(/[^/]+/.+)",
+  m_svr_->Get("/_health",
+              [this](const httplib::Request &req, httplib::Response &res) {
+                handle_health(m_node_, req, res, m_start_time_);
+              });
+  m_svr_->Get("/_nodes",
+              [this](const httplib::Request &req, httplib::Response &res) {
+                handle_nodes(m_node_, req, res);
+              });
+  m_svr_->Post("/_claim_keyspace",
                [this](const httplib::Request &req, httplib::Response &res) {
-                 handle_delete(node_, req, res);
+                 handle_claim_keyspace(m_node_, req, res);
                });
+  m_svr_->Post("/_hint_pull",
+               [this](const httplib::Request &req, httplib::Response &res) {
+                 handle_hint_pull(m_node_, req, res);
+               });
+  m_svr_->Get(R"(/[^/]+/.+)",
+              [this](const httplib::Request &req, httplib::Response &res) {
+                handle_get(m_node_, req, res);
+              });
+  m_svr_->Put(R"(/[^/]+/.+)",
+              [this](const httplib::Request &req, httplib::Response &res,
+                     const httplib::ContentReader &content_reader) {
+                handle_put(m_node_, req, res, content_reader);
+              });
+  m_svr_->Delete(R"(/[^/]+/.+)",
+                 [this](const httplib::Request &req, httplib::Response &res) {
+                   handle_delete(m_node_, req, res);
+                 });
 
-  svr_->listen(host, port);
+  m_svr_->listen(host, port);
 }
 
 // Signal httplib server to stop accepting connections.
 void http_server_t::stop() {
-  if (svr_)
-    svr_->stop();
+  if (m_svr_)
+    m_svr_->stop();
 }

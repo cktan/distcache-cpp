@@ -11,7 +11,7 @@
 #include <string>
 #include <vector>
 
-rebalancer_t::rebalancer_t(node_t &n) : node_(n) {}
+rebalancer_t::rebalancer_t(node_t &n) : m_node_(n) {}
 
 // Splits "cache/bucket/key..." back into bucket and key. Used by pull_one
 // to rebuild the request path for fetching from the source peer.
@@ -68,7 +68,7 @@ bool rebalancer_t::split_nodeid(const std::string &nodeid, std::string &host,
 // queues each job type.
 void rebalancer_t::start() {
   // start the job-queue consumer thread
-  node_.jobq.start([this](std::vector<std::string> rec) {
+  m_node_.jobq.start([this](std::vector<std::string> rec) {
     if (rec.empty())
       return;
     const std::string &type = rec[0];
@@ -87,7 +87,7 @@ void rebalancer_t::start() {
       if (!split_nodeid(dest, host, port, first_pos))
         return;
 
-      const char *self_str = nodeid_lookup(node_.nodeid);
+      const char *self_str = nodeid_lookup(m_node_.nodeid);
       std::string body = "{\"src\":\"" + std::string(self_str ? self_str : "") +
                          "\""
                          ",\"relpath\":\"" +
@@ -121,7 +121,7 @@ void rebalancer_t::start() {
     if (type == "claim_scan" && rec.size() >= 2) {
       const std::string &nodeid = rec[1];
       nodeid_idx_t idx = nodeid_find(nodeid.c_str());
-      node_.membership.inject_node(nodeid);
+      m_node_.membership.inject_node(nodeid);
       char host[254];
       int port = 0;
       nodeid_split(idx, host, &port, nullptr);
@@ -130,8 +130,8 @@ void rebalancer_t::start() {
       for (const auto &[relpath, mtime] : entries) {
         std::string mt_str = std::to_string(mtime);
         // queue a hint_pull job per key now owned by addr
-        node_.jobq.put("hint_pull", addr.c_str(), relpath.c_str(),
-                       mt_str.c_str());
+        m_node_.jobq.put("hint_pull", addr.c_str(), relpath.c_str(),
+                         mt_str.c_str());
       }
       return;
     }
@@ -139,21 +139,21 @@ void rebalancer_t::start() {
     // evict: queued by handle_put/pull_one/handle_get (after adding a file)
     // and by pull_one here. Runs the disk-pressure eviction sweep.
     if (type == "maybe_evict") {
-      node_.cache.maybe_evict(
-          [this](const std::string &p) { node_.cache.drop(p); });
+      m_node_.cache.maybe_evict(
+          [this](const std::string &p) { m_node_.cache.drop(p); });
       return;
     }
   });
 }
 
 // stop the job-queue consumer thread
-void rebalancer_t::stop() { node_.jobq.stop(); }
+void rebalancer_t::stop() { m_node_.jobq.stop(); }
 
 // Called by membership_t when nodeid joins the ring. Tells every alive peer
 // to run claim_scan for nodeid, so each peer hint_pulls the keys it now
 // owns on nodeid's behalf.
 void rebalancer_t::claim_sweep(const std::string &nodeid) {
-  auto peers = node_.membership.alive_peers();
+  auto peers = m_node_.membership.alive_peers();
   if (peers.empty())
     return;
 
@@ -179,13 +179,13 @@ void rebalancer_t::claim_sweep(const std::string &nodeid) {
 // recently touched (oldest entries skipped via the 5-day cutoff).
 std::vector<std::pair<std::string, time_t>>
 rebalancer_t::scan_for_peer(nodeid_idx_t peer_idx) {
-  auto ring = node_.ring.load();
+  auto ring = m_node_.ring.load();
   time_t cutoff = time(nullptr) - 5 * 86400;
 
   using Entry = std::pair<time_t, std::string>;
   std::priority_queue<Entry, std::vector<Entry>, std::greater<Entry>> heap;
 
-  node_.cache.scan(
+  m_node_.cache.scan(
       [&](const std::string &relpath, time_t mtime, uint32_t rp_id) {
         if (mtime < cutoff)
           return;
@@ -270,14 +270,14 @@ void rebalancer_t::pull_one(const std::string &src_addr,
     return;
 
   // if file exists, don't pull
-  if (node_.cache.exists(relpath))
+  if (m_node_.cache.exists(relpath))
     return;
 
   // lock relpath so a concurrent pull/fetch can't race this one
-  keylock_guard_t kl_guard(node_.keylock, relpath);
+  keylock_guard_t kl_guard(m_node_.keylock, relpath);
 
   // after getting keylock: if file exists, don't pull.
-  if (node_.cache.exists(relpath)) {
+  if (m_node_.cache.exists(relpath)) {
     return;
   }
 
@@ -297,10 +297,10 @@ void rebalancer_t::pull_one(const std::string &src_addr,
   std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
 
   // stream into this temp file
-  relpath_t tmp_rel = node_.cache.tmp_relpath();
+  relpath_t tmp_rel = m_node_.cache.tmp_relpath();
   StreamState state;
 
-  int raw_fd = ::open(node_.cache.abspath(tmp_rel).c_str(),
+  int raw_fd = ::open(m_node_.cache.abspath(tmp_rel).c_str(),
                       O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (raw_fd < 0) {
     return;
@@ -316,15 +316,15 @@ void rebalancer_t::pull_one(const std::string &src_addr,
   // commit to cache if ok. drop the temp file if not ok.
   bool ok = resp && resp->status == 200 && state.ok && state.is_fin;
   if (ok) {
-    ok = node_.cache.move(tmp_rel, relpath_t(relpath)).ok();
+    ok = m_node_.cache.move(tmp_rel, relpath_t(relpath)).ok();
   }
   if (!ok) {
-    node_.cache.drop(tmp_rel);
+    m_node_.cache.drop(tmp_rel);
     return;
   }
   kl_guard.release();
 
   // trigger an async disk-pressure check now that a file was added
-  node_.jobq.put("maybe_evict");
-  node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
+  m_node_.jobq.put("maybe_evict");
+  m_node_.feed.put("rebalance.pull", relpath.c_str(), src_addr.c_str());
 }

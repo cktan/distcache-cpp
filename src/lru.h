@@ -31,7 +31,7 @@ struct LRUEntry {
 // eviction to prevent a file from being evicted between the moment it is
 // written and the moment the HTTP handler opens it.
 //
-// All map operations are serialized under map_mtx_. Disk usage is checked
+// All map operations are serialized under m_map_mtx_. Disk usage is checked
 // via statvfs() on every insert — no background polling thread.
 class lru_t {
 public:
@@ -72,35 +72,35 @@ public:
   // #files in the LRU.
   size_t size();
 
-  // statvfs() wrappers on homedir_.
+  // statvfs() wrappers on m_homedir_.
   int disk_usepct();
   double disk_used_gib();
   bool disk_error();
 
 private:
-  keylock_t &keylock_;
-  std::function<uint32_t(const std::string &)> id_fn_;
-  std::string homedir_;
+  keylock_t &m_keylock_;
+  std::function<uint32_t(const std::string &)> m_id_fn_;
+  std::string m_homedir_;
 
-  // Guards map_ and cold_list_. All public methods acquire this before
+  // Guards m_map_ and m_cold_list_. All public methods acquire this before
   // touching either structure.
-  std::mutex map_mtx_;
+  std::mutex m_map_mtx_;
 
   // Primary index: relpath -> {mtime, relpath_pos}. Source of truth for what
   // is in the local cache. Entries are added on fetch/write, updated on touch,
   // removed on drop or successful eviction.
-  std::unordered_map<std::string, LRUEntry> map_;
+  std::unordered_map<std::string, LRUEntry> m_map_;
 
   // Min-heap (smallest mtime = coldest = evict first). Rebuilt lazily from
-  // map_ when exhausted. Entries may be stale (relpath removed or mtime
+  // m_map_ when exhausted. Entries may be stale (relpath removed or mtime
   // updated since the last rebuild), so each popped entry is validated against
-  // map_ before use.
+  // m_map_ before use.
   using ColdEntry = std::pair<time_t, std::string>;
   std::priority_queue<ColdEntry, std::vector<ColdEntry>,
                       std::greater<ColdEntry>>
-      cold_list_;
+      m_cold_list_;
 
-  // Drain cold_list_ and repopulate it from map_, excluding entries newer
-  // than EVICT_MIN_AGE_S seconds. Must be called under map_mtx_.
+  // Drain m_cold_list_ and repopulate it from m_map_, excluding entries newer
+  // than EVICT_MIN_AGE_S seconds. Must be called under m_map_mtx_.
   void rebuild_cold_list_locked();
 };

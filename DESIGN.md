@@ -44,11 +44,12 @@ extra coordination.
 | `-D <homedir>` | yes | Root for `cache/`, `tmp/` |
 | `-N <host:port[/first_pos]>` | yes | Node identity (nodeid); sets HTTP listen address |
 | `-p <host:port[/first_pos]>` | no, repeatable | Bootstrap SWIM peer(s) |
+| `--version` | no | Print version string and exit |
 
 **Startup sequence:**
 
 1. Parse flags (order-independent).
-2. Call `nodeid_register(mynodeid)` to get `nodeid_idx_t nid`.
+2. Call `nodeid_find(mynodeid)` to get `nodeid_idx_t nid`.
    Construct `node_t node(homedir, nid)`.
    Set `node.seeds`.
 3. `mkdir -p homedir/log` (needed before logger opens
@@ -60,7 +61,8 @@ extra coordination.
 7. `node.start()` — creates `homedir/{log,cache,tmp}`,
    starts rebalancer and membership, detaches the
    startup scan thread, spawns the http thread.
-8. `node.join()` — blocks until the http thread exits.
+8. Block on `sem_wait(&g_stop_sem)` until signaled;
+   call `node.stop()` then `node.join()`.
 
 ### node_t::start / stop / join
 
@@ -72,8 +74,6 @@ before returning.
 
 `stop()` calls `http.stop()`, `feed.stop()`,
 `membership.leave()`, `rebalancer.stop()` in order.
-It is safe to call from a signal handler (no locks,
-no allocation).
 
 `join()` joins the http background thread. Call it
 after `stop()` to wait for a clean exit.
@@ -160,9 +160,9 @@ Successor lookup: O(log N) binary search (`bisect_left`).
 
 ---
 
-## struct Node — shared state container
+## struct node_t — shared state container
 
-All formerly global objects live as members of `struct Node`
+All formerly global objects live as members of `struct node_t`
 (defined in `node.h`). `main()` owns one instance on the
 stack. Tests instantiate a local `Node` per test case for
 isolation.
@@ -430,9 +430,9 @@ Data migrates to its ring owner via two mechanisms.
 
 ### Bulk claim sweep (startup)
 
-After a random delay (1–`DC_CLAIM_DELAY_MS` ms, default
-1–20 000 ms), a joining node POSTs `/_claim_keyspace` to
-each alive peer. Each receiving peer:
+After a random delay (`1000 + rand() % DC_CLAIM_DELAY_MS` ms,
+default 1 000–21 000 ms), a joining node POSTs
+`/_claim_keyspace` to each alive peer. Each receiving peer:
 1. Enqueues a `claim_scan` job to `node.jobq` (returns
    immediately; the O(N) LRU scan runs off the handler
    path).

@@ -6,8 +6,12 @@ All endpoints listen on the address given to `-N host:port[/first_pos]`.
 
 ## Wire Protocol
 
-Most endpoints speak a binary frame protocol over the HTTP
-response body (Content-Type: `application/octet-stream`).
+`GET /{bucket}/{key}`, `PUT`, `DELETE`, `POST /_claim_keyspace`,
+and `POST /_hint_pull` use a binary frame protocol over the
+HTTP response body (Content-Type: `application/octet-stream`).
+`GET /_health` and `GET /_nodes` do **not** use frames — they
+return plain JSON and plain text respectively.
+
 Each frame is:
 
 ```

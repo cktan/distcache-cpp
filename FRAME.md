@@ -6,7 +6,7 @@ Each frame is:
 
 Where:
   - `TYPE`    — one of `DATA`, `ERROR`, `FIN`,
-                `NODES`, `REDIRECT`
+                `REDIRECT`
   - `LENGTH`  — decimal byte count of the payload
   - `\n`      — newline delimiter after the header line
   - payload   — exactly LENGTH bytes
@@ -22,7 +22,6 @@ may use a fixed 50-byte buffer when reading the header.
 | `DATA`     | binary          | Object bytes. Multiple DATA frames compose one object. |
 | `ERROR`    | plain text      | Error; two newline-terminated lines.             |
 | `FIN`      | _(empty)_       | End of stream. Always last.                      |
-| `NODES`    | plain text      | Newline-terminated list of ring members.         |
 | `REDIRECT` | plain text      | One node to retry on.                            |
 
 ## Client dispatch
@@ -32,7 +31,6 @@ Clients dispatch on the frame type name:
 - `DATA` — deliver payload bytes to the caller
 - `FIN` — end of stream; stop reading
 - `ERROR` — parse error lines; stop after FIN
-- `NODES` — parse node list; update ring
 - `REDIRECT` — parse node; retry on that node
 
 ## ERROR payload
@@ -89,20 +87,6 @@ position is derived from a hash of `host:port`.
 - `node1:4001`        — first_id derived from hash
 - `node1:4001/123456` — first_id = 123456
 
-## NODES payload
-
-Newline-terminated list of node names, one per line.
-Sent by `/_nodes`. The client uses this to refresh its
-ring membership.
-
-Example (30 bytes):
-
-      node1:4001/0\n
-      node2:4002/789\n
-
-An empty NODES payload (`NODES:0\n`) means no members
-are known.
-
 ## Response shapes
 
 **Cache hit or S3 stream:**
@@ -127,11 +111,6 @@ are known.
       REDIRECT:17\nnode2:4002/789\n
       FIN:0\n
 
-**Node list (/_nodes):**
-
-      NODES:30\nnode1:4001/0\nnode2:4002/789\n
-      FIN:0\n
-
 ## Invariants
 
 - Every response ends with `FIN:0\n`. A missing FIN
@@ -139,7 +118,6 @@ are known.
 - ERROR is always followed immediately by FIN.
 - REDIRECT is followed immediately by FIN; no DATA
   frames precede or follow it.
-- NODES is followed immediately by FIN.
 - Payload size must not exceed **8192 bytes** (8 KiB).
   Implementations may reject frames that exceed this
   limit.

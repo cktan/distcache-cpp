@@ -4,6 +4,16 @@ All endpoints listen on the address given to `-N host:port[/first_pos]`.
 
 ---
 
+## Node IDs
+
+A node ID has the form `host:port` or `host:port/first_pos`.
+`first_pos` is an optional 32-bit decimal integer that pins
+the node's first ring position; subsequent positions are
+derived via chained FNV-1a hashes. When absent, all 10 ring
+positions are computed from the address string.
+
+---
+
 ## Wire Protocol
 
 `GET /{bucket}/{key}`, `PUT`, `DELETE`, `POST /_claim_keyspace`,
@@ -226,11 +236,3 @@ current time.
 - **Error** — `ERROR` frame followed by `FIN`
 
 ---
-
-## Node IDs
-
-A node ID has the form `host:port` or `host:port/first_pos`.
-`first_pos` is an optional 32-bit decimal integer that pins
-the node's first ring position; subsequent positions are
-derived via chained FNV-1a hashes. When absent, all 10 ring
-positions are computed from the address string.

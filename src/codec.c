@@ -3,79 +3,99 @@
 #include <stdio.h>
 #include <string.h>
 
-/* Write the JSON-escaped form of src into buf[0..bufsz-1] (NUL-terminated).
- * Returns buf on success, NULL if buf is too small. */
-char *json_encode_str(const char *src, char *buf, int bufsz) {
-  char *p = buf;
-  char *end = buf + bufsz - 1; /* reserve one byte for NUL */
+/* JSON-escape src into buf[0..bufsz-1].  Returns N, the number of bytes
+ * required including NUL.  Writes to buf only when N <= bufsz. */
+int json_encode_str(const char *src, char *buf, int bufsz) {
+  int n = 1;
   for (const char *s = src; *s; s++) {
     unsigned char c = (unsigned char)*s;
-    int need;
     if (c == '"' || c == '\\' || c == '\n' || c == '\r' || c == '\t')
-      need = 2;
+      n += 2;
     else if (c < 0x20)
-      need = 6;
+      n += 6;
     else
-      need = 1;
-    if (p + need > end)
-      return NULL;
-    if (c == '"')       { *p++ = '\\'; *p++ = '"';  }
-    else if (c == '\\') { *p++ = '\\'; *p++ = '\\'; }
-    else if (c == '\n') { *p++ = '\\'; *p++ = 'n';  }
-    else if (c == '\r') { *p++ = '\\'; *p++ = 'r';  }
-    else if (c == '\t') { *p++ = '\\'; *p++ = 't';  }
-    else if (c < 0x20)  { p += sprintf(p, "\\u%04x", c); }
-    else                { *p++ = (char)c; }
+      n++;
+  }
+  if (n > bufsz)
+    return n;
+  char *p = buf;
+  for (const char *s = src; *s; s++) {
+    unsigned char c = (unsigned char)*s;
+    if (c == '"') {
+      *p++ = '\\';
+      *p++ = '"';
+    } else if (c == '\\') {
+      *p++ = '\\';
+      *p++ = '\\';
+    } else if (c == '\n') {
+      *p++ = '\\';
+      *p++ = 'n';
+    } else if (c == '\r') {
+      *p++ = '\\';
+      *p++ = 'r';
+    } else if (c == '\t') {
+      *p++ = '\\';
+      *p++ = 't';
+    } else if (c < 0x20) {
+      p += sprintf(p, "\\u%04x", c);
+    } else {
+      *p++ = (char)c;
+    }
   }
   *p = '\0';
-  return buf;
+  return n;
 }
 
-/* Write the percent-encoded form of src into buf[0..bufsz-1] (NUL-terminated).
- * Returns buf on success, NULL if buf is too small. */
-char *url_encode(const char *src, char *buf, int bufsz) {
+/* Percent-encode src into buf[0..bufsz-1].  Returns N, the number of bytes
+ * required including NUL.  Writes to buf only when N <= bufsz. */
+int url_encode(const char *src, char *buf, int bufsz) {
   static const char hex[] = "0123456789ABCDEF";
-  char *p = buf;
-  char *end = buf + bufsz - 1;
+  int n = 1;
   for (const char *s = src; *s; s++) {
     unsigned char c = (unsigned char)*s;
-    int unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
-                     (c >= '0' && c <= '9') ||
-                     c == '-' || c == '_' || c == '.' || c == '~';
-    if (unreserved) {
-      if (p >= end)
-        return NULL;
+    int unres = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+                c == '~';
+    n += unres ? 1 : 3;
+  }
+  if (n > bufsz)
+    return n;
+  char *p = buf;
+  for (const char *s = src; *s; s++) {
+    unsigned char c = (unsigned char)*s;
+    int unres = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
+                c == '~';
+    if (unres) {
       *p++ = (char)c;
     } else {
-      if (p + 3 > end)
-        return NULL;
       *p++ = '%';
       *p++ = hex[c >> 4];
       *p++ = hex[c & 0xf];
     }
   }
   *p = '\0';
-  return buf;
+  return n;
 }
 
-/* Decode percent-encoded sequences in src into buf[0..bufsz-1] (NUL-terminated).
- * Returns buf on success, NULL if buf is too small. */
-char *url_decode(const char *src, char *buf, int bufsz) {
-  char *p = buf;
-  char *end = buf + bufsz - 1;
-  for (const char *s = src; *s; ) {
-    if (p >= end)
-      return NULL;
-    if (s[0] == '%' && isxdigit((unsigned char)s[1]) && isxdigit((unsigned char)s[2])) {
-      char hi = s[1], lo = s[2];
-      int v = (isdigit((unsigned char)hi) ? hi - '0' : toupper((unsigned char)hi) - 'A' + 10) << 4 |
-              (isdigit((unsigned char)lo) ? lo - '0' : toupper((unsigned char)lo) - 'A' + 10);
-      *p++ = (char)v;
-      s += 3;
+/* Decode percent-encoded sequences in src in-place.  Returns src. */
+char *url_decode(char *src) {
+  char *r = src, *w = src;
+  while (*r) {
+    if (r[0] == '%' && isxdigit((unsigned char)r[1]) &&
+        isxdigit((unsigned char)r[2])) {
+      int hi = isdigit((unsigned char)r[1])
+                   ? r[1] - '0'
+                   : toupper((unsigned char)r[1]) - 'A' + 10;
+      int lo = isdigit((unsigned char)r[2])
+                   ? r[2] - '0'
+                   : toupper((unsigned char)r[2]) - 'A' + 10;
+      *w++ = (char)((hi << 4) | lo);
+      r += 3;
     } else {
-      *p++ = *s++;
+      *w++ = *r++;
     }
   }
-  *p = '\0';
-  return buf;
+  *w = '\0';
+  return src;
 }

@@ -1,6 +1,6 @@
 #include "rebalance.h"
-#include "httplib.h"
 #include "codec.h"
+#include "httplib.h"
 #include "node.h"
 #include "stream.h"
 #include <cstdio>
@@ -155,7 +155,8 @@ void rebalancer_t::claim_sweep(const std::string &nodeid) {
   if (peers.empty())
     return;
 
-  std::string body = std::string("{\"nodeid\":\"") + json_encode_str(nodeid) + "\"}";
+  std::string body =
+      std::string("{\"nodeid\":\"") + json_encode_str(nodeid) + "\"}";
 
   for (const auto &peer : peers) {
     std::string host;

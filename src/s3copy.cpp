@@ -1,6 +1,6 @@
 #include "s3copy.h"
-#include "httplib.h"
 #include "codec.h"
+#include "httplib.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -67,8 +67,8 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
                   const std::string &dest_abspath) {
   // Build the JSON request body: {"bucket":…,"key":…,"dest":…}
   std::string body = std::string("{\"bucket\":\"") + json_encode_str(bucket) +
-                     "\",\"key\":\""  + json_encode_str(key) +
-                     "\",\"dest\":\"" + json_encode_str(dest_abspath) + "\"}";
+                     "\",\"key\":\"" + json_encode_str(key) + "\",\"dest\":\"" +
+                     json_encode_str(dest_abspath) + "\"}";
 
   // POST to sidecar and wait up to 60 s for the S3 transfer to complete.
   httplib::Client cli(g_host, g_port);

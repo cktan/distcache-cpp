@@ -288,8 +288,8 @@ static void handle_health(node_t &node, const httplib::Request &,
   const char *self_id = nodeid_lookup(node.nodeid);
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      json_encode_str(self_id ? self_id : ""), upsince, upfor, nodes, node.cache.size(),
-      node.cache.disk_usepct(), used_gib_buf,
+      json_encode_str(self_id ? self_id : ""), upsince, upfor, nodes,
+      node.cache.size(), node.cache.disk_usepct(), used_gib_buf,
       node.cache.disk_error() ? "true" : "false", node.stats.hits.load(),
       node.stats.misses.load(), node.stats.served.load(),
       node.stats.redirects.load(), node.stats.errors.load(),
@@ -442,10 +442,8 @@ void http_server_t::start(nodeid_idx_t nodeid) {
   // Allocate HTTP server instance.
   m_svr_ = std::make_unique<httplib::Server>();
 
-  m_svr_->Get("/_ping",
-              [](const httplib::Request &req, httplib::Response &res) {
-                handle_ping(req, res);
-              });
+  m_svr_->Get("/_ping", [](const httplib::Request &req,
+                           httplib::Response &res) { handle_ping(req, res); });
   m_svr_->Get("/_health",
               [this](const httplib::Request &req, httplib::Response &res) {
                 handle_health(m_node_, req, res, m_start_time_);

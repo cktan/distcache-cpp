@@ -1,5 +1,6 @@
 #define JSMN_IMPLEMENTATION
 #include "http.h"
+#include "json.h"
 #include "node.h"
 #include "relpath.h"
 #include "s3copy.h"
@@ -257,8 +258,9 @@ static void handle_health(node_t &node, const httplib::Request &,
   auto peers = node.membership.alive_peers();
   std::string peers_json = "[";
   for (size_t i = 0; i < peers.size(); ++i) {
-    peers_json +=
-        std::format("\"{}\"{}", peers[i], (i + 1 < peers.size() ? "," : ""));
+    peers_json += "\"" + json_encode_str(peers[i]) + "\"";
+    if (i + 1 < peers.size())
+      peers_json += ",";
   }
   peers_json += "]";
 
@@ -286,12 +288,19 @@ static void handle_health(node_t &node, const httplib::Request &,
   const char *self_id = nodeid_lookup(node.nodeid);
   res.body = std::format(
       R"({{"addr":"{}","upsince":"{}","upfor":"{}","nodes":{},"lru_size":{},"disk_pct":{},"used_gib":{},"df_error":{},"hits":{},"misses":{},"served":{},"redirects":{},"errors":{},"hint_pull":{},"peers":{}}})",
-      self_id ? self_id : "", upsince, upfor, nodes, node.cache.size(),
+      json_encode_str(self_id ? self_id : ""), upsince, upfor, nodes, node.cache.size(),
       node.cache.disk_usepct(), used_gib_buf,
       node.cache.disk_error() ? "true" : "false", node.stats.hits.load(),
       node.stats.misses.load(), node.stats.served.load(),
       node.stats.redirects.load(), node.stats.errors.load(),
       node.stats.hint_pull.load(), peers_json);
+}
+
+// GET /_ping: liveness probe; returns plain-text "PONG".
+static void handle_ping(const httplib::Request &, httplib::Response &res) {
+  res.status = 200;
+  res.set_header("Content-Type", "text/plain");
+  res.body = "PONG";
 }
 
 // GET /_nodes: return all known ring members as newline-separated nodeids.
@@ -433,6 +442,10 @@ void http_server_t::start(nodeid_idx_t nodeid) {
   // Allocate HTTP server instance.
   m_svr_ = std::make_unique<httplib::Server>();
 
+  m_svr_->Get("/_ping",
+              [](const httplib::Request &req, httplib::Response &res) {
+                handle_ping(req, res);
+              });
   m_svr_->Get("/_health",
               [this](const httplib::Request &req, httplib::Response &res) {
                 handle_health(m_node_, req, res, m_start_time_);

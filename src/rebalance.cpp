@@ -1,5 +1,6 @@
 #include "rebalance.h"
 #include "httplib.h"
+#include "json.h"
 #include "node.h"
 #include "stream.h"
 #include <cstdio>
@@ -88,13 +89,10 @@ void rebalancer_t::start() {
         return;
 
       const char *self_str = nodeid_lookup(m_node_.nodeid);
-      std::string body = "{\"src\":\"" + std::string(self_str ? self_str : "") +
-                         "\""
-                         ",\"relpath\":\"" +
-                         relpath +
-                         "\""
-                         ",\"mtime\":\"" +
-                         mtime + "\"}";
+      std::string body = std::string("{\"src\":\"") +
+                         json_encode_str(self_str ? self_str : "") +
+                         "\",\"relpath\":\"" + json_encode_str(relpath) +
+                         "\",\"mtime\":\"" + mtime + "\"}";
 
       httplib::Client cli(host, port);
       cli.set_connection_timeout(3);
@@ -157,7 +155,7 @@ void rebalancer_t::claim_sweep(const std::string &nodeid) {
   if (peers.empty())
     return;
 
-  std::string body = "{\"nodeid\":\"" + nodeid + "\"}";
+  std::string body = std::string("{\"nodeid\":\"") + json_encode_str(nodeid) + "\"}";
 
   for (const auto &peer : peers) {
     std::string host;

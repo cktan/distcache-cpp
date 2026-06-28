@@ -1,5 +1,6 @@
 #include "s3copy.h"
 #include "httplib.h"
+#include "json.h"
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -64,21 +65,10 @@ bool s3copy_ping(void) {
 // dest_abspath on the local filesystem.
 rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
                   const std::string &dest_abspath) {
-  // Escape " and \ so bucket/key/path are safe to embed in a JSON string.
-  auto escape = [](const std::string &s) {
-    std::string out;
-    for (char c : s) {
-      if (c == '"' || c == '\\')
-        out += '\\';
-      out += c;
-    }
-    return out;
-  };
-
   // Build the JSON request body: {"bucket":…,"key":…,"dest":…}
-  std::string body = "{\"bucket\":\"" + escape(bucket) + "\",\"key\":\"" +
-                     escape(key) + "\",\"dest\":\"" + escape(dest_abspath) +
-                     "\"}";
+  std::string body = std::string("{\"bucket\":\"") + json_encode_str(bucket) +
+                     "\",\"key\":\""  + json_encode_str(key) +
+                     "\",\"dest\":\"" + json_encode_str(dest_abspath) + "\"}";
 
   // POST to sidecar and wait up to 60 s for the S3 transfer to complete.
   httplib::Client cli(g_host, g_port);

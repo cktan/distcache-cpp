@@ -2,6 +2,17 @@
 
 All endpoints listen on the address given to `-N host:port[/first_pos]`.
 
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/_ping` | Liveness probe; returns `PONG` |
+| `GET` | `/_health` | Node health and statistics (JSON) |
+| `GET` | `/_nodes` | Cluster membership list (plain text) |
+| `GET` | `/{bucket}/{key}` | Fetch a cached object |
+| `PUT` | `/{bucket}/{key}` | Store an object in the cache |
+| `DELETE` | `/{bucket}/{key}` | Remove an object from the cache |
+| `POST` | `/_claim_keyspace` | Internal: trigger key ownership scan |
+| `POST` | `/_hint_pull` | Internal: fetch an object from a peer |
+
 ---
 
 ## Node IDs
@@ -67,6 +78,13 @@ a numeric error code; unknown types map to `DCERR_PROTOCOL`.
 ---
 
 ## Endpoints
+
+### `GET /_ping`
+
+Liveness probe. Always returns `200 OK` with body `PONG`
+(Content-Type: `text/plain`). No framing.
+
+---
 
 ### `GET /_health`
 

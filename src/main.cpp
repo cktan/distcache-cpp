@@ -1,6 +1,7 @@
 #include "node.h"
 #include "pidlock.h"
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -18,7 +19,8 @@
 #define DISTCACHE_VERSION "0.1.0"
 
 // Probe the s3copy sidecar; return true if GET /ping responds 200.
-static bool s3copy_alive(const char *url_base) {
+// timeout_ms controls the per-attempt connection timeout.
+static bool s3copy_alive(const char *url_base, int timeout_ms = 1000) {
   std::string host = "localhost";
   int port = 7777;
   const char *p = url_base;
@@ -34,7 +36,7 @@ static bool s3copy_alive(const char *url_base) {
     }
   }
   httplib::Client cli(host, port);
-  cli.set_connection_timeout(1);
+  cli.set_connection_timeout(timeout_ms / 1000, (timeout_ms % 1000) * 1000);
   auto res = cli.Get("/ping");
   return res && res->status == 200;
 }
@@ -196,6 +198,25 @@ int main(int argc, char **argv) {
 
   // Start s3copy sidecar if not already running.
   maybe_launch_s3copy(node.abspath("log"));
+
+  // Wait up to 2 s for s3copy to be ready (it may need a moment after launch).
+  {
+    const char *env_url = getenv("S3COPY_URL");
+    const char *url_base = env_url ? env_url : "http://localhost:7777";
+    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
+    bool ready = false;
+    while (std::chrono::steady_clock::now() < deadline) {
+      if (s3copy_alive(url_base, 200)) {
+        ready = true;
+        break;
+      }
+    }
+    if (!ready) {
+      spdlog::error("s3copy not responding at {} after 2 s; aborting",
+                    url_base);
+      return 1;
+    }
+  }
 
   if (!node.start()) {
     return 1;

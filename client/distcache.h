@@ -125,20 +125,15 @@ const char *dc_errmsg(void);
 /* ── Error codes ────────────────────────────────────────────────────────── */
 
 /* Server-originated (mirror ERR_* strings from the server) */
-#define DCERR_UNKNOWN_COMMAND 1
-#define DCERR_BAD_OBJECT_NAME 2
 #define DCERR_NOT_CACHED 3
-#define DCERR_NO_NODE 4
-#define DCERR_DISK_FULL 5
-#define DCERR_S3 6
-#define DCERR_TIMEOUT 7
-#define DCERR_NOT_FOUND 8
-#define DCERR_S3_AUTH 9
-#define DCERR_CALLBACK_FAILED 10
 #define DCERR_INVALID_PATH 11
 #define DCERR_S3_COPY 12
 #define DCERR_IO 13
 #define DCERR_BAD_REQUEST 14
+
+/* Client-originated (set by the client library, never sent by the server) */
+#define DCERR_NO_NODE 4
+#define DCERR_CALLBACK_FAILED 10
 
 /* Client-originated */
 #define DCERR_NETWORK 100       /* connection or transfer failure */

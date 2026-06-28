@@ -147,24 +147,8 @@ static void url_encode(const char *src, char *dst, size_t dst_sz) {
 
 /* Map a server error-type string to the corresponding DCERR_* constant. */
 static int server_errcode(const char *s) {
-  if (strcmp(s, "ERR_UNKNOWN_COMMAND") == 0)
-    return DCERR_UNKNOWN_COMMAND;
-  if (strcmp(s, "ERR_BAD_OBJECT_NAME") == 0)
-    return DCERR_BAD_OBJECT_NAME;
   if (strcmp(s, "ERR_NOT_CACHED") == 0)
     return DCERR_NOT_CACHED;
-  if (strcmp(s, "ERR_NO_NODE") == 0)
-    return DCERR_NO_NODE;
-  if (strcmp(s, "ERR_DISK_FULL") == 0)
-    return DCERR_DISK_FULL;
-  if (strcmp(s, "ERR_S3") == 0)
-    return DCERR_S3;
-  if (strcmp(s, "ERR_TIMEOUT") == 0)
-    return DCERR_TIMEOUT;
-  if (strcmp(s, "ERR_NOT_FOUND") == 0)
-    return DCERR_NOT_FOUND;
-  if (strcmp(s, "ERR_S3_AUTH") == 0)
-    return DCERR_S3_AUTH;
   if (strcmp(s, "ERR_INVALID_PATH") == 0)
     return DCERR_INVALID_PATH;
   if (strcmp(s, "ERR_S3_COPY") == 0)

@@ -269,9 +269,6 @@ static void test_server_errcode(void) {
   CHECK(dc_test_server_errcode("ERR_IO") == DCERR_IO, "ERR_IO -> DCERR_IO");
   CHECK(dc_test_server_errcode("ERR_BAD_REQUEST") == DCERR_BAD_REQUEST,
         "ERR_BAD_REQUEST -> DCERR_BAD_REQUEST");
-  CHECK(dc_test_server_errcode("ERR_S3") == DCERR_S3, "ERR_S3 -> DCERR_S3");
-  CHECK(dc_test_server_errcode("ERR_NOT_FOUND") == DCERR_NOT_FOUND,
-        "ERR_NOT_FOUND -> DCERR_NOT_FOUND");
   CHECK(dc_test_server_errcode("ERR_UNKNOWN_JUNK") == DCERR_PROTOCOL,
         "unknown type -> DCERR_PROTOCOL");
 }

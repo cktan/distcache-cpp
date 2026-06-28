@@ -14,16 +14,19 @@ that path, creating parent directories as needed.
 
 **Why a sidecar?**
 
-- Keeps AWS credentials out of the Elixir process.
-- Boto3 handles credential chain, retries, multipart, and connection pooling.
-- The boundary is a simple HTTP call, making the sidecar replaceable and testable
-  in isolation.
+- Keeps AWS credentials out of the distcache process.
+- boto3 handles credential chain, retries, multipart, and
+  connection pooling.
+- The boundary is a simple HTTP call, making the sidecar
+  replaceable and testable in isolation.
 
 **Lifecycle**
 
-`DistCache.S3CopyLauncher` starts s3copy automatically on node boot. It pings
-`/ping` first; if a process is already listening it skips the launch. The Elixir
-node holds a Port to the process and restarts it on exit.
+s3copy must be started separately before distcache. The C++
+server does not launch it automatically — it simply POSTs to
+`$S3COPY_URL` (default `http://localhost:7777`) whenever an S3
+fetch is needed. If s3copy is not running, fetches will fail
+with `ERR_S3_COPY`.
 
 **Concurrency**
 
@@ -80,13 +83,12 @@ subdirectories. For example, with `-F /tmp/fake`:
 A request for a file that does not exist returns `not_found`. Path traversal
 attempts are rejected with an error.
 
-**Typical workflow** for local testing: start s3copy manually with `-F` before
-starting DistCache. `S3CopyLauncher` detects s3copy is already running (via
-`/ping`) and skips its own launch.
+**Typical workflow** for local testing: start s3copy with `-F`
+before starting distcache.
 
 ```bash
 python s3copy.py -L /tmp/s3log -F /tmp/fake &
-mix run --no-halt -- -D /tmp/dc1 -N 127.0.0.1:4001
+distcache -D /tmp/dc1 -N 127.0.0.1:4001
 ```
 
 ---

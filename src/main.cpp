@@ -175,10 +175,8 @@ int main(int argc, char **argv) {
   s3copy_init();
 
   // Start s3copy sidecar if not already running.
-  maybe_launch_s3copy(node.abspath("log"));
-
+  if (maybe_launch_s3copy(node.abspath("log"))) {
   // Wait for s3copy: up to 10 attempts, 200 ms apart (~2 s total).
-  {
     bool ready = false;
     for (int i = 0; i < 10 && !ready; i++) {
       usleep(200000);

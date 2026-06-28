@@ -20,10 +20,11 @@
 // Launch s3copy if it is not already responding on /ping.
 // s3copy.py is expected to live in the same directory as this binary.
 // Uses s3copy's -d flag so it double-forks into an independent daemon.
-static void maybe_launch_s3copy(const std::string &logdir) {
+// Returns true if s3copy was launched successfully, false otherwise.
+static bool maybe_launch_s3copy(const std::string &logdir) {
   if (s3copy_ping()) {
     spdlog::info("s3copy already running");
-    return;
+    return false;
   }
 
   // Locate s3copy.py next to this executable.
@@ -31,20 +32,20 @@ static void maybe_launch_s3copy(const std::string &logdir) {
   ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
   if (n <= 0) {
     spdlog::warn("s3copy: cannot resolve binary path; skipping auto-launch");
-    return;
+    return false;
   }
   exe[n] = '\0';
   char *slash = strrchr(exe, '/');
   if (!slash) {
     spdlog::warn("s3copy: unexpected exe path {}; skipping auto-launch", exe);
-    return;
+    return false;
   }
   *slash = '\0';
   std::string script = std::string(exe) + "/s3copy.py";
   if (access(script.c_str(), F_OK) != 0) {
     spdlog::warn("s3copy not running; {} not found; skipping auto-launch",
                  script);
-    return;
+    return false;
   }
 
   // Fork and exec; s3copy's -d flag double-forks into a daemon.
@@ -52,7 +53,7 @@ static void maybe_launch_s3copy(const std::string &logdir) {
   pid_t pid = fork();
   if (pid < 0) {
     spdlog::warn("s3copy: fork failed: {}", strerror(errno));
-    return;
+    return false;
   }
   if (pid == 0) {
     execlp("python3", "python3", script.c_str(), "-L", logdir.c_str(), "-d",
@@ -61,6 +62,7 @@ static void maybe_launch_s3copy(const std::string &logdir) {
   }
   waitpid(pid, nullptr, 0);
   spdlog::info("s3copy launched from {}", script);
+  return true;
 }
 
 static sem_t g_stop_sem;

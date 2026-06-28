@@ -2,7 +2,6 @@
 #include "pidlock.h"
 #include "s3copy.h"
 #include <cerrno>
-#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
@@ -176,23 +175,18 @@ int main(int argc, char **argv) {
   // Start s3copy sidecar if not already running.
   maybe_launch_s3copy(node.abspath("log"));
 
-  // Wait up to 2 s for s3copy to be ready (it may need a moment after launch).
-  // TODO: instead of setting a clock, do this:
-  //     - loop for 10 times
-  //     - for each time:
-  //          - ping
-  //          - if failed, sleep .2 sec
+  // Wait for s3copy: up to 10 attempts, 200 ms apart (~2 s total).
   {
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     bool ready = false;
-    while (std::chrono::steady_clock::now() < deadline) {
+    for (int i = 0; i < 10; i++) {
       if (s3copy_ping()) {
         ready = true;
         break;
       }
+      usleep(200000);
     }
     if (!ready) {
-      spdlog::error("s3copy not responding after 2 s; aborting");
+      spdlog::error("s3copy not responding after 10 attempts; aborting");
       return 1;
     }
   }

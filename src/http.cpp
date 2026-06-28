@@ -1,6 +1,6 @@
 #define JSMN_IMPLEMENTATION
 #include "http.h"
-#include "json.h"
+#include "codec.h"
 #include "node.h"
 #include "relpath.h"
 #include "s3copy.h"

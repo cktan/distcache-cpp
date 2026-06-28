@@ -1,6 +1,6 @@
 #include "rebalance.h"
 #include "httplib.h"
-#include "json.h"
+#include "codec.h"
 #include "node.h"
 #include "stream.h"
 #include <cstdio>

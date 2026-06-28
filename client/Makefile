@@ -1,10 +1,10 @@
-HFILES  := distcache.h ../src/stream.h ../src/ring.h ../src/nodeid.h ../src/url.h ../src/json.h
+HFILES  := distcache.h ../src/stream.h ../src/ring.h ../src/nodeid.h ../src/url.h ../src/codec.h
 CFILES  := distcache.c
-OBJ     := distcache.o stream.o ring.o nodeid.o url.o json.o
+OBJ     := distcache.o stream.o ring.o nodeid.o url.o codec.o
 EXEC    := test_distcache
 LIB     := libdistcache.a
 
-CFLAGS  := -std=c17 -Wmissing-declarations -Wall -Wextra -MMD -pthread -I../src
+CFLAGS  := -std=c17 -Wmissing-declarations -Wall -Wextra -MMD -MP -pthread -I../src
 LDFLAGS := -lcurl -pthread
 
 ifdef DEBUG
@@ -31,10 +31,10 @@ nodeid.o: ../src/nodeid.c ../src/nodeid.h
 url.o: ../src/url.c ../src/url.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-json.o: ../src/json.c ../src/json.h
+codec.o: ../src/codec.c ../src/codec.h
 	$(CC) $(CFLAGS) -c -o $@ $<
 
-$(EXEC): test_distcache.c distcache.c ../src/stream.c ../src/ring.c ../src/nodeid.c ../src/url.c ../src/json.c
+$(EXEC): test_distcache.c distcache.c ../src/stream.c ../src/ring.c ../src/nodeid.c ../src/url.c ../src/codec.c
 	$(CC) $(CFLAGS) -DDC_TESTING -o $@ $^ $(LDFLAGS)
 
 *.o: $(HFILES)

@@ -1,9 +1,9 @@
 CXX ?= c++
 CC  ?= cc
 
-CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -pthread \
+CXXFLAGS := -std=c++20 -Wall -Wextra -MMD -MP -pthread \
             -I$(HOME)/.local/include
-CFLAGS   := -std=c11 -Wall -Wextra -MMD
+CFLAGS   := -std=c11 -Wall -Wextra -MMD -MP
 
 ifdef DEBUG
     CXXFLAGS += -O0 -g -fsanitize=address,undefined

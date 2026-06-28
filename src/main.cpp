@@ -180,12 +180,9 @@ int main(int argc, char **argv) {
   // Wait for s3copy: up to 10 attempts, 200 ms apart (~2 s total).
   {
     bool ready = false;
-    for (int i = 0; i < 10; i++) {
-      if (s3copy_ping()) {
-        ready = true;
-        break;
-      }
+    for (int i = 0; i < 10 && !ready; i++) {
       usleep(200000);
+      ready = s3copy_ping();
     }
     if (!ready) {
       spdlog::error("s3copy not responding after 10 attempts; aborting");

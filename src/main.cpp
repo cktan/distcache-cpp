@@ -6,13 +6,87 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <httplib.h>
 #include <semaphore.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
 #include <spdlog/spdlog.h>
+#include <sys/wait.h>
+#include <unistd.h>
 #include <vector>
 
 #define DISTCACHE_VERSION "0.1.0"
+
+// Probe the s3copy sidecar; return true if GET /ping responds 200.
+static bool s3copy_alive(const char *url_base) {
+  std::string host = "localhost";
+  int port = 7777;
+  const char *p = url_base;
+  if (strncmp(p, "http://", 7) == 0) {
+    p += 7;
+    const char *colon = strchr(p, ':');
+    const char *slash = strchr(p, '/');
+    if (colon && (!slash || colon < slash)) {
+      host = std::string(p, colon - p);
+      port = atoi(colon + 1);
+    } else {
+      host = slash ? std::string(p, slash - p) : std::string(p);
+    }
+  }
+  httplib::Client cli(host, port);
+  cli.set_connection_timeout(1);
+  auto res = cli.Get("/ping");
+  return res && res->status == 200;
+}
+
+// Launch s3copy if it is not already responding on /ping.
+// s3copy.py is expected to live in the same directory as this binary.
+// Uses s3copy's -d flag so it double-forks into an independent daemon.
+static void maybe_launch_s3copy(const std::string &logdir) {
+  const char *env_url = getenv("S3COPY_URL");
+  const char *url_base = env_url ? env_url : "http://localhost:7777";
+
+  if (s3copy_alive(url_base)) {
+    spdlog::info("s3copy already running at {}", url_base);
+    return;
+  }
+
+  // Locate s3copy.py next to this executable.
+  char exe[4096] = {};
+  ssize_t n = readlink("/proc/self/exe", exe, sizeof(exe) - 1);
+  if (n <= 0) {
+    spdlog::warn("s3copy: cannot resolve binary path; skipping auto-launch");
+    return;
+  }
+  exe[n] = '\0';
+  char *slash = strrchr(exe, '/');
+  if (!slash) {
+    spdlog::warn("s3copy: unexpected exe path {}; skipping auto-launch", exe);
+    return;
+  }
+  *slash = '\0';
+  std::string script = std::string(exe) + "/s3copy.py";
+  if (access(script.c_str(), F_OK) != 0) {
+    spdlog::warn("s3copy not running; {} not found; skipping auto-launch",
+                 script);
+    return;
+  }
+
+  // Fork and exec; s3copy's -d flag double-forks into a daemon.
+  // The first-generation child exits quickly and we reap it here.
+  pid_t pid = fork();
+  if (pid < 0) {
+    spdlog::warn("s3copy: fork failed: {}", strerror(errno));
+    return;
+  }
+  if (pid == 0) {
+    execlp("python3", "python3", script.c_str(), "-L", logdir.c_str(), "-d",
+           nullptr);
+    _exit(1);
+  }
+  waitpid(pid, nullptr, 0);
+  spdlog::info("s3copy launched from {}", script);
+}
 
 static sem_t g_stop_sem;
 // Wake main thread; sem_post is async-signal-safe.
@@ -119,6 +193,9 @@ int main(int argc, char **argv) {
   sem_init(&g_stop_sem, 0, 0);
   signal(SIGTERM, on_signal);
   signal(SIGINT, on_signal);
+
+  // Start s3copy sidecar if not already running.
+  maybe_launch_s3copy(node.abspath("log"));
 
   if (!node.start()) {
     return 1;

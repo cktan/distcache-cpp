@@ -177,6 +177,11 @@ int main(int argc, char **argv) {
   maybe_launch_s3copy(node.abspath("log"));
 
   // Wait up to 2 s for s3copy to be ready (it may need a moment after launch).
+  // TODO: instead of setting a clock, do this:
+  //     - loop for 10 times
+  //     - for each time:
+  //          - ping
+  //          - if failed, sleep .2 sec
   {
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     bool ready = false;

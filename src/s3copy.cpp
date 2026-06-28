@@ -4,6 +4,10 @@
 #include <cstdlib>
 #include <cstring>
 
+static std::string g_host = "localhost";
+static int g_port = 7777;
+static std::string g_base_path = "/";
+
 // Parse "http://host:port/base" into components.
 // base_path captures any path prefix after the host:port so that the sidecar
 // can be deployed behind a reverse proxy at a non-root path.
@@ -37,27 +41,29 @@ static bool parse_url(const std::string &url, std::string &host, int &port,
   return !host.empty() && port > 0;
 }
 
+// Initialize the s3copy module from $S3COPY_URL.
+void s3copy_init(void) {
+  const char *env = getenv("S3COPY_URL");
+  std::string url = env ? env : "http://localhost:7777";
+  if (!parse_url(url, g_host, g_port, g_base_path)) {
+    g_host = "localhost";
+    g_port = 7777;
+    g_base_path = "/";
+  }
+}
+
+// Probe the sidecar; return true if GET /ping responds HTTP 200.
+bool s3copy_ping(void) {
+  httplib::Client cli(g_host, g_port);
+  cli.set_connection_timeout(1);
+  auto res = cli.Get(g_base_path + "/ping");
+  return res && res->status == 200;
+}
+
 // Ask the s3copy sidecar to download s3://bucket/key and write it to
 // dest_abspath on the local filesystem.
-//
-// The sidecar owns AWS credentials and does the actual S3 transfer; this
-// process just gives it a destination path and waits for the HTTP response.
-// S3COPY_URL defaults to http://localhost:7777 if unset.
 rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
                   const std::string &dest_abspath) {
-  // Read sidecar address from environment; fall back to local default.
-  const char *env_url = getenv("S3COPY_URL");
-  std::string url = env_url ? env_url : "http://localhost:7777";
-
-  std::string host, base_path;
-  int port = 7777;
-  if (!parse_url(url, host, port, base_path)) {
-    // Malformed URL: use defaults so the request still attempts localhost.
-    host = "localhost";
-    port = 7777;
-    base_path = "";
-  }
-
   // Escape " and \ so bucket/key/path are safe to embed in a JSON string.
   auto escape = [](const std::string &s) {
     std::string out;
@@ -75,11 +81,11 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
                      "\"}";
 
   // POST to sidecar and wait up to 60 s for the S3 transfer to complete.
-  httplib::Client cli(host, port);
+  httplib::Client cli(g_host, g_port);
   cli.set_connection_timeout(5);
   cli.set_read_timeout(60);
 
-  auto res = cli.Post(base_path + "/copy", body, "application/json");
+  auto res = cli.Post(g_base_path + "/copy", body, "application/json");
   if (!res)
     return rc_t::err(rc_errcode_t::s3_error, "connection failed");
   if (res->status == 404)

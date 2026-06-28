@@ -1,5 +1,6 @@
 #include "node.h"
 #include "pidlock.h"
+#include "s3copy.h"
 #include <cerrno>
 #include <chrono>
 #include <csignal>
@@ -7,7 +8,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
-#include <httplib.h>
 #include <semaphore.h>
 #include <spdlog/sinks/basic_file_sink.h>
 #include <spdlog/sinks/stdout_color_sinks.h>
@@ -18,38 +18,12 @@
 
 #define DISTCACHE_VERSION "0.1.0"
 
-// Probe the s3copy sidecar; return true if GET /ping responds 200.
-// timeout_ms controls the per-attempt connection timeout.
-static bool s3copy_alive(const char *url_base, int timeout_ms = 1000) {
-  std::string host = "localhost";
-  int port = 7777;
-  const char *p = url_base;
-  if (strncmp(p, "http://", 7) == 0) {
-    p += 7;
-    const char *colon = strchr(p, ':');
-    const char *slash = strchr(p, '/');
-    if (colon && (!slash || colon < slash)) {
-      host = std::string(p, colon - p);
-      port = atoi(colon + 1);
-    } else {
-      host = slash ? std::string(p, slash - p) : std::string(p);
-    }
-  }
-  httplib::Client cli(host, port);
-  cli.set_connection_timeout(timeout_ms / 1000, (timeout_ms % 1000) * 1000);
-  auto res = cli.Get("/ping");
-  return res && res->status == 200;
-}
-
 // Launch s3copy if it is not already responding on /ping.
 // s3copy.py is expected to live in the same directory as this binary.
 // Uses s3copy's -d flag so it double-forks into an independent daemon.
 static void maybe_launch_s3copy(const std::string &logdir) {
-  const char *env_url = getenv("S3COPY_URL");
-  const char *url_base = env_url ? env_url : "http://localhost:7777";
-
-  if (s3copy_alive(url_base)) {
-    spdlog::info("s3copy already running at {}", url_base);
+  if (s3copy_ping()) {
+    spdlog::info("s3copy already running");
     return;
   }
 
@@ -196,24 +170,24 @@ int main(int argc, char **argv) {
   signal(SIGTERM, on_signal);
   signal(SIGINT, on_signal);
 
+  // Initialize s3copy module from $S3COPY_URL.
+  s3copy_init();
+
   // Start s3copy sidecar if not already running.
   maybe_launch_s3copy(node.abspath("log"));
 
   // Wait up to 2 s for s3copy to be ready (it may need a moment after launch).
   {
-    const char *env_url = getenv("S3COPY_URL");
-    const char *url_base = env_url ? env_url : "http://localhost:7777";
     auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(2);
     bool ready = false;
     while (std::chrono::steady_clock::now() < deadline) {
-      if (s3copy_alive(url_base, 200)) {
+      if (s3copy_ping()) {
         ready = true;
         break;
       }
     }
     if (!ready) {
-      spdlog::error("s3copy not responding at {} after 2 s; aborting",
-                    url_base);
+      spdlog::error("s3copy not responding after 2 s; aborting");
       return 1;
     }
   }

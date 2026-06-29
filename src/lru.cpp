@@ -36,6 +36,14 @@ void lru_t::touch(const relpath_t &relpath) {
     it->second.mtime = time(nullptr);
 }
 
+// Set mtime to 0, making the entry the coldest eviction candidate.
+void lru_t::chill(const relpath_t &relpath) {
+  std::lock_guard<std::mutex> map_lock(m_map_mtx_);
+  auto it = m_map_.find(relpath.str());
+  if (it != m_map_.end())
+    it->second.mtime = 0;
+}
+
 // Bulk-insert entries under a single lock acquisition.
 void lru_t::batch_put(
     const std::vector<std::pair<std::string, time_t>> &batch) {

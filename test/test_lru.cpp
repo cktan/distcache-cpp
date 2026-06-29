@@ -170,6 +170,28 @@ TEST_SUITE("LRU") {
     lru.batch_put(batch);
     CHECK(lru.size() == 2);
   }
+
+  // Verify that chill() sets mtime to 0, making the entry the coldest
+  // candidate.
+  // 1. Insert an entry with a recent mtime.
+  // 2. Call chill(); confirm get_mtime returns 0.
+  // 3. Confirm the entry is still tracked (size unchanged).
+  // 4. Confirm chill() on an absent key is a no-op.
+  TEST_CASE("chill sets mtime to 0") {
+    keylock_t keylock;
+    lru_t lru(keylock, no_id, "./tmp_test");
+    relpath_t rp{"cache/b/k"};
+    lru.put(rp, time(nullptr));
+
+    lru.chill(rp);
+
+    CHECK(lru.get_mtime(rp) == 0);
+    CHECK(lru.size() == 1);
+
+    // chill on absent key must not crash or insert
+    lru.chill(relpath_t{"cache/b/absent"});
+    CHECK(lru.size() == 1);
+  }
 }
 
 TEST_SUITE("KeyLock") {

@@ -50,6 +50,9 @@ public:
   // Refresh mtime to now, recording a cache hit.
   void touch(const relpath_t &relpath);
 
+  // Set mtime to 0, marking the entry as the coldest eviction candidate.
+  void chill(const relpath_t &relpath);
+
   // Bulk insert from the startup cache scan. relpath_pos computed via id_fn.
   void batch_put(const std::vector<std::pair<std::string, time_t>> &batch);
 

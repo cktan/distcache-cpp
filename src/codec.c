@@ -55,7 +55,7 @@ int url_encode(const char *src, char *buf, int bufsz) {
     unsigned char c = (unsigned char)*s;
     int unres = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
-                c == '~';
+                c == '~' || c == '/';
     n += unres ? 1 : 3;
   }
   if (n > bufsz)
@@ -65,7 +65,7 @@ int url_encode(const char *src, char *buf, int bufsz) {
     unsigned char c = (unsigned char)*s;
     int unres = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
                 (c >= '0' && c <= '9') || c == '-' || c == '_' || c == '.' ||
-                c == '~';
+                c == '~' || c == '/';
     if (unres) {
       *p++ = (char)c;
     } else {

@@ -20,6 +20,7 @@
 
 #define _GNU_SOURCE /* memmem */
 #include "distcache.h"
+#include "codec.h"
 #include "fnv.h"
 #include "ring.h"
 #include "stream.h"
@@ -123,24 +124,6 @@ static void node_checkin(dc_conn_t *conn) {
   if (conn->curl)
     curl_pool_put(conn->curl, conn->nodeid);
   conn->curl = NULL;
-}
-
-/* ── URL encoding ───────────────────────────────────────────────────────── */
-
-/* Percent-encode src into dst, leaving URL-safe characters unescaped. */
-static void url_encode(const char *src, char *dst, size_t dst_sz) {
-  static const char safe[] =
-      "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~/";
-  size_t di = 0;
-  for (const unsigned char *s = (const unsigned char *)src;
-       *s && di + 4 < dst_sz; s++) {
-    if (strchr(safe, (int)*s)) {
-      dst[di++] = (char)*s;
-    } else {
-      di += (size_t)snprintf(dst + di, dst_sz - di, "%%%02X", (unsigned)*s);
-    }
-  }
-  dst[di] = '\0';
 }
 
 /* ── Server error code mapping ──────────────────────────────────────────── */
@@ -662,8 +645,8 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   }
 
   char enc_bucket[512], enc_key[512], path[1100];
-  url_encode(bucket, enc_bucket, sizeof(enc_bucket));
-  url_encode(stripped_key, enc_key, sizeof(enc_key));
+  url_encode(bucket, enc_bucket, (int)sizeof(enc_bucket));
+  url_encode(stripped_key, enc_key, (int)sizeof(enc_key));
   snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
 
   /* Resolve redirects up to the maximum limit */

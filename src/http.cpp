@@ -140,7 +140,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
   bool local_only = req.has_param("local");
   bool no_redirect = req.has_param("no_redirect");
   bool delete_after = req.has_param("delete");
-  bool chill = req.has_param("chill");
 
   if (!local_only && !no_redirect) {
     // The normal case! We need to redirect if this node is not dest.
@@ -170,8 +169,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
         node.feed.put("cache.hit", relpath.str().c_str());
         node.stats.hits++;
         node.stats.served++;
-        if (chill)
-          node.cache.chill(relpath);
         serve_fd(fd, res);
         return;
       }
@@ -191,8 +188,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
     node.feed.put("cache.hit", relpath.str().c_str());
     node.stats.hits++;
     node.stats.served++;
-    if (chill)
-      node.cache.chill(relpath);
     serve_fd(fd, res);
     return;
   }
@@ -215,8 +210,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
   if (node.cache.read(relpath, fd).ok()) {
     kl_guard.release();
     node.stats.served++;
-    if (chill)
-      node.cache.chill(relpath);
     serve_fd(fd, res);
     return;
   }
@@ -256,8 +249,6 @@ static void handle_get(node_t &node, const httplib::Request &req,
     return;
   }
   node.stats.served++;
-  if (chill)
-    node.cache.chill(relpath);
   serve_fd(fd, res);
 }
 

@@ -292,9 +292,8 @@ void rebalancer_t::pull_one(const std::string &src_addr,
   cli.set_connection_timeout(5);
   cli.set_read_timeout(30);
 
-  // local=1: skip ring routing; chill=1: mark source copy as coldest eviction
-  // candidate rather than deleting it, so a failed pull leaves the file intact.
-  std::string path = "/" + bucket + "/" + key + "?local=1&chill=1";
+  // send to me only if you have it locally. Also, delete after sending.
+  std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
 
   // stream into this temp file
   relpath_t tmp_rel = m_node_.cache.tmp_relpath();

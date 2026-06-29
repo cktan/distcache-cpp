@@ -140,9 +140,6 @@ void cache_t::scan_cache(
   walk(m_homedir_ + "/cache", "cache", cb);
 }
 
-// Set the LRU mtime to 0, making relpath the coldest eviction candidate.
-void cache_t::chill(const relpath_t &relpath) { m_lru_.chill(relpath); }
-
 // Bulk-insert (relpath, mtime) pairs into the lru at startup.
 void cache_t::batch_put(
     const std::vector<std::pair<std::string, time_t>> &batch) {

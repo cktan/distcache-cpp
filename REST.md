@@ -156,7 +156,6 @@ components; `key` may contain `/`.
 | `local`       | serve only from local cache; skip ring routing|
 | `no_redirect` | serve directly; fetch from S3 if not cached   |
 | `delete`      | delete object from cache after serving        |
-| `chill`       | after serving, set LRU mtime to 0 (coldest eviction candidate) |
 
 **Responses:**
 
@@ -176,9 +175,6 @@ and finding the successor node.
   miss, so the caller always receives the object directly.
 - `?delete` — unlink the file from local cache after serving
   (used by `pull_one` to implement move-on-read).
-- `?chill` — after serving the file, set its LRU mtime to 0,
-  making it the coldest eviction candidate. Has no effect if
-  the file is not found locally.
 
 When routing is active and another node owns the key but
 the local node also holds the file, the response is a

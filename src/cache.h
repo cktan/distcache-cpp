@@ -57,9 +57,6 @@ public:
   // Walk cache/ subtree, calling cb(relpath, mtime) for each file.
   void scan_cache(const std::function<void(const std::string &, time_t)> &cb);
 
-  // Mark relpath as the coldest eviction candidate (sets LRU mtime to 0).
-  void chill(const relpath_t &relpath);
-
   // ── LRU forwarding ─────────────────────────────────────────────────────────
 
   void batch_put(const std::vector<std::pair<std::string, time_t>> &batch);

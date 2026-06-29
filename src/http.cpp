@@ -334,9 +334,34 @@ static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
 // POST /_hint_pull: enqueue do_pull so this node fetches relpath from src.
 static void handle_hint_pull(node_t &node, const httplib::Request &req,
                              httplib::Response &res) {
-  std::string src = json_str(req.body, "src");
-  std::string relpath = json_str(req.body, "relpath");
-  std::string mtime = json_str(req.body, "mtime");
+  // Parse body once; extract all three fields in a single token scan.
+  std::string src, relpath, mtime;
+  {
+    jsmn_parser p;
+    jsmn_init(&p);
+    const char *b = req.body.c_str();
+    size_t bsz = req.body.size();
+    int n = jsmn_parse(&p, b, bsz, nullptr, 0);
+    if (n > 0) {
+      std::vector<jsmntok_t> toks(n);
+      jsmn_init(&p);
+      if (jsmn_parse(&p, b, bsz, toks.data(), n) >= 0) {
+        for (int i = 1; i + 1 < n; i += 2) {
+          if (toks[i].type != JSMN_STRING || toks[i + 1].type != JSMN_STRING)
+            break;
+          std::string k(b + toks[i].start, toks[i].end - toks[i].start);
+          std::string v(b + toks[i + 1].start,
+                        toks[i + 1].end - toks[i + 1].start);
+          if (k == "src")
+            src = std::move(v);
+          else if (k == "relpath")
+            relpath = std::move(v);
+          else if (k == "mtime")
+            mtime = std::move(v);
+        }
+      }
+    }
+  }
 
   if (src.empty() || relpath.empty()) {
     send_raw(res,

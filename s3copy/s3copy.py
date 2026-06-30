@@ -12,12 +12,12 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # Error type tokens returned in {"ok": false, "errtype": ...} responses.
-ERR_NOT_FOUND    = "not_found"     # key absent in S3 or fake dir
-ERR_UNAUTHORIZED = "unauthorized"  # S3 access denied / forbidden
-ERR_BAD_REQUEST  = "bad_request"   # malformed or dangerous request from caller
-ERR_S3_ERROR     = "s3_error"      # S3 service error (throttle, internal, etc.)
-ERR_NETWORK      = "network_error" # connection or transfer failure reaching S3
-ERR_IO           = "io_error"      # local disk read/write failure
+ERR_NOT_FOUND    = "ERR_NOT_FOUND"    # key absent in S3 or fake dir
+ERR_UNAUTHORIZED = "ERR_UNAUTHORIZED" # S3 access denied / forbidden
+ERR_BAD_REQUEST  = "ERR_BAD_REQUEST"  # malformed or dangerous request from caller
+ERR_S3_ERROR     = "ERR_S3_ERROR"     # S3 service error (throttle, internal, etc.)
+ERR_NETWORK      = "ERR_NETWORK"      # connection or transfer failure reaching S3
+ERR_IO           = "ERR_IO"           # local disk read/write failure
 
 region_clients = {}
 default_region = None

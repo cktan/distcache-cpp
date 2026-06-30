@@ -18,8 +18,9 @@ enum class rc_errcode_t {
   ERR_S3COPY_S3_ERROR,     // sidecar: ERR_S3_ERROR (S3 service error)
   ERR_S3COPY_NETWORK,      // sidecar: ERR_NETWORK (network failure at sidecar)
   ERR_S3COPY_IO,           // sidecar: ERR_IO (disk failure at sidecar)
-  ERR_S3COPY_HTTP_404,     // sidecar endpoint not found (HTTP 404)
-  ERR_S3COPY_HTTP_ERR,     // other non-200 HTTP response from sidecar
+  ERR_S3COPY_HTTP_4xx,     // 4xx HTTP response from sidecar (bad request, not
+                           // found)
+  ERR_S3COPY_HTTP_5xx,     // 5xx HTTP response from sidecar (server error)
 };
 
 // Return the wire token string for code (e.g. "ERR_IO").
@@ -42,8 +43,8 @@ public:
   bool ok() const { return ok_; }
   rc_errcode_t errcode() const { return errcode_; }
   const std::string &errmsg() const { return errmsg_; }
-  // Returns the error code as a short lowercase string (e.g. "not_found",
-  // "io", "s3_error"); valid for the lifetime of this rc_t.
+  // Returns the error code as a string (e.g. "ERR_IO"); valid for the
+  // lifetime of this rc_t.
   const char *errstr() const;
 };
 

@@ -25,10 +25,10 @@ const char *rc_errcode_str(rc_errcode_t code) {
     return "ERR_S3COPY_NETWORK";
   case rc_errcode_t::ERR_S3COPY_IO:
     return "ERR_S3COPY_IO";
-  case rc_errcode_t::ERR_S3COPY_HTTP_404:
-    return "ERR_S3COPY_HTTP_404";
-  case rc_errcode_t::ERR_S3COPY_HTTP_ERR:
-    return "ERR_S3COPY_HTTP_ERR";
+  case rc_errcode_t::ERR_S3COPY_HTTP_4xx:
+    return "ERR_S3COPY_HTTP_4xx";
+  case rc_errcode_t::ERR_S3COPY_HTTP_5xx:
+    return "ERR_S3COPY_HTTP_5xx";
   }
   return "ERR_IO";
 }

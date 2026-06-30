@@ -127,12 +127,12 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
   auto res = cli.Post(g_base_path + "/copy", body, "application/json");
   if (!res)
     return rc_t::err(rc_errcode_t::ERR_S3_COPY, "connection failed");
-  if (res->status == 404)
-    return rc_t::err(rc_errcode_t::ERR_S3COPY_HTTP_404,
-                     "sidecar endpoint not found");
-  if (res->status != 200)
-    return rc_t::err(rc_errcode_t::ERR_S3COPY_HTTP_ERR,
-                     "HTTP " + std::to_string(res->status));
+  if (res->status != 200) {
+    rc_errcode_t code = res->status >= 500   ? rc_errcode_t::ERR_S3COPY_HTTP_5xx
+                        : res->status >= 400 ? rc_errcode_t::ERR_S3COPY_HTTP_4xx
+                                             : rc_errcode_t::ERR_S3_COPY;
+    return rc_t::err(code, "HTTP " + std::to_string(res->status));
+  }
   // Parse the JSON body: {"ok": true} or {"ok": false, "errtype": "...",
   // "errmsg": "..."}
   std::string ok = json_field(res->body, "ok");

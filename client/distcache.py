@@ -48,7 +48,15 @@ DCERR_CALLBACK_FAILED  =  10
 DCERR_INVALID_PATH     =  11
 DCERR_S3_COPY          =  12
 DCERR_IO               =  13
-DCERR_BAD_REQUEST      =  14
+DCERR_BAD_REQUEST          =  14
+DCERR_S3COPY_NOT_FOUND     =  15  # sidecar: key absent in S3
+DCERR_S3COPY_UNAUTHORIZED  =  16  # sidecar: access denied
+DCERR_S3COPY_BAD_REQUEST   =  17  # sidecar: malformed request
+DCERR_S3COPY_S3_ERROR      =  18  # sidecar: S3 service error
+DCERR_S3COPY_NETWORK       =  19  # sidecar: network failure
+DCERR_S3COPY_IO            =  20  # sidecar: disk failure
+DCERR_S3COPY_HTTP_4XX      =  21  # sidecar returned 4xx HTTP status
+DCERR_S3COPY_HTTP_5XX      =  22  # sidecar returned 5xx HTTP status
 DCERR_NETWORK          = 100   # connection or transfer failure
 DCERR_PROTOCOL         = 101   # truncated or malformed response
 DCERR_NOMEM            = 102   # (rare in Python)
@@ -67,7 +75,15 @@ _SERVER_ERRCODES: dict[str, int] = {
     "ERR_INVALID_PATH":    DCERR_INVALID_PATH,
     "ERR_S3_COPY":         DCERR_S3_COPY,
     "ERR_IO":              DCERR_IO,
-    "ERR_BAD_REQUEST":     DCERR_BAD_REQUEST,
+    "ERR_BAD_REQUEST":          DCERR_BAD_REQUEST,
+    "ERR_S3COPY_NOT_FOUND":     DCERR_S3COPY_NOT_FOUND,
+    "ERR_S3COPY_UNAUTHORIZED":  DCERR_S3COPY_UNAUTHORIZED,
+    "ERR_S3COPY_BAD_REQUEST":   DCERR_S3COPY_BAD_REQUEST,
+    "ERR_S3COPY_S3_ERROR":      DCERR_S3COPY_S3_ERROR,
+    "ERR_S3COPY_NETWORK":       DCERR_S3COPY_NETWORK,
+    "ERR_S3COPY_IO":            DCERR_S3COPY_IO,
+    "ERR_S3COPY_HTTP_4xx":      DCERR_S3COPY_HTTP_4XX,
+    "ERR_S3COPY_HTTP_5xx":      DCERR_S3COPY_HTTP_5XX,
 }
 
 

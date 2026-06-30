@@ -227,8 +227,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     kl_guard.release();
     node.stats.errors++;
     node.feed.put("s3copy.err", relpath.str().c_str(), rc.errstr());
-    send_raw(res,
-             wire_err(rc_errcode_t::ERR_S3_COPY, "s3copy failed") + WIRE_FIN);
+    send_raw(res, wire_err(rc.errcode(), rc.errmsg()) + WIRE_FIN);
     return;
   }
 

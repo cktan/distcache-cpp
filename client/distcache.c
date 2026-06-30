@@ -140,6 +140,22 @@ static int server_errcode(const char *s) {
     return DCERR_IO;
   if (strcmp(s, "ERR_BAD_REQUEST") == 0)
     return DCERR_BAD_REQUEST;
+  if (strcmp(s, "ERR_S3COPY_NOT_FOUND") == 0)
+    return DCERR_S3COPY_NOT_FOUND;
+  if (strcmp(s, "ERR_S3COPY_UNAUTHORIZED") == 0)
+    return DCERR_S3COPY_UNAUTHORIZED;
+  if (strcmp(s, "ERR_S3COPY_BAD_REQUEST") == 0)
+    return DCERR_S3COPY_BAD_REQUEST;
+  if (strcmp(s, "ERR_S3COPY_S3_ERROR") == 0)
+    return DCERR_S3COPY_S3_ERROR;
+  if (strcmp(s, "ERR_S3COPY_NETWORK") == 0)
+    return DCERR_S3COPY_NETWORK;
+  if (strcmp(s, "ERR_S3COPY_IO") == 0)
+    return DCERR_S3COPY_IO;
+  if (strcmp(s, "ERR_S3COPY_HTTP_4xx") == 0)
+    return DCERR_S3COPY_HTTP_4XX;
+  if (strcmp(s, "ERR_S3COPY_HTTP_5xx") == 0)
+    return DCERR_S3COPY_HTTP_5XX;
   return DCERR_PROTOCOL;
 }
 

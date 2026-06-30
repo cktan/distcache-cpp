@@ -127,9 +127,17 @@ const char *dc_errmsg(void);
 /* Server-originated (mirror ERR_* strings from the server) */
 #define DCERR_NOT_CACHED 3
 #define DCERR_INVALID_PATH 11
-#define DCERR_S3_COPY 12
+#define DCERR_S3_COPY 12 /* connection failed or unknown sidecar error */
 #define DCERR_IO 13
 #define DCERR_BAD_REQUEST 14
+#define DCERR_S3COPY_NOT_FOUND 15    /* sidecar: key absent in S3 */
+#define DCERR_S3COPY_UNAUTHORIZED 16 /* sidecar: access denied */
+#define DCERR_S3COPY_BAD_REQUEST 17  /* sidecar: malformed request */
+#define DCERR_S3COPY_S3_ERROR 18     /* sidecar: S3 service error */
+#define DCERR_S3COPY_NETWORK 19      /* sidecar: network failure */
+#define DCERR_S3COPY_IO 20           /* sidecar: disk failure */
+#define DCERR_S3COPY_HTTP_4XX 21     /* sidecar returned 4xx HTTP status */
+#define DCERR_S3COPY_HTTP_5XX 22     /* sidecar returned 5xx HTTP status */
 
 /* Client-originated (set by the client library, never sent by the server) */
 #define DCERR_NO_NODE 4

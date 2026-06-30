@@ -6,11 +6,11 @@
 // These strings match the ERR_* tokens sent on the wire and the DCERR_*
 // codes in the C client.
 enum class rc_errcode_t {
-  ERR_IO,
+  ERR_BAD_REQUEST,
   ERR_INVALID_PATH,
+  ERR_IO,
   ERR_NOT_CACHED,
   ERR_S3_COPY, // connection failed or unknown sidecar error
-  ERR_BAD_REQUEST,
   // Specific sidecar error codes (mapped from errtype in the JSON response).
   ERR_S3COPY_NOT_FOUND,    // sidecar: ERR_NOT_FOUND (key absent in S3)
   ERR_S3COPY_UNAUTHORIZED, // sidecar: ERR_UNAUTHORIZED (access denied)

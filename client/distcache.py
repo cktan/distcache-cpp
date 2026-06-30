@@ -35,15 +35,8 @@ from typing import Callable, Optional
 # Error codes  (mirror distcache.h and server ERR_* strings)
 # ---------------------------------------------------------------------------
 
-DCERR_UNKNOWN_COMMAND  =   1
-DCERR_BAD_OBJECT_NAME  =   2
 DCERR_NOT_CACHED       =   3
 DCERR_NO_NODE          =   4
-DCERR_DISK_FULL        =   5
-DCERR_S3               =   6
-DCERR_TIMEOUT          =   7
-DCERR_NOT_FOUND        =   8
-DCERR_S3_AUTH          =   9
 DCERR_CALLBACK_FAILED  =  10
 DCERR_INVALID_PATH     =  11
 DCERR_S3_COPY          =  12
@@ -63,18 +56,10 @@ DCERR_NOMEM            = 102   # (rare in Python)
 DCERR_REDIRECT_LOOP    = 103   # too many redirect hops
 
 _SERVER_ERRCODES: dict[str, int] = {
-    "ERR_UNKNOWN_COMMAND": DCERR_UNKNOWN_COMMAND,
-    "ERR_BAD_OBJECT_NAME": DCERR_BAD_OBJECT_NAME,
-    "ERR_NOT_CACHED":      DCERR_NOT_CACHED,
-    "ERR_NO_NODE":         DCERR_NO_NODE,
-    "ERR_DISK_FULL":       DCERR_DISK_FULL,
-    "ERR_S3":              DCERR_S3,
-    "ERR_TIMEOUT":         DCERR_TIMEOUT,
-    "ERR_NOT_FOUND":       DCERR_NOT_FOUND,
-    "ERR_S3_AUTH":         DCERR_S3_AUTH,
-    "ERR_INVALID_PATH":    DCERR_INVALID_PATH,
-    "ERR_S3_COPY":         DCERR_S3_COPY,
-    "ERR_IO":              DCERR_IO,
+    "ERR_NOT_CACHED":           DCERR_NOT_CACHED,
+    "ERR_INVALID_PATH":         DCERR_INVALID_PATH,
+    "ERR_S3_COPY":              DCERR_S3_COPY,
+    "ERR_IO":                   DCERR_IO,
     "ERR_BAD_REQUEST":          DCERR_BAD_REQUEST,
     "ERR_S3COPY_NOT_FOUND":     DCERR_S3COPY_NOT_FOUND,
     "ERR_S3COPY_UNAUTHORIZED":  DCERR_S3COPY_UNAUTHORIZED,

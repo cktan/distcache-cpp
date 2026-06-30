@@ -1,4 +1,5 @@
 #include "wire.h"
+#include "rc.h"
 #include <cstdlib>
 #include <cstring>
 
@@ -16,9 +17,9 @@ std::string wire_redirect(const std::string &node) {
   return out;
 }
 
-// Encode an ERROR frame with a short type token and a human-readable message.
-std::string wire_err(const std::string &type, const std::string &msg) {
-  std::string payload = type + "\n" + msg + "\n";
+// Encode an ERROR frame with a type token and a human-readable message.
+std::string wire_err(rc_errcode_t type, const std::string &msg) {
+  std::string payload = std::string(rc_errcode_str(type)) + "\n" + msg + "\n";
   std::string out;
   out += "ERROR:";
   out += std::to_string(payload.size());

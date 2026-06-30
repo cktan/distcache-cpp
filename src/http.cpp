@@ -84,7 +84,8 @@ static bool send_file(fd_t &fd, bool &done, httplib::DataSink &sink) {
   }
   if (n < 0) {
     // got error
-    std::string err = wire_err("ERR_IO", strerror(errno)) + WIRE_FIN;
+    std::string err =
+        wire_err(rc_errcode_t::ERR_IO, strerror(errno)) + WIRE_FIN;
     sink.write(err.data(), err.size());
   }
   // EOF - normal case - write a FIN frame
@@ -123,14 +124,16 @@ static void handle_get(node_t &node, const httplib::Request &req,
   // We need the relpath_pos to interrogate ring for the responsible node.
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
-    send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid path") +
+                      WIRE_FIN);
     return;
   }
 
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
     send_raw(res,
-             wire_err("ERR_INVALID_PATH", "invalid bucket or key") + WIRE_FIN);
+             wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid bucket or key") +
+                 WIRE_FIN);
     return;
   }
   const relpath_t &relpath = *relpath_opt;
@@ -198,7 +201,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
 
   // If no download from S3, then done.
   if (local_only) {
-    send_raw(res, wire_err("ERR_NOT_CACHED", "key not cached") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_NOT_CACHED, "key not cached") +
+                      WIRE_FIN);
     return;
   }
 
@@ -223,7 +227,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
     kl_guard.release();
     node.stats.errors++;
     node.feed.put("s3copy.err", relpath.str().c_str(), rc.errstr());
-    send_raw(res, wire_err("ERR_S3_COPY", "s3copy failed") + WIRE_FIN);
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_S3_COPY, "s3copy failed") + WIRE_FIN);
     return;
   }
 
@@ -233,7 +238,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     remove(tmp_abs.c_str());
     kl_guard.release();
     node.stats.errors++;
-    send_raw(res, wire_err("ERR_IO", "move failed") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_IO, "move failed") + WIRE_FIN);
     return;
   }
   kl_guard.release();
@@ -245,7 +250,8 @@ static void handle_get(node_t &node, const httplib::Request &req,
   // Open file and serve
   if (!node.cache.read(relpath, fd).ok()) {
     node.stats.errors++;
-    send_raw(res, wire_err("ERR_IO", "read after fetch failed") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_IO, "read after fetch failed") +
+                      WIRE_FIN);
     return;
   }
   node.stats.served++;
@@ -323,7 +329,8 @@ static void handle_claim_keyspace(node_t &node, const httplib::Request &req,
   std::string nodeid = json_str(req.body, "nodeid");
 
   if (nodeid.empty()) {
-    send_raw(res, wire_err("ERR_BAD_REQUEST", "missing nodeid") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_BAD_REQUEST, "missing nodeid") +
+                      WIRE_FIN);
     return;
   }
 
@@ -365,7 +372,8 @@ static void handle_hint_pull(node_t &node, const httplib::Request &req,
 
   if (src.empty() || relpath.empty()) {
     send_raw(res,
-             wire_err("ERR_BAD_REQUEST", "missing src or relpath") + WIRE_FIN);
+             wire_err(rc_errcode_t::ERR_BAD_REQUEST, "missing src or relpath") +
+                 WIRE_FIN);
     return;
   }
 
@@ -381,13 +389,15 @@ static void handle_put(node_t &node, const httplib::Request &req,
                        const httplib::ContentReader &content_reader) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
-    send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid path") +
+                      WIRE_FIN);
     return;
   }
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
     send_raw(res,
-             wire_err("ERR_INVALID_PATH", "invalid bucket or key") + WIRE_FIN);
+             wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid bucket or key") +
+                 WIRE_FIN);
     return;
   }
   const relpath_t &relpath = *relpath_opt;
@@ -396,7 +406,7 @@ static void handle_put(node_t &node, const httplib::Request &req,
   int raw_fd = ::open(node.cache.abspath(tmp_rel).c_str(),
                       O_WRONLY | O_CREAT | O_EXCL, 0600);
   if (raw_fd < 0) {
-    send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_IO, "write failed") + WIRE_FIN);
     return;
   }
   fd_t fd(raw_fd);
@@ -418,11 +428,11 @@ static void handle_put(node_t &node, const httplib::Request &req,
 
   if (!ok || !read_success) {
     node.cache.drop(tmp_rel);
-    send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_IO, "write failed") + WIRE_FIN);
     return;
   }
   if (!node.cache.move(tmp_rel, relpath).ok()) {
-    send_raw(res, wire_err("ERR_IO", "write failed") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_IO, "write failed") + WIRE_FIN);
     return;
   }
   node.jobq.put("maybe_evict");
@@ -434,13 +444,15 @@ static void handle_delete(node_t &node, const httplib::Request &req,
                           httplib::Response &res) {
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
-    send_raw(res, wire_err("ERR_INVALID_PATH", "invalid path") + WIRE_FIN);
+    send_raw(res, wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid path") +
+                      WIRE_FIN);
     return;
   }
   auto relpath_opt = compute_relpath(bucket, key);
   if (!relpath_opt) {
     send_raw(res,
-             wire_err("ERR_INVALID_PATH", "invalid bucket or key") + WIRE_FIN);
+             wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid bucket or key") +
+                 WIRE_FIN);
     return;
   }
   const relpath_t &relpath = *relpath_opt;

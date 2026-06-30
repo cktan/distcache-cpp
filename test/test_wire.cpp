@@ -27,15 +27,14 @@ TEST_CASE("wire_redirect: correct framing") {
  * terminated lines.
  *
  * Steps:
- * 1. Construct an ERROR string with type "ERR_NOT_FOUND" and message "not
- * found".
- * 2. Verify it matches "ERROR:24\nERR_NOT_FOUND\nnot found\n".
+ * 1. Construct an ERROR string with ERR_NOT_CACHED and message "not found".
+ * 2. Verify it matches "ERROR:25\nERR_NOT_CACHED\nnot found\n".
  * 3. Verify appending WIRE_FIN produces the full response.
  */
 TEST_CASE("wire_err: correct framing") {
-  std::string s = wire_err("ERR_NOT_FOUND", "not found");
-  CHECK(s == "ERROR:24\nERR_NOT_FOUND\nnot found\n");
-  CHECK(s + WIRE_FIN == "ERROR:24\nERR_NOT_FOUND\nnot found\nFIN:0\n");
+  std::string s = wire_err(rc_errcode_t::ERR_NOT_CACHED, "not found");
+  CHECK(s == "ERROR:25\nERR_NOT_CACHED\nnot found\n");
+  CHECK(s + WIRE_FIN == "ERROR:25\nERR_NOT_CACHED\nnot found\nFIN:0\n");
 }
 
 /**

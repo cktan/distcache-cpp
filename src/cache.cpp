@@ -63,10 +63,10 @@ static void walk(const std::string &dir, const std::string &relbase,
 // Map the current errno to an rc_t error, using msg as the error message.
 static rc_t errno_to_rc(const std::string &msg) {
   if (errno == ENOENT)
-    return rc_t::err(rc_errcode_t::not_found, msg);
+    return rc_t::err(rc_errcode_t::ERR_NOT_CACHED, msg);
   if (errno == EACCES || errno == EPERM)
-    return rc_t::err(rc_errcode_t::permission, msg);
-  return rc_t::err(rc_errcode_t::io, msg);
+    return rc_t::err(rc_errcode_t::ERR_IO, msg);
+  return rc_t::err(rc_errcode_t::ERR_IO, msg);
 }
 
 // Initialize cache rooted at homedir; keylock is shared with the lru.
@@ -129,7 +129,7 @@ rc_t cache_t::mkdirs(const relpath_t &relpath) {
   std::filesystem::create_directories(
       std::filesystem::path(abspath(relpath)).parent_path(), ec);
   if (ec) {
-    return rc_t::err(rc_errcode_t::io, "mkdirs failed");
+    return rc_t::err(rc_errcode_t::ERR_IO, "mkdirs failed");
   }
   return {};
 }

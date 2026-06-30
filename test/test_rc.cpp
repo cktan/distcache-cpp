@@ -26,40 +26,38 @@ TEST_SUITE("rc_t") {
    * rc_t in an error state with the specified error code and message.
    *
    * Steps:
-   * 1. Create an rc_t using rc_t::err(rc_errcode_t::not_found, "missing").
+   * 1. Create an rc_t using rc_t::err(rc_errcode_t::ERR_NOT_CACHED, "missing").
    * 2. Verify that r.ok() is false.
-   * 3. Verify that the error code matches rc_errcode_t::not_found.
+   * 3. Verify that the error code matches rc_errcode_t::ERR_NOT_CACHED.
    * 4. Verify that the error message is "missing".
    */
   TEST_CASE("err sets ok=false with code and message") {
-    auto r = rc_t::err(rc_errcode_t::not_found, "missing");
+    auto r = rc_t::err(rc_errcode_t::ERR_NOT_CACHED, "missing");
     CHECK_FALSE(r.ok());
-    CHECK(r.errcode() == rc_errcode_t::not_found);
+    CHECK(r.errcode() == rc_errcode_t::ERR_NOT_CACHED);
     CHECK(r.errmsg() == "missing");
   }
 
   /**
-   * @test errstr covers all six codes
-   * @brief Tests that rc_t::errstr() returns the correct string representations
-   * for each of the six error codes.
+   * @test errstr covers all five codes
+   * @brief Tests that rc_t::errstr() returns the correct wire token string
+   * for each of the five error codes.
    *
    * Steps:
-   * 1. For each error code, construct an error rc_t and retrieve its string
-   * representation.
-   * 2. Verify it matches the expected string literal name.
+   * 1. For each error code, construct an error rc_t and retrieve its string.
+   * 2. Verify it matches the expected ERR_* wire token.
    */
-  TEST_CASE("errstr covers all six codes") {
-    CHECK(std::string(rc_t::err(rc_errcode_t::not_found, "").errstr()) ==
-          "not_found");
-    CHECK(std::string(rc_t::err(rc_errcode_t::permission, "").errstr()) ==
-          "permission");
-    CHECK(std::string(rc_t::err(rc_errcode_t::io, "").errstr()) == "io");
-    CHECK(std::string(rc_t::err(rc_errcode_t::s3_not_found, "").errstr()) ==
-          "s3_not_found");
-    CHECK(std::string(rc_t::err(rc_errcode_t::s3_forbidden, "").errstr()) ==
-          "s3_forbidden");
-    CHECK(std::string(rc_t::err(rc_errcode_t::s3_error, "").errstr()) ==
-          "s3_error");
+  TEST_CASE("errstr covers all five codes") {
+    CHECK(std::string(rc_t::err(rc_errcode_t::ERR_IO, "").errstr()) ==
+          "ERR_IO");
+    CHECK(std::string(rc_t::err(rc_errcode_t::ERR_INVALID_PATH, "").errstr()) ==
+          "ERR_INVALID_PATH");
+    CHECK(std::string(rc_t::err(rc_errcode_t::ERR_NOT_CACHED, "").errstr()) ==
+          "ERR_NOT_CACHED");
+    CHECK(std::string(rc_t::err(rc_errcode_t::ERR_S3_COPY, "").errstr()) ==
+          "ERR_S3_COPY");
+    CHECK(std::string(rc_t::err(rc_errcode_t::ERR_BAD_REQUEST, "").errstr()) ==
+          "ERR_BAD_REQUEST");
   }
 }
 

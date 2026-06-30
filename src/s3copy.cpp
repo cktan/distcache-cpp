@@ -77,13 +77,13 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
 
   auto res = cli.Post(g_base_path + "/copy", body, "application/json");
   if (!res)
-    return rc_t::err(rc_errcode_t::s3_error, "connection failed");
+    return rc_t::err(rc_errcode_t::ERR_S3_COPY, "connection failed");
   if (res->status == 404)
-    return rc_t::err(rc_errcode_t::s3_not_found, "not found");
+    return rc_t::err(rc_errcode_t::ERR_S3_COPY, "not found");
   if (res->status == 403 || res->status == 401)
-    return rc_t::err(rc_errcode_t::s3_forbidden, "forbidden");
+    return rc_t::err(rc_errcode_t::ERR_S3_COPY, "forbidden");
   if (res->status != 200)
-    return rc_t::err(rc_errcode_t::s3_error,
+    return rc_t::err(rc_errcode_t::ERR_S3_COPY,
                      "HTTP " + std::to_string(res->status));
   return {};
 }

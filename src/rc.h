@@ -2,15 +2,19 @@
 #include <string>
 #include <unistd.h>
 
-// Broad error categories returned by cache and S3 operations.
+// Broad error categories returned by cache, S3, and HTTP operations.
+// These strings match the ERR_* tokens sent on the wire and the DCERR_*
+// codes in the C client.
 enum class rc_errcode_t {
-  not_found,
-  permission,
-  io,
-  s3_not_found,
-  s3_forbidden,
-  s3_error,
+  ERR_IO,
+  ERR_INVALID_PATH,
+  ERR_NOT_CACHED,
+  ERR_S3_COPY,
+  ERR_BAD_REQUEST,
 };
+
+// Return the wire token string for code (e.g. "ERR_IO").
+const char *rc_errcode_str(rc_errcode_t code);
 
 // Return-code type. Default-constructed rc_t is success. Use rc_t::err() to
 // build a failure. Check with ok(); inspect the error with errcode()/errstr().
@@ -22,7 +26,7 @@ class rc_t {
       : ok_(ok), errcode_(code), errmsg_(std::move(msg)) {}
 
 public:
-  rc_t() : ok_(true), errcode_(rc_errcode_t::io) {}
+  rc_t() : ok_(true), errcode_(rc_errcode_t::ERR_IO) {}
   static rc_t err(rc_errcode_t code, std::string msg) {
     return rc_t(false, code, std::move(msg));
   }

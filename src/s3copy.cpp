@@ -61,6 +61,55 @@ bool s3copy_ping(void) {
   return res && res->status == 200;
 }
 
+// Extract a string or boolean value from a flat JSON object by key.
+// Returns the unquoted string value, or the raw token for booleans/numbers.
+// Returns "" if the key is absent or the body is malformed.
+static std::string json_field(const std::string &body, const char *key) {
+  std::string needle = std::string("\"") + key + "\"";
+  size_t pos = body.find(needle);
+  if (pos == std::string::npos)
+    return "";
+  pos += needle.size();
+  while (pos < body.size() && (body[pos] == ' ' || body[pos] == ':'))
+    pos++;
+  if (pos >= body.size())
+    return "";
+  if (body[pos] == '"') {
+    // String value: scan to closing quote, honouring backslash escapes.
+    pos++;
+    std::string val;
+    while (pos < body.size() && body[pos] != '"') {
+      if (body[pos] == '\\' && pos + 1 < body.size())
+        val += body[++pos];
+      else
+        val += body[pos];
+      pos++;
+    }
+    return val;
+  }
+  // Boolean or number: scan to next delimiter.
+  size_t end = body.find_first_of(",}\n", pos);
+  return body.substr(pos,
+                     end == std::string::npos ? std::string::npos : end - pos);
+}
+
+// Map the sidecar's errtype string to a C++ error code.
+static rc_errcode_t errtype_to_rc(const std::string &errtype) {
+  if (errtype == "ERR_NOT_FOUND")
+    return rc_errcode_t::ERR_S3COPY_NOT_FOUND;
+  if (errtype == "ERR_UNAUTHORIZED")
+    return rc_errcode_t::ERR_S3COPY_UNAUTHORIZED;
+  if (errtype == "ERR_BAD_REQUEST")
+    return rc_errcode_t::ERR_S3COPY_BAD_REQUEST;
+  if (errtype == "ERR_S3_ERROR")
+    return rc_errcode_t::ERR_S3COPY_S3_ERROR;
+  if (errtype == "ERR_NETWORK")
+    return rc_errcode_t::ERR_S3COPY_NETWORK;
+  if (errtype == "ERR_IO")
+    return rc_errcode_t::ERR_S3COPY_IO;
+  return rc_errcode_t::ERR_S3_COPY;
+}
+
 // Ask the s3copy sidecar to download s3://bucket/key and write it to
 // dest_abspath on the local filesystem.
 rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
@@ -79,11 +128,20 @@ rc_t s3copy_fetch(const std::string &bucket, const std::string &key,
   if (!res)
     return rc_t::err(rc_errcode_t::ERR_S3_COPY, "connection failed");
   if (res->status == 404)
-    return rc_t::err(rc_errcode_t::ERR_S3_COPY, "not found");
-  if (res->status == 403 || res->status == 401)
-    return rc_t::err(rc_errcode_t::ERR_S3_COPY, "forbidden");
+    return rc_t::err(rc_errcode_t::ERR_S3COPY_HTTP_404,
+                     "sidecar endpoint not found");
   if (res->status != 200)
-    return rc_t::err(rc_errcode_t::ERR_S3_COPY,
+    return rc_t::err(rc_errcode_t::ERR_S3COPY_HTTP_ERR,
                      "HTTP " + std::to_string(res->status));
-  return {};
+  // Parse the JSON body: {"ok": true} or {"ok": false, "errtype": "...",
+  // "errmsg": "..."}
+  std::string ok = json_field(res->body, "ok");
+  if (ok == "true")
+    return {};
+  if (ok != "false")
+    return rc_t::err(rc_errcode_t::ERR_S3_COPY, "invalid sidecar response");
+  std::string errtype = json_field(res->body, "errtype");
+  std::string errmsg = json_field(res->body, "errmsg");
+  return rc_t::err(errtype_to_rc(errtype),
+                   errmsg.empty() ? "sidecar error" : errmsg);
 }

@@ -9,8 +9,17 @@ enum class rc_errcode_t {
   ERR_IO,
   ERR_INVALID_PATH,
   ERR_NOT_CACHED,
-  ERR_S3_COPY,
+  ERR_S3_COPY, // connection failed or unknown sidecar error
   ERR_BAD_REQUEST,
+  // Specific sidecar error codes (mapped from errtype in the JSON response).
+  ERR_S3COPY_NOT_FOUND,    // sidecar: ERR_NOT_FOUND (key absent in S3)
+  ERR_S3COPY_UNAUTHORIZED, // sidecar: ERR_UNAUTHORIZED (access denied)
+  ERR_S3COPY_BAD_REQUEST,  // sidecar: ERR_BAD_REQUEST (malformed request)
+  ERR_S3COPY_S3_ERROR,     // sidecar: ERR_S3_ERROR (S3 service error)
+  ERR_S3COPY_NETWORK,      // sidecar: ERR_NETWORK (network failure at sidecar)
+  ERR_S3COPY_IO,           // sidecar: ERR_IO (disk failure at sidecar)
+  ERR_S3COPY_HTTP_404,     // sidecar endpoint not found (HTTP 404)
+  ERR_S3COPY_HTTP_ERR,     // other non-200 HTTP response from sidecar
 };
 
 // Return the wire token string for code (e.g. "ERR_IO").

@@ -232,7 +232,7 @@ class TestCopyError:
                                           "dest": str(tmp_path / "out")})
         data = resp.get_json()
         assert data["ok"] is False
-        assert data["errtype"] == "error"
+        assert data["errtype"] == "s3_error"
         assert "errmsg" in data
 
     def test_generic_exception_returns_error(self, client, mock_s3, tmp_path):
@@ -241,7 +241,7 @@ class TestCopyError:
                                           "dest": str(tmp_path / "out")})
         data = resp.get_json()
         assert data["ok"] is False
-        assert data["errtype"] == "error"
+        assert data["errtype"] == "network_error"
         assert "network gone" in data["errmsg"]
 
 
@@ -348,7 +348,7 @@ class TestFakeMode:
     def test_path_traversal_rejected(self, client, tmp_path):
         resp = client.post("/copy", json={"bucket": "..", "key": "escape", "dest": str(tmp_path / "out")})
         assert resp.status_code == 400
-        assert resp.get_json()["errtype"] == "error"
+        assert resp.get_json()["errtype"] == "bad_request"
 
     def test_boto3_never_called(self, client, tmp_path):
         with patch.object(s3copy, "get_s3_client") as mock_getter:

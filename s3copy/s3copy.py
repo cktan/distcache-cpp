@@ -12,9 +12,12 @@ from flask import Flask, request, jsonify
 app = Flask(__name__)
 
 # Error type tokens returned in {"ok": false, "errtype": ...} responses.
-ERR_NOT_FOUND   = "not_found"    # key absent in S3 or fake dir
-ERR_UNAUTHORIZED = "unauthorized" # S3 access denied / forbidden
-ERR_ERROR       = "error"        # all other failures (bad request, S3 error, etc.)
+ERR_NOT_FOUND    = "not_found"     # key absent in S3 or fake dir
+ERR_UNAUTHORIZED = "unauthorized"  # S3 access denied / forbidden
+ERR_BAD_REQUEST  = "bad_request"   # malformed or dangerous request from caller
+ERR_S3_ERROR     = "s3_error"      # S3 service error (throttle, internal, etc.)
+ERR_NETWORK      = "network_error" # connection or transfer failure reaching S3
+ERR_IO           = "io_error"      # local disk read/write failure
 
 region_clients = {}
 default_region = None
@@ -46,11 +49,11 @@ def get_s3_client(region):
 def copy():
     data = request.get_json()
     if not data:
-        return jsonify({"ok": False, "errtype": ERR_ERROR, "errmsg": "missing request body"}), 400
+        return jsonify({"ok": False, "errtype": ERR_BAD_REQUEST, "errmsg": "missing request body"}), 400
 
     missing = [f for f in ("bucket", "key", "dest") if f not in data]
     if missing:
-        return jsonify({"ok": False, "errtype": ERR_ERROR,
+        return jsonify({"ok": False, "errtype": ERR_BAD_REQUEST,
                         "errmsg": f"missing field(s): {', '.join(missing)}"}), 400
 
     bucket = data["bucket"]
@@ -60,7 +63,7 @@ def copy():
     if fake_dir:
         src = os.path.realpath(os.path.join(fake_dir, bucket, key))
         if not src.startswith(os.path.realpath(fake_dir) + os.sep):
-            return jsonify({"ok": False, "errtype": ERR_ERROR, "errmsg": "path traversal rejected"}), 400
+            return jsonify({"ok": False, "errtype": ERR_BAD_REQUEST, "errmsg": "path traversal rejected"}), 400
         if not os.path.isfile(src):
             return jsonify({"ok": False, "errtype": ERR_NOT_FOUND,
                             "errmsg": f"{bucket}/{key} not found in fake dir"})
@@ -84,10 +87,13 @@ def copy():
         if code in ("AccessDenied", "403"):
             return jsonify({"ok": False, "errtype": ERR_UNAUTHORIZED, "errmsg": str(e)})
         logging.error(f"S3 error {bucket}/{key}: {e}")
-        return jsonify({"ok": False, "errtype": ERR_ERROR, "errmsg": str(e)})
+        return jsonify({"ok": False, "errtype": ERR_S3_ERROR, "errmsg": str(e)})
+    except OSError as e:
+        logging.error(f"IO error fetching {bucket}/{key}: {e}")
+        return jsonify({"ok": False, "errtype": ERR_IO, "errmsg": str(e)})
     except Exception as e:
-        logging.error(f"Error fetching {bucket}/{key}: {e}")
-        return jsonify({"ok": False, "errtype": ERR_ERROR, "errmsg": str(e)})
+        logging.error(f"Network error fetching {bucket}/{key}: {e}")
+        return jsonify({"ok": False, "errtype": ERR_NETWORK, "errmsg": str(e)})
 
     record_served(os.path.getsize(dest))
     logging.info(f"fetched {bucket}/{key} → {dest}")

@@ -1,0 +1,4 @@
+Need to install all python requirements:
+
+pip install --user --break-system-packages -r s3copy/requirements.txt
+

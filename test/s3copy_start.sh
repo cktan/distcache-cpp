@@ -50,4 +50,6 @@ for i in $(seq 1 50); do
 done
 
 echo "ERROR: s3copy did not start within 5s" >&2
+echo "  log: $LOGDIR/stdout.log" >&2
+tail -20 "$LOGDIR/stdout.log" >&2
 exit 1

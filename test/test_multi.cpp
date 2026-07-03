@@ -159,7 +159,8 @@ struct ClusterFixture {
     // start s3copy via helper script (kills stale, waits for port, writes PID)
     std::string start_script = project_root() + "/test/s3copy_start.sh";
     int rc = system(start_script.c_str());
-    REQUIRE(rc == 0); // s3copy failed to start
+    INFO("s3copy startup log: /tmp/test_env_s3copy/stdout.log");
+    REQUIRE(rc == 0);
     std::ifstream pidf("/tmp/test_env_s3copy/s3copy.pid");
     if (pidf)
       pidf >> s3copy_pid;

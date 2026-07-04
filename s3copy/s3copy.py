@@ -155,6 +155,7 @@ def _daemonize():
 
 
 def main():
+    # parse command-line arguments
     parser = argparse.ArgumentParser(
         prog="s3copy",
         description="S3 download sidecar. Accepts POST /copy {bucket, key, dest} requests "
@@ -173,15 +174,18 @@ def main():
                         help="detach and run as an independent background daemon")
     args = parser.parse_args()
 
+    # initialize shared state from parsed args
     state.default_region = args.region
     state.fake_dir = args.fakedir
     state.start_time = datetime.now()
 
     os.makedirs(args.logdir, exist_ok=True)
 
+    # detach into a background daemon before logging/serving start, if requested
     if args.daemon:
         _daemonize()
 
+    # set up logging to both file and stdout
     pid = os.getpid()
     log_path = os.path.join(args.logdir, f"s3copy{pid}.log")
     logging.basicConfig(
@@ -206,6 +210,7 @@ def main():
     except Exception:
         pass
 
+    # start serving requests
     app.run(host="127.0.0.1", port=args.port, threaded=True)
 
 

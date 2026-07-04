@@ -47,6 +47,8 @@ def get_s3_client(region):
 
 @app.route("/copy", methods=["POST"])
 def copy():
+    """Fetch bucket/key (from S3, or fake_dir in test mode) and write it to dest."""
+    # validate request body
     data = request.get_json()
     if not data:
         return jsonify({"ok": False, "errtype": ERR_BAD_REQUEST, "errmsg": "missing request body"}), 400
@@ -60,6 +62,7 @@ def copy():
     key    = data["key"]
     dest   = data["dest"]
 
+    # test mode: serve from a local directory instead of real S3
     if fake_dir:
         src = os.path.realpath(os.path.join(fake_dir, bucket, key))
         if not src.startswith(os.path.realpath(fake_dir) + os.sep):
@@ -73,11 +76,13 @@ def copy():
         logging.info(f"fake: served {bucket}/{key} → {dest}")
         return jsonify({"ok": True})
 
+    # real S3 fetch
     from botocore.exceptions import ClientError
     client = get_s3_client(data.get("region"))
 
     os.makedirs(os.path.dirname(os.path.abspath(dest)), exist_ok=True)
 
+    # download, mapping S3/network/disk failures to error tokens
     try:
         client.download_file(bucket, key, dest)
     except ClientError as e:
@@ -95,6 +100,7 @@ def copy():
         logging.error(f"Network error fetching {bucket}/{key}: {e}")
         return jsonify({"ok": False, "errtype": ERR_NETWORK, "errmsg": str(e)})
 
+    # success: record stats and respond
     record_served(os.path.getsize(dest))
     logging.info(f"fetched {bucket}/{key} → {dest}")
     return jsonify({"ok": True})

@@ -8,11 +8,11 @@ import s3copy
 
 @pytest.fixture(autouse=True)
 def reset_globals():
-    s3copy.objects_served = 0
-    s3copy.bytes_served = 0
-    s3copy.region_clients = {}
-    s3copy.default_region = None
-    s3copy.fake_dir = None
+    s3copy.state.objects_served = 0
+    s3copy.state.bytes_served = 0
+    s3copy.state.region_clients = {}
+    s3copy.state.default_region = None
+    s3copy.state.fake_dir = None
     yield
 
 
@@ -34,8 +34,8 @@ def mock_s3():
 class TestPing:
     def test_up_since_and_count(self, client):
         from datetime import datetime
-        s3copy.start_time = datetime(2024, 1, 15, 10, 30, 0)
-        s3copy.objects_served = 42
+        s3copy.state.start_time = datetime(2024, 1, 15, 10, 30, 0)
+        s3copy.state.objects_served = 42
         resp = client.get("/ping")
         assert resp.status_code == 200
         assert b"up since 2024/01/15 10:30:00" in resp.data
@@ -43,7 +43,7 @@ class TestPing:
 
     def test_zero_objects(self, client):
         from datetime import datetime
-        s3copy.start_time = datetime(2024, 1, 1, 0, 0, 0)
+        s3copy.state.start_time = datetime(2024, 1, 1, 0, 0, 0)
         resp = client.get("/ping")
         assert b"0 objects" in resp.data
 
@@ -53,11 +53,11 @@ class TestPing:
 class TestHealth:
     def test_reports_stats(self, client):
         from datetime import datetime
-        s3copy.start_time = datetime(2024, 1, 15, 10, 30, 0)
-        s3copy.objects_served = 7
-        s3copy.bytes_served = 12345
-        s3copy.fake_dir = None
-        s3copy.default_region = "us-east-1"
+        s3copy.state.start_time = datetime(2024, 1, 15, 10, 30, 0)
+        s3copy.state.objects_served = 7
+        s3copy.state.bytes_served = 12345
+        s3copy.state.fake_dir = None
+        s3copy.state.default_region = "us-east-1"
         resp = client.get("/health")
         assert resp.status_code == 200
         data = resp.get_json()
@@ -70,8 +70,8 @@ class TestHealth:
 
     def test_is_fake_true_when_fake_dir_set(self, client):
         from datetime import datetime
-        s3copy.start_time = datetime(2024, 1, 1, 0, 0, 0)
-        s3copy.fake_dir = "/tmp/fake"
+        s3copy.state.start_time = datetime(2024, 1, 1, 0, 0, 0)
+        s3copy.state.fake_dir = "/tmp/fake"
         resp = client.get("/health")
         data = resp.get_json()
         assert data["is_fake"] is True
@@ -160,11 +160,11 @@ class TestCopySuccess:
 
         mock_s3.download_file.side_effect = fake_download
 
-        assert s3copy.objects_served == 0
+        assert s3copy.state.objects_served == 0
         client.post("/copy", json={"bucket": "b", "key": "k", "dest": str(tmp_path / "f1")})
-        assert s3copy.objects_served == 1
+        assert s3copy.state.objects_served == 1
         client.post("/copy", json={"bucket": "b", "key": "k2", "dest": str(tmp_path / "f2")})
-        assert s3copy.objects_served == 2
+        assert s3copy.state.objects_served == 2
 
     def test_accumulates_bytes_served(self, client, mock_s3, tmp_path):
         def fake_download(bucket, key, path):
@@ -173,11 +173,11 @@ class TestCopySuccess:
 
         mock_s3.download_file.side_effect = fake_download
 
-        assert s3copy.bytes_served == 0
+        assert s3copy.state.bytes_served == 0
         client.post("/copy", json={"bucket": "b", "key": "k", "dest": str(tmp_path / "f1")})
-        assert s3copy.bytes_served == 5
+        assert s3copy.state.bytes_served == 5
         client.post("/copy", json={"bucket": "b", "key": "k2", "dest": str(tmp_path / "f2")})
-        assert s3copy.bytes_served == 10
+        assert s3copy.state.bytes_served == 10
 
     def test_region_passed_to_client(self, client, mock_s3, tmp_path):
         def fake_download(bucket, key, path):
@@ -265,7 +265,7 @@ class TestGetS3Client:
             assert mock_boto.call_count == 2
 
     def test_none_region_uses_default(self):
-        s3copy.default_region = "ap-southeast-1"
+        s3copy.state.default_region = "ap-southeast-1"
         with patch("boto3.client") as mock_boto:
             mock_boto.return_value = MagicMock()
             s3copy.get_s3_client(None)
@@ -308,13 +308,13 @@ class TestS3Integration:
 class TestFakeMode:
     @pytest.fixture(autouse=True)
     def set_fake_dir(self, tmp_path):
-        s3copy.fake_dir = str(tmp_path / "fake")
-        os.makedirs(s3copy.fake_dir)
+        s3copy.state.fake_dir = str(tmp_path / "fake")
+        os.makedirs(s3copy.state.fake_dir)
         yield
-        s3copy.fake_dir = None
+        s3copy.state.fake_dir = None
 
     def test_file_present_returns_ok(self, client, tmp_path):
-        src = os.path.join(s3copy.fake_dir, "mybucket", "mykey")
+        src = os.path.join(s3copy.state.fake_dir, "mybucket", "mykey")
         os.makedirs(os.path.dirname(src))
         open(src, "w").write("hello")
         dest = str(tmp_path / "out")
@@ -324,11 +324,11 @@ class TestFakeMode:
         assert open(dest).read() == "hello"
 
     def test_file_present_increments_counter(self, client, tmp_path):
-        src = os.path.join(s3copy.fake_dir, "b", "k")
+        src = os.path.join(s3copy.state.fake_dir, "b", "k")
         os.makedirs(os.path.dirname(src))
         open(src, "w").close()
         client.post("/copy", json={"bucket": "b", "key": "k", "dest": str(tmp_path / "out")})
-        assert s3copy.objects_served == 1
+        assert s3copy.state.objects_served == 1
 
     def test_file_absent_returns_not_found(self, client, tmp_path):
         resp = client.post("/copy", json={"bucket": "b", "key": "missing", "dest": str(tmp_path / "out")})
@@ -337,7 +337,7 @@ class TestFakeMode:
         assert data["errtype"] == "ERR_NOT_FOUND"
 
     def test_key_with_slashes(self, client, tmp_path):
-        src = os.path.join(s3copy.fake_dir, "bucket", "a", "b", "c")
+        src = os.path.join(s3copy.state.fake_dir, "bucket", "a", "b", "c")
         os.makedirs(os.path.dirname(src))
         open(src, "w").write("nested")
         dest = str(tmp_path / "out")

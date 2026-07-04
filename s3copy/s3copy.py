@@ -19,30 +19,37 @@ ERR_S3_ERROR     = "ERR_S3_ERROR"     # S3 service error (throttle, internal, et
 ERR_NETWORK      = "ERR_NETWORK"      # connection or transfer failure reaching S3
 ERR_IO           = "ERR_IO"           # local disk read/write failure
 
-region_clients = {}
-default_region = None
-fake_dir = None
-start_time = None
-objects_served = 0
-bytes_served = 0
-stats_lock = threading.Lock()
+class State:
+    """Mutable server state shared across request handlers (threaded=True, so
+    handlers run concurrently)."""
+    def __init__(self):
+        self.region_clients = {}   # cached boto3 S3 clients, keyed by region
+        self.default_region = None # region used when a request omits one; set in main()
+        self.fake_dir = None       # if set, serve objects from this dir instead of real S3
+        self.start_time = None     # process start time, set in main()
+        self.objects_served = 0    # count of objects successfully copied so far
+        self.bytes_served = 0      # total bytes copied so far, across all objects
+        self.stats_lock = threading.Lock() # guards objects_served/bytes_served increments
+
+
+state = State()
 
 
 def record_served(nbytes):
     """Atomically bump the served counters. threaded=True means /copy handlers
-    race on these globals; += is not atomic, so guard it with a lock."""
-    global objects_served, bytes_served
-    with stats_lock:
-        objects_served += 1
-        bytes_served += nbytes
+    race on this state; += is not atomic, so guard it with a lock."""
+    with state.stats_lock:
+        state.objects_served += 1
+        state.bytes_served += nbytes
 
 
 def get_s3_client(region):
+    """Return a cached boto3 S3 client for region, creating one if needed."""
     import boto3
-    key = region or default_region
-    if key not in region_clients:
-        region_clients[key] = boto3.client("s3", region_name=key)
-    return region_clients[key]
+    key = region or state.default_region
+    if key not in state.region_clients:
+        state.region_clients[key] = boto3.client("s3", region_name=key)
+    return state.region_clients[key]
 
 
 @app.route("/copy", methods=["POST"])
@@ -63,9 +70,9 @@ def copy():
     dest   = data["dest"]
 
     # test mode: serve from a local directory instead of real S3
-    if fake_dir:
-        src = os.path.realpath(os.path.join(fake_dir, bucket, key))
-        if not src.startswith(os.path.realpath(fake_dir) + os.sep):
+    if state.fake_dir:
+        src = os.path.realpath(os.path.join(state.fake_dir, bucket, key))
+        if not src.startswith(os.path.realpath(state.fake_dir) + os.sep):
             return jsonify({"ok": False, "errtype": ERR_BAD_REQUEST, "errmsg": "path traversal rejected"}), 400
         if not os.path.isfile(src):
             return jsonify({"ok": False, "errtype": ERR_NOT_FOUND,
@@ -108,21 +115,21 @@ def copy():
 
 @app.route("/ping", methods=["GET"])
 def ping():
-    since = start_time.strftime("%Y/%m/%d %H:%M:%S")
-    return f"up since {since}, {objects_served} objects"
+    since = state.start_time.strftime("%Y/%m/%d %H:%M:%S")
+    return f"up since {since}, {state.objects_served} objects"
 
 
 @app.route("/health", methods=["GET"])
 def health():
     now = datetime.now()
     return jsonify({
-        "upsince": start_time.isoformat(),
-        "uptime_seconds": (now - start_time).total_seconds(),
-        "is_fake": fake_dir is not None,
-        "fake_dir": fake_dir,
-        "default_region": default_region,
-        "objects_served": objects_served,
-        "bytes_served": bytes_served,
+        "upsince": state.start_time.isoformat(),
+        "uptime_seconds": (now - state.start_time).total_seconds(),
+        "is_fake": state.fake_dir is not None,
+        "fake_dir": state.fake_dir,
+        "default_region": state.default_region,
+        "objects_served": state.objects_served,
+        "bytes_served": state.bytes_served,
     })
 
 
@@ -148,8 +155,6 @@ def _daemonize():
 
 
 def main():
-    global default_region, fake_dir, start_time
-
     parser = argparse.ArgumentParser(
         prog="s3copy",
         description="S3 download sidecar. Accepts POST /copy {bucket, key, dest} requests "
@@ -168,9 +173,9 @@ def main():
                         help="detach and run as an independent background daemon")
     args = parser.parse_args()
 
-    default_region = args.region
-    fake_dir = args.fakedir
-    start_time = datetime.now()
+    state.default_region = args.region
+    state.fake_dir = args.fakedir
+    state.start_time = datetime.now()
 
     os.makedirs(args.logdir, exist_ok=True)
 
@@ -185,7 +190,7 @@ def main():
         format="%(asctime)s %(levelname)s %(message)s",
     )
 
-    logging.info(f"s3copy starting: logdir={args.logdir} port={args.port} region={default_region} pid={pid}")
+    logging.info(f"s3copy starting: logdir={args.logdir} port={args.port} region={state.default_region} pid={pid}")
 
     # Suppress verbose Werkzeug tracebacks when the client closes the connection early.
     try:

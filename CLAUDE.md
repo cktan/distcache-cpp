@@ -2,19 +2,37 @@
 
 Read `DESIGN.md` before working on this project.
 
+
+## Output Rules
+
+- Be extremely concise. Lead directly with the result.
+- Use bullet points instead of long paragraphs whenever possible.
+- Never refer to a step, item or section by its number alone: the
+  user does not remember what it is. Say what it does each time,
+  e.g. "step 5: write pages to RocksDB with no transaction", not
+  "step 5". Give each step in a plan a name that says what it does.
+
 ## C++/C Coding Style
 
 - use snake_case for names
 - class names and struct names end with '_t'
-- C++ class private and protected member variable names should 
-  have prefixed 'm_'. 
-- for calls that trigger a significant operation (starting/
+- function types end with '_fn', not '_t': a function pointer
+  typedef or a std::function alias (`sm_log_fn`, `index_eval_fn`)
+- C++ class private and protected member variable names should
+  have prefixed 'm_'.
+- for calls that trigger a *significant* operation (starting/
   stopping a service, acquiring a lock, chdir, logger setup,
-  etc.), add a short comment naming the step, even if the
+  etc.), add a short comment explaining why it is done, even if the
   call itself looks self-explanatory
-- every function in `.cpp` or `.c` files needs a doc comment
+- every function in C/C++ files needs a doc comment
   (one or two lines above the definition)
-- do not use strncpy(), instead memcpy and assign NUL-terminator.  
+- do not use strncpy(), instead memcpy and assign NUL-terminator.
+
+## Git Rules
+
+- when writing git commit messages, use concise sentences and
+  bullet points.
+- on git commit, if source files are not involved, do not run tests.
 
 
 ## Guidelines

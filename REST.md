@@ -7,9 +7,9 @@ All endpoints listen on the address given to `-N host:port[/first_pos]`.
 | `GET` | `/_ping` | Liveness probe; returns `PONG` |
 | `GET` | `/_health` | Node health and statistics (JSON) |
 | `GET` | `/_nodes` | Cluster membership list (plain text) |
-| `GET` | `/{bucket}/{key}` | Fetch a cached object |
-| `PUT` | `/{bucket}/{key}` | Store an object in the cache |
-| `DELETE` | `/{bucket}/{key}` | Remove an object from the cache |
+| `GET` | `/{bucket}/{key}?h=` | Fetch a cached object |
+| `PUT` | `/{bucket}/{key}?h=` | Store an object in the cache |
+| `DELETE` | `/{bucket}/{key}?h=` | Remove an object from the cache |
 | `POST` | `/_claim_keyspace` | Internal: trigger key ownership scan |
 | `POST` | `/_hint_pull` | Internal: fetch an object from a peer |
 
@@ -22,6 +22,38 @@ A node ID has the form `host:port` or `host:port/first_pos`.
 the node's first ring position; subsequent positions are
 derived via chained FNV-1a hashes. When absent, all 10 ring
 positions are computed from the address string.
+
+---
+
+## Placement hash `h`
+
+`GET`, `PUT` and `DELETE` on `/{bucket}/{key}` require the
+query parameter `h`: a decimal 32-bit unsigned integer
+(`0`–`4294967295`, digits only). It is the object's ring
+position. A request without a valid `h` gets
+`ERR_BAD_REQUEST`.
+
+The caller chooses `h`. Objects given the same `h` land on
+one node. An object that belongs to no group uses the
+default hash `FNV-1a-64(0, "cache/{bucket}/{key}")` (see
+`dc_default_hash`), the position used before `h` existed.
+
+The node stores the object at
+`cache/{bucket}/{key}^^XXXXXXXX`, `XXXXXXXX` being `h` as 8
+lowercase hex digits. The same key under two hashes is two
+cache files. The S3 key is `{bucket}/{key}`; `h` is not
+part of it.
+
+Two limits follow from the suffix:
+
+- A key containing `^^` is refused with `ERR_INVALID_PATH`,
+  so no directory can end in a suffix and a stored file
+  never blocks another key's directory.
+- The last component of a key may be at most 245 bytes
+  (255 less the 10-byte suffix); every other component at
+  most 255, and the whole cache path shorter than
+  `PATH_MAX`. A longer name is refused with
+  `ERR_NAME_TOO_LONG` before any S3 fetch.
 
 ---
 
@@ -66,6 +98,7 @@ a numeric error code; unknown types map to `DCERR_PROTOCOL`.
 | `ERR_S3_COPY`         | S3 fetch failed                   |
 | `ERR_IO`              | local I/O failure                 |
 | `ERR_BAD_REQUEST`     | missing or invalid request field  |
+| `ERR_NAME_TOO_LONG`   | key component or cache path too long |
 | `ERR_NO_NODE`         | no node owns this key             |
 | `ERR_DISK_FULL`       | cache disk is full                |
 | `ERR_S3`              | S3 error (legacy)                 |
@@ -153,6 +186,7 @@ components; `key` may contain `/`.
 
 | Parameter     | Effect                                        |
 |---------------|-----------------------------------------------|
+| `h`           | required: placement hash (see above)          |
 | `local`       | serve only from local cache; skip ring routing|
 | `no_redirect` | serve directly; fetch from S3 if not cached   |
 | `delete`      | delete object from cache after serving        |
@@ -166,8 +200,8 @@ components; `key` may contain `/`.
   identifying the responsible node. Followed by `FIN`.
 - **Error** — `ERROR` frame followed by `FIN`.
 
-The ring routes by computing `FNV-1a-64(0, "cache/{bucket}/{key}")`
-and finding the successor node.
+The ring routes to the successor node of `h`. A client that
+follows a `REDIRECT` sends the same `h` to the next node.
 
 - `?local` — serve only from local cache; skip ring routing;
   return `ERR_NOT_CACHED` on a miss.
@@ -185,8 +219,9 @@ via `/_hint_pull` to pull the file proactively.
 
 ### `PUT /{bucket}/{key}`
 
-Store an object in the local cache. The request body is
-written verbatim to the cache file.
+Store an object in the local cache under `h` (required). The
+request body is written verbatim to the cache file. There is
+no ring redirect: the caller sends it to the owner of `h`.
 
 **Request body:** raw file bytes (any Content-Type).
 
@@ -199,8 +234,8 @@ written verbatim to the cache file.
 
 ### `DELETE /{bucket}/{key}`
 
-Remove an object from the local cache. Succeeds silently if
-the object is not present.
+Remove the object stored under `h` (required) from the local
+cache. Succeeds silently if the object is not present.
 
 **Responses:**
 
@@ -239,7 +274,7 @@ Enqueues an async pull job.
 ```json
 {
   "src":     "host:port",
-  "relpath": "cache/bucket/key",
+  "relpath": "cache/bucket/key^^XXXXXXXX",
   "mtime":   "1718582400"
 }
 ```

@@ -19,7 +19,10 @@ dc.init(["node1:4001", "node2:4002"])
 def write_stdout(ctx, data: bytes) -> None:
     ctx.write(data)
 
-dc.get("my-s3-bucket", "path/to/object.bin", sys.stdout.buffer, write_stdout)
+# h: placement hash. Objects with the same h land on one node;
+# default_hash() gives the hash for an object in no group.
+h = dc.default_hash("my-s3-bucket", "path/to/object.bin")
+dc.get("my-s3-bucket", "path/to/object.bin", h, sys.stdout.buffer, write_stdout)
 
 # Enumerate nodes and check health
 for node in dc.get_nodes():
@@ -48,13 +51,22 @@ def init(nodes: list[str]) -> None: ...
 def final() -> None: ...
     # Close all connections and clear ring state. Not thread-safe.
 
-def get(bucket: str, key: str,
+def get(bucket: str, key: str, h: int,
         context: object,
         callback: Callable[[object, bytes], None]) -> None: ...
-    # Fetch an object. Callback is invoked once per DATA frame:
+    # Fetch an object from the owner of placement hash h (0..2**32-1,
+    # sent as ?h=; ValueError if out of range).
+    # Callback is invoked once per DATA frame:
     #   callback(context, data: bytes) -> None
     # Exceptions raised by the callback propagate out of get().
     # Raises DistCacheError on network or server failure.
+
+def default_hash(bucket: str, key: str) -> int: ...
+    # Placement hash of an object in no group: hash of "cache/<bucket>/<key>".
+
+def owner(h: int) -> str: ...
+    # Nodeid that owns h on this client's ring. Raises DistCacheError
+    # (DCERR_NO_NODE) if the ring is empty.
 
 def get_nodes() -> list[str]: ...
     # Return names of all currently known live ring nodes.
@@ -105,6 +117,7 @@ def housekeeping() -> None: ...
 | `DCERR_S3_COPY` | 12 | Server: S3 copy/fetch failed |
 | `DCERR_IO` | 13 | Server: local I/O failure |
 | `DCERR_BAD_REQUEST` | 14 | Server: missing or invalid request field |
+| `DCERR_NAME_TOO_LONG` | 23 | Server: key component or cache path too long |
 | `DCERR_NETWORK` | 100 | Connection or transfer failure |
 | `DCERR_PROTOCOL` | 101 | Truncated or malformed response |
 | `DCERR_REDIRECT_LOOP` | 103 | Too many redirect hops |

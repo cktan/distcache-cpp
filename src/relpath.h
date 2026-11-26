@@ -1,5 +1,7 @@
 #pragma once
 #include <cassert>
+#include <cstddef>
+#include <cstdint>
 #include <optional>
 #include <string>
 
@@ -17,7 +19,20 @@ public:
   const std::string &str() const { return val_; }
 };
 
-// Returns "cache/bucket/key" or nullopt if bucket or key are invalid.
-// Rejects empty segments, ".", "..", trailing slashes.
+// Length of the placement-hash suffix "^^XXXXXXXX" on every cache file name.
+constexpr size_t RELPATH_SUFFIX_LEN = 10;
+
+// Returns "cache/bucket/key^^XXXXXXXX" (h as 8 lowercase hex digits) or
+// nullopt if bucket or key are invalid. Rejects empty segments, ".", "..",
+// trailing slashes, and a key containing "^^": no directory can then end in
+// a suffix, so a file name never collides with another key's directory.
 std::optional<relpath_t> compute_relpath(const std::string &bucket,
-                                         const std::string &key);
+                                         const std::string &key, uint32_t h);
+
+// Reads the placement hash h back from the "^^XXXXXXXX" suffix of a relpath.
+// Returns nullopt if the suffix is missing or not 8 lowercase hex digits.
+std::optional<uint32_t> relpath_hash(const std::string &relpath);
+
+// True if abspath fits the filesystem: every '/'-separated component is at
+// most NAME_MAX bytes and the whole path is shorter than PATH_MAX.
+bool relpath_fits(const std::string &abspath);

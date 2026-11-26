@@ -180,6 +180,53 @@ static void test_lifecycle(void) {
   CHECK(dc_final() == 0, "dc_final returns 0");
 }
 
+/* ── Placement tests ────────────────────────────────────────────────────────
+ */
+
+/* Verify that dc_default_hash and dc_owner agree with the Python client.
+ * 1. Check dc_default_hash against the value the Python client computes.
+ * 2. With no ring, check dc_owner fails with DCERR_NO_NODE.
+ * 3. Init with node1:4001 and node2:4002; check dc_owner for fixed hashes
+ *    against the owners the Python client computes for the same ring.
+ * 4. Check dc_owner fails with DCERR_NOMEM when buf is too small. */
+static void test_placement(void) {
+  section("Placement (dc_default_hash / dc_owner, cross-verified with Python)");
+
+  CHECK_EQ(dc_default_hash("bucket", "key"), 0x6f7df6c6u,
+           "dc_default_hash(\"bucket\",\"key\") == 0x6f7df6c6");
+  CHECK(dc_default_hash("b", "/key") == dc_default_hash("b", "key"),
+        "dc_default_hash strips leading slash in key");
+
+  char buf[64];
+  CHECK(dc_owner(0, buf, sizeof(buf)) == -1, "dc_owner with no ring fails");
+  CHECK(dc_errno() == DCERR_NO_NODE, "dc_errno() is DCERR_NO_NODE");
+
+  const char *nodes[] = {"node1:4001", "node2:4002"};
+  CHECK(dc_init(2, nodes) == 0, "dc_init with two nodes returns 0");
+
+  /* Python: owners of these hashes on the ring {node1:4001, node2:4002} */
+  struct {
+    uint32_t h;
+    const char *owner;
+  } want[] = {{0, "node1:4001"},
+              {0x6f7df6c6u, "node2:4002"},
+              {0x80000000u, "node2:4002"},
+              {0xffffffffu, "node1:4001"}};
+  for (size_t i = 0; i < sizeof(want) / sizeof(want[0]); i++) {
+    char desc[128];
+    snprintf(desc, sizeof(desc), "dc_owner(0x%08x) == %s", want[i].h,
+             want[i].owner);
+    CHECK(dc_owner(want[i].h, buf, sizeof(buf)) == 0 &&
+              strcmp(buf, want[i].owner) == 0,
+          desc);
+  }
+
+  CHECK(dc_owner(0, buf, 4) == -1, "dc_owner with small buf fails");
+  CHECK(dc_errno() == DCERR_NOMEM, "dc_errno() is DCERR_NOMEM");
+
+  CHECK(dc_final() == 0, "dc_final after placement tests");
+}
+
 /* ── Wire parsing tests ─────────────────────────────────────────────────────
  */
 
@@ -269,6 +316,8 @@ static void test_server_errcode(void) {
   CHECK(dc_test_server_errcode("ERR_IO") == DCERR_IO, "ERR_IO -> DCERR_IO");
   CHECK(dc_test_server_errcode("ERR_BAD_REQUEST") == DCERR_BAD_REQUEST,
         "ERR_BAD_REQUEST -> DCERR_BAD_REQUEST");
+  CHECK(dc_test_server_errcode("ERR_NAME_TOO_LONG") == DCERR_NAME_TOO_LONG,
+        "ERR_NAME_TOO_LONG -> DCERR_NAME_TOO_LONG");
   CHECK(dc_test_server_errcode("ERR_UNKNOWN_JUNK") == DCERR_PROTOCOL,
         "unknown type -> DCERR_PROTOCOL");
 }
@@ -355,7 +404,8 @@ static void test_integration(void) {
 
   /* dc_get on missing key — expect a server error, not a crash */
   tbuf_t data = {0};
-  rc = dc_get("no-such-bucket", "no-such-key", &data, tbuf_cb);
+  rc = dc_get("no-such-bucket", "no-such-key",
+              dc_default_hash("no-such-bucket", "no-such-key"), &data, tbuf_cb);
   CHECK(rc == -1, "dc_get on missing key returns -1");
   CHECK(dc_errno() != 0, "dc_errno() set on missing key");
   CHECK(dc_errmsg()[0] != '\0', "dc_errmsg() set on missing key");
@@ -363,7 +413,9 @@ static void test_integration(void) {
 
   /* callback abort */
   tbuf_t data2 = {0};
-  rc = dc_get("no-such-bucket", "no-such-key", &data2, abort_cb);
+  rc = dc_get("no-such-bucket", "no-such-key",
+              dc_default_hash("no-such-bucket", "no-such-key"), &data2,
+              abort_cb);
   /* either DCERR_CALLBACK_FAILED (if DATA was delivered) or a server error */
   CHECK(rc == -1, "dc_get with aborting callback returns -1");
   CHECK(dc_errno() != 0, "dc_errno() set on aborting callback");
@@ -385,6 +437,7 @@ int main(void) {
   test_node_positions();
   test_dest_pos();
   test_lifecycle();
+  test_placement();
   test_wire_parsing();
   test_nodes_parsing();
   test_server_errcode();

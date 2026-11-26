@@ -24,7 +24,8 @@
  *       return 0;
  *   }
  *
- *   int rc = dc_get("my-bucket", "path/to/object",
+ *   uint32_t h = dc_default_hash("my-bucket", "path/to/object");
+ *   int rc = dc_get("my-bucket", "path/to/object", h,
  *                   stdout, write_cb, errmsg, sizeof(errmsg));
  *   if (rc != 0)
  *       fprintf(stderr, "dc_get error %d: %s\n", rc, errmsg);
@@ -78,6 +79,12 @@ int dc_housekeeping(void);
 /*
  * dc_get — fetch a cached object, delivering data via callback.
  *
+ * h is the object's placement hash: its ring position. The request goes to
+ * the owner of h and carries ?h=. Objects given the same h land on one node.
+ * Use dc_default_hash() for an object that belongs to no group. The node
+ * caches the object per (bucket, key, h): the same key under two hashes is
+ * two copies.
+ *
  * The callback is invoked one or more times as DATA frames arrive:
  *   int callback(void *context, const char *buf, int bufsz)
  * On EOF (successful completion of transmission), the callback is invoked
@@ -87,8 +94,25 @@ int dc_housekeeping(void);
  *
  * Returns 0 on success, -1 on failure.
  */
-int dc_get(const char *bucket, const char *key, void *context,
+int dc_get(const char *bucket, const char *key, uint32_t h, void *context,
            int (*callback)(void *context, const char *buf, int bufsz));
+
+/* ── Placement ──────────────────────────────────────────────────────────── */
+
+/*
+ * dc_default_hash — the placement hash of an object that belongs to no group:
+ * the hash of "cache/<bucket>/<key>" (leading slashes of key stripped), the
+ * position distcache used before h existed.
+ */
+uint32_t dc_default_hash(const char *bucket, const char *key);
+
+/*
+ * dc_owner — write the nodeid ("host:port[/first_pos]") that owns placement
+ * hash h, according to this client's ring, into buf (NUL-terminated).
+ * Returns 0 on success; -1 if the ring is empty (DCERR_NO_NODE) or bufsz is
+ * too small for the nodeid (DCERR_NOMEM).
+ */
+int dc_owner(uint32_t h, char *buf, int bufsz);
 
 /* ── Node enumeration ───────────────────────────────────────────────────── */
 
@@ -138,6 +162,7 @@ const char *dc_errmsg(void);
 #define DCERR_S3COPY_IO 20           /* sidecar: disk failure */
 #define DCERR_S3COPY_HTTP_4XX 21     /* sidecar returned 4xx HTTP status */
 #define DCERR_S3COPY_HTTP_5XX 22     /* sidecar returned 5xx HTTP status */
+#define DCERR_NAME_TOO_LONG 23       /* key component or cache path too long */
 
 /* Client-originated (set by the client library, never sent by the server) */
 #define DCERR_NO_NODE 4

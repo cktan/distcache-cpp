@@ -140,6 +140,8 @@ static int server_errcode(const char *s) {
     return DCERR_IO;
   if (strcmp(s, "ERR_BAD_REQUEST") == 0)
     return DCERR_BAD_REQUEST;
+  if (strcmp(s, "ERR_NAME_TOO_LONG") == 0)
+    return DCERR_NAME_TOO_LONG;
   if (strcmp(s, "ERR_S3COPY_NOT_FOUND") == 0)
     return DCERR_S3COPY_NOT_FOUND;
   if (strcmp(s, "ERR_S3COPY_UNAUTHORIZED") == 0)
@@ -631,8 +633,9 @@ int dc_final(void) {
   return 0;
 }
 
-/* Fetch the object at bucket/key, streaming DATA payload bytes to cb. */
-int dc_get(const char *bucket, const char *key, void *ctx,
+/* Fetch the object at bucket/key from the owner of placement hash h,
+ * streaming DATA payload bytes to cb. */
+int dc_get(const char *bucket, const char *key, uint32_t h, void *ctx,
            int (*cb)(void *ctx, const char *buf, int bufsz)) {
   /* Acquire ring lock to check if initialized and look up successor node */
   pthread_mutex_lock(&g_dctab.mutex);
@@ -643,7 +646,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
     snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
     return -1;
   }
-  uint32_t dest = compute_dest_pos(bucket, key);
+  uint32_t dest = h;
   nodeid_idx_t nid = ring_successor(g_dctab.ring, dest);
   if (!nodeid_valid(nid)) {
     /* Release ring lock on lookup failure */
@@ -663,7 +666,7 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   char enc_bucket[512], enc_key[512], path[1100];
   url_encode(bucket, enc_bucket, (int)sizeof(enc_bucket));
   url_encode(stripped_key, enc_key, (int)sizeof(enc_key));
-  snprintf(path, sizeof(path), "/%s/%s", enc_bucket, enc_key);
+  snprintf(path, sizeof(path), "/%s/%s?h=%u", enc_bucket, enc_key, h);
 
   /* Resolve redirects up to the maximum limit */
   for (int hop = 0; hop <= DC_MAX_REDIRECTS; hop++) {
@@ -714,6 +717,36 @@ int dc_get(const char *bucket, const char *key, void *ctx,
   snprintf(myerrmsg, sizeof(myerrmsg), "exceeded %d redirects",
            DC_MAX_REDIRECTS);
   return -1;
+}
+
+/* Return the default placement hash of bucket/key. */
+uint32_t dc_default_hash(const char *bucket, const char *key) {
+  return compute_dest_pos(bucket, key);
+}
+
+/* Copy the nodeid that owns placement hash h on this client's ring into buf. */
+int dc_owner(uint32_t h, char *buf, int bufsz) {
+  /* Acquire ring lock to look up the successor of h */
+  pthread_mutex_lock(&g_dctab.mutex);
+  nodeid_idx_t nid =
+      g_dctab.ring ? ring_successor(g_dctab.ring, h) : NODEID_NONE;
+  pthread_mutex_unlock(&g_dctab.mutex);
+
+  const char *name = nodeid_valid(nid) ? nodeid_lookup(nid) : NULL;
+  if (!name) {
+    myerrno = DCERR_NO_NODE;
+    snprintf(myerrmsg, sizeof(myerrmsg), "no nodes in ring");
+    return -1;
+  }
+  size_t len = strlen(name);
+  if (bufsz <= 0 || len >= (size_t)bufsz) {
+    myerrno = DCERR_NOMEM;
+    snprintf(myerrmsg, sizeof(myerrmsg), "buffer too small for nodeid");
+    return -1;
+  }
+  memcpy(buf, name, len);
+  buf[len] = '\0';
+  return 0;
 }
 
 /* Write live node names into *buf (newline-separated); caller frees *buf. */

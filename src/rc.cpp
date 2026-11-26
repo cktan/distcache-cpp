@@ -13,6 +13,8 @@ const char *rc_errcode_str(rc_errcode_t code) {
     return "ERR_S3_COPY";
   case rc_errcode_t::ERR_BAD_REQUEST:
     return "ERR_BAD_REQUEST";
+  case rc_errcode_t::ERR_NAME_TOO_LONG:
+    return "ERR_NAME_TOO_LONG";
   case rc_errcode_t::ERR_S3COPY_NOT_FOUND:
     return "ERR_S3COPY_NOT_FOUND";
   case rc_errcode_t::ERR_S3COPY_UNAUTHORIZED:

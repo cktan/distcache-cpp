@@ -20,6 +20,14 @@ make_ring(std::initializer_list<std::string> nodes) {
   return std::shared_ptr<ring_t>(r, ring_destroy);
 }
 
+// Build "cache/<bucket>/<key>~XXXXXXXX" with today's default placement, the
+// hash of the suffix-free relpath, so keys spread over the ring as before.
+static std::string hashed_relpath(const std::string &bucket,
+                                  const std::string &key) {
+  std::string plain = "cache/" + bucket + "/" + key;
+  return compute_relpath(bucket, key, ring_compute_pos(plain.c_str()))->str();
+}
+
 // ── LRU::scan / get_mtime
 // ─────────────────────────────────────────────────────
 
@@ -34,6 +42,27 @@ TEST_CASE("lru scan returns inserted entries") {
   });
 
   CHECK(got.size() == 3);
+}
+
+// Verify that an LRU entry's ring position is the h in its path suffix.
+// 1. batch_put relpaths with h = 0, 1, 0xffffffff and 0x12345678.
+// 2. scan the LRU.
+// 3. Confirm each entry's relpath_pos equals the h it was built with.
+TEST_CASE("lru relpath_pos is the hash in the suffix") {
+  node_t node("./tmp_test", nodeid_find("127.0.0.1:9999"));
+  uint32_t hs[] = {0, 1, 0xffffffffu, 0x12345678u};
+  std::vector<std::pair<std::string, time_t>> batch;
+  for (uint32_t h : hs)
+    batch.push_back(
+        {compute_relpath("b", "k" + std::to_string(h), h)->str(), 1000});
+  node.cache.batch_put(batch);
+
+  int seen = 0;
+  node.cache.scan([&](const std::string &rp, time_t, uint32_t pos) {
+    CHECK(relpath_hash(rp) == pos);
+    seen++;
+  });
+  CHECK(seen == 4);
 }
 
 TEST_CASE("lru scan sees remove") {
@@ -87,9 +116,8 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   std::vector<std::string> b_relpaths;
   std::vector<std::pair<std::string, time_t>> batch;
   for (int i = 0; i < 20; i++) {
-    std::string rp = "cache/bucket/key" + std::to_string(i);
-    nodeid_idx_t owner_idx =
-        ring_successor(ring.get(), ring_compute_pos(rp.c_str()));
+    std::string rp = hashed_relpath("bucket", "key" + std::to_string(i));
+    nodeid_idx_t owner_idx = ring_successor(ring.get(), *relpath_hash(rp));
     const char *owner = nodeid_lookup(owner_idx);
     batch.push_back({rp, now - i * 3600});
     if (owner && node_b == owner)
@@ -100,8 +128,7 @@ TEST_CASE("scan_for_peer returns keys for the given peer") {
   auto result = node.rebalancer.scan_for_peer(nodeid_find(node_b.c_str()));
 
   for (const auto &[rp, mt] : result) {
-    nodeid_idx_t s_idx =
-        ring_successor(ring.get(), ring_compute_pos(rp.c_str()));
+    nodeid_idx_t s_idx = ring_successor(ring.get(), *relpath_hash(rp));
     const char *s = nodeid_lookup(s_idx);
     CHECK(s != nullptr);
     CHECK(node_b == s);
@@ -119,9 +146,8 @@ TEST_CASE("scan_for_peer skips entries older than 5 days") {
 
   std::string old_rp;
   for (int i = 0; i < 100; i++) {
-    std::string rp = "cache/old/key" + std::to_string(i);
-    nodeid_idx_t s_idx =
-        ring_successor(ring.get(), ring_compute_pos(rp.c_str()));
+    std::string rp = hashed_relpath("old", "key" + std::to_string(i));
+    nodeid_idx_t s_idx = ring_successor(ring.get(), *relpath_hash(rp));
     const char *s = nodeid_lookup(s_idx);
     if (s && node_b == s) {
       old_rp = rp;
@@ -146,7 +172,7 @@ TEST_CASE("scan_for_peer caps at 50 entries") {
   time_t now = time(nullptr);
   std::vector<std::pair<std::string, time_t>> batch;
   for (int i = 0; i < 200; i++) {
-    std::string rp = "cache/big/key" + std::to_string(i);
+    std::string rp = hashed_relpath("big", "key" + std::to_string(i));
     batch.push_back({rp, now - i});
   }
   node.cache.batch_put(batch);
@@ -161,6 +187,8 @@ TEST_CASE("pull_one returns early on bad relpath") {
   node_t node("./tmp_test", nodeid_find("127.0.0.1:9999"));
   node.rebalancer.pull_one("127.0.0.1:9999", "bad/relpath");
   node.rebalancer.pull_one("127.0.0.1:9999", "cache/only_bucket");
+  node.rebalancer.pull_one("127.0.0.1:9999", "cache/b/no_suffix");
+  node.rebalancer.pull_one("127.0.0.1:9999", "cache/b~00000000");
 }
 
 TEST_CASE("rebalancer split_nodeid parses various formats") {

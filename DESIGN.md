@@ -138,11 +138,23 @@ chain from `pos[0]`.
 
 ### Key routing
 
+Every object request carries a placement hash `h` (`?h=`,
+required), chosen by the caller. Objects with the same `h`
+land on one node.
+
 ```
-relpath    = "cache/{bucket}/{key}"
-relpath_pos = hash(0, relpath)        # deterministic; same on every node
-dest_node  = first ring position >= relpath_pos (wraps)
+relpath     = "cache/{bucket}/{key}^^" + hex8(h)
+relpath_pos = h                       # read back from the suffix
+dest_node   = first ring position >= h (wraps)
+
+default h   = hash(0, "cache/{bucket}/{key}")   # client-side
 ```
+
+The server never computes a key's position; it only uses
+`h`. The clients compute the default hash
+(`dc_default_hash`) for objects that belong to no group:
+it is the position used before `h` existed, so such objects
+keep their place on the ring.
 
 The ring is a heap-allocated `ring_t` (sorted
 `ring_entry_t *entries` array) held in `node.ring` as
@@ -153,8 +165,8 @@ change.
 Each `ring_entry_t::node` holds the full nodeid
 (`host:port` or `host:port/first_pos`), so
 `ring_successor()` returns a full nodeid. The GET
-handler compares it directly to `node.nodeid` to
-decide whether to redirect.
+handler compares `ring_successor(ring, h)` directly to
+`node.nodeid` to decide whether to redirect.
 
 Successor lookup: O(log N) binary search (`bisect_left`).
 
@@ -217,22 +229,48 @@ default-constructible.
 ### Path layout
 
 ```
-<homedir>/cache/<bucket>/<key>
+<homedir>/cache/<bucket>/<key>^^XXXXXXXX
 ```
 
-Key slashes become directory separators. `compute_relpath`
-validates and constructs the **relpath** — always rooted at
-`"cache/"`:
+Key slashes become directory separators. `XXXXXXXX` is the
+placement hash `h` as 8 lowercase hex digits; it is a file
+name suffix, so it adds no directories.
+`compute_relpath(bucket, key, h)` validates and constructs
+the **relpath** — always rooted at `"cache/"`:
 
 ```
-relpath = "cache/my-bucket/images/photo.jpg"
+relpath = "cache/my-bucket/images/photo.jpg^^6f7df6c6"
 ```
 
-Every LRU entry, ring-hash, and cache function uses the full
-relpath. `cache_t::abspath(relpath)` joins `homedir_` and
-the relpath string to get the absolute path.
-`compute_relpath` rejects `..`, `.`, empty segments, and
-trailing slashes.
+Every LRU entry, job and cache function uses the full
+relpath, so `h` travels wherever the relpath goes (LRU,
+`node.jobq`, `/_hint_pull`). `relpath_hash(relpath)` reads
+`h` back; the startup scan uses it to rebuild each LRU
+entry's `relpath_pos`. `cache_t::abspath(relpath)` joins
+`homedir_` and the relpath string to get the absolute
+path. `compute_relpath` rejects `..`, `.`, empty segments,
+trailing slashes, and a key containing `^^`.
+
+**Why `^^` is reserved.** Without the rule, the file of key
+`x` with `h=1` (`x^^00000001`) would occupy the name that
+key `x^^00000001/y` needs as a directory. With no `^^` in
+any key, no directory name can end in a suffix, so the two
+never meet.
+
+**Name limits.** The 10-byte suffix leaves 245 bytes for a
+key's last component (NAME_MAX 255). Before any S3 fetch or
+file I/O, each object handler checks
+`relpath_fits(abspath)`: every component at most NAME_MAX
+and the whole path under PATH_MAX. A name that does not fit
+gets `ERR_NAME_TOO_LONG`, not an `ERR_IO` from the failed
+write.
+
+**Layout marker.** `cache/.v2` marks the suffixed layout.
+At startup, before the scan and before HTTP serves, a
+`cache/` without it is wiped once (old files,
+`cache/<bucket>/<key>`, cannot be told apart from new ones
+by name) and the marker is created. The scan skips
+dot-files, so the marker never enters the LRU.
 
 ### Atomic writes
 
@@ -466,8 +504,9 @@ The receiving node (new owner) calls `Rebalancer::pull_one`:
 1. Fast check: skip if `cache_exists`.
 2. Acquire `keylock_t` (prevents duplicate pulls).
 3. Re-check `cache_exists` after acquire.
-4. `GET http://src/bucket/key?local=1&delete=1` streaming
-   into a tmp file via `stream_in_push`.
+4. `GET http://src/bucket/key?local=1&delete=1&h=<h>`
+   streaming into a tmp file via `stream_in_push`; `h` is
+   read from the relpath suffix.
 5. Parse `DATA:N\n` frames on the fly, writing payload
    bytes directly to the tmp file descriptor.
 6. On success, atomically rename tmp → cache path.

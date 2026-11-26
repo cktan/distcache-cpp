@@ -10,7 +10,8 @@ enum class rc_errcode_t {
   ERR_INVALID_PATH,
   ERR_IO,
   ERR_NOT_CACHED,
-  ERR_S3_COPY, // connection failed or unknown sidecar error
+  ERR_S3_COPY,       // connection failed or unknown sidecar error
+  ERR_NAME_TOO_LONG, // a path component over NAME_MAX, or path over PATH_MAX
   // Specific sidecar error codes (mapped from errtype in the JSON response).
   ERR_S3COPY_NOT_FOUND,    // sidecar: ERR_NOT_FOUND (key absent in S3)
   ERR_S3COPY_UNAUTHORIZED, // sidecar: ERR_UNAUTHORIZED (access denied)

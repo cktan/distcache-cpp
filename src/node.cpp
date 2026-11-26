@@ -18,6 +18,23 @@ static bool wipe_dir(const std::string &path) {
   return mkdir_p(path);
 }
 
+// Wipe cache/ once if it lacks the layout marker cache/.v2, i.e. it holds
+// files of the old layout (cache/bucket/key, with no "^^XXXXXXXX" suffix).
+// Old files cannot be told apart by name, so they all go; the cache is cold
+// once. The startup walk skips dot-files, so the marker never enters the LRU.
+static bool upgrade_cache_layout(const std::string &cachedir) {
+  std::string marker = cachedir + "/.v2";
+  if (std::filesystem::exists(marker))
+    return true;
+  if (!wipe_dir(cachedir))
+    return false;
+  FILE *f = fopen(marker.c_str(), "w");
+  if (!f)
+    return false;
+  fclose(f);
+  return true;
+}
+
 bool node_t::start() {
   // create required directories
   if (!mkdir_p(abspath("log"))) {
@@ -26,6 +43,11 @@ bool node_t::start() {
   }
   if (!mkdir_p(abspath("cache"))) {
     fprintf(stderr, "failed to create %s/cache\n", homedir.c_str());
+    return false;
+  }
+  // drop old-layout files before the scan and before http serves anything
+  if (!upgrade_cache_layout(abspath("cache"))) {
+    fprintf(stderr, "failed to upgrade %s/cache layout\n", homedir.c_str());
     return false;
   }
   if (!wipe_dir(abspath("tmp"))) {

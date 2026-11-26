@@ -13,7 +13,7 @@
 // Metadata stored per cached file.
 struct LRUEntry {
   time_t mtime;         // last-access time (POSIX); used as LRU heat proxy
-  uint32_t relpath_pos; // FNV ring hash of relpath; cached to avoid rehashing
+  uint32_t relpath_pos; // ring position: h from the relpath suffix, cached
 };
 
 // Tracks {relpath -> LRUEntry} for all files in the local cache and drives

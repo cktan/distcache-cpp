@@ -50,6 +50,7 @@ DCERR_S3COPY_NETWORK       =  19  # sidecar: network failure
 DCERR_S3COPY_IO            =  20  # sidecar: disk failure
 DCERR_S3COPY_HTTP_4XX      =  21  # sidecar returned 4xx HTTP status
 DCERR_S3COPY_HTTP_5XX      =  22  # sidecar returned 5xx HTTP status
+DCERR_NAME_TOO_LONG        =  23  # key component or cache path too long
 DCERR_NETWORK          = 100   # connection or transfer failure
 DCERR_PROTOCOL         = 101   # truncated or malformed response
 DCERR_NOMEM            = 102   # (rare in Python)
@@ -69,6 +70,7 @@ _SERVER_ERRCODES: dict[str, int] = {
     "ERR_S3COPY_IO":            DCERR_S3COPY_IO,
     "ERR_S3COPY_HTTP_4xx":      DCERR_S3COPY_HTTP_4XX,
     "ERR_S3COPY_HTTP_5xx":      DCERR_S3COPY_HTTP_5XX,
+    "ERR_NAME_TOO_LONG":        DCERR_NAME_TOO_LONG,
 }
 
 
@@ -740,22 +742,26 @@ def dc_final() -> None:
 def dc_get(
     bucket: str,
     key: str,
+    h: int,
     ctx: object,
     cb: Callable[[object, bytes], None],
 ) -> None:
-    """Fetch a cached object, streaming DATA bytes to cb(ctx, data).
-    Follows redirects up to _DC_MAX_REDIRECTS hops."""
+    """Fetch a cached object from the owner of placement hash h, streaming
+    DATA bytes to cb(ctx, data). Follows redirects up to _DC_MAX_REDIRECTS
+    hops. Use dc_default_hash() for an object that belongs to no group."""
     global _g_ring
+    if not 0 <= h <= 0xFFFFFFFF:
+        raise ValueError(f"h out of 32-bit range: {h}")
     with _g_dctab_mutex:
         if not _g_ring:
             raise DistCacheError("no nodes in ring", DCERR_NO_NODE)
-        dest = compute_dest_pos(bucket, key)
+        dest = h
         nid  = find_successor(_g_ring, dest)
         if nid is None:
             raise DistCacheError("no nodes in ring", DCERR_NO_NODE)
 
     stripped_key = key.lstrip('/')
-    path         = f"/{_url_encode(bucket)}/{_url_encode(stripped_key)}"
+    path         = f"/{_url_encode(bucket)}/{_url_encode(stripped_key)}?h={h}"
 
     for _hop in range(_DC_MAX_REDIRECTS + 1):
         redirect_node = do_get_streaming(nid, path, ctx, cb)
@@ -783,6 +789,21 @@ def dc_get(
     raise DistCacheError(
         f"exceeded {_DC_MAX_REDIRECTS} redirects", DCERR_REDIRECT_LOOP
     )
+
+
+def dc_default_hash(bucket: str, key: str) -> int:
+    """Placement hash of an object that belongs to no group: the hash of
+    "cache/<bucket>/<key>", the position distcache used before h existed."""
+    return compute_dest_pos(bucket, key)
+
+
+def dc_owner(h: int) -> str:
+    """Nodeid that owns placement hash h, according to this client's ring."""
+    with _g_dctab_mutex:
+        nid = find_successor(_g_ring, h) if _g_ring else None
+    if nid is None:
+        raise DistCacheError("no nodes in ring", DCERR_NO_NODE)
+    return nid
 
 
 def dc_node() -> list[str]:
@@ -847,10 +868,17 @@ def final() -> None:
 def get(
     bucket: str,
     key: str,
+    h: int,
     ctx: object,
     cb: Callable[[object, bytes], None],
 ) -> None:
-    dc_get(bucket, key, ctx, cb)
+    dc_get(bucket, key, h, ctx, cb)
+
+def default_hash(bucket: str, key: str) -> int:
+    return dc_default_hash(bucket, key)
+
+def owner(h: int) -> str:
+    return dc_owner(h)
 
 def get_nodes() -> list[str]:
     return dc_node()

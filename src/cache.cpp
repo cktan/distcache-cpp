@@ -1,5 +1,4 @@
 #include "cache.h"
-#include "ring.h"
 #include "unique.h"
 #include <cstdio>
 #include <cstring>
@@ -74,7 +73,9 @@ cache_t::cache_t(keylock_t &keylock, std::string homedir)
     : m_homedir_(std::move(homedir)),
       m_lru_(
           keylock,
-          [](const std::string &s) { return ring_compute_pos(s.c_str()); },
+          // ring position is the placement hash in the "^^XXXXXXXX" suffix;
+          // every cache relpath carries one (compute_relpath, layout wipe).
+          [](const std::string &s) { return relpath_hash(s).value_or(0); },
           m_homedir_) {}
 
 // Resolve relpath to an absolute filesystem path under homedir.

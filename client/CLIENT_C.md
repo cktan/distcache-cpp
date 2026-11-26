@@ -37,7 +37,10 @@ int write_cb(void *ctx, const char *buf, int len) {
     return 0;   /* return -1 to abort */
 }
 
-int rc = dc_get("my-bucket", "path/to/object", stdout, write_cb);
+/* h: placement hash. Objects with the same h land on one node;
+   dc_default_hash() gives the hash for an object in no group. */
+uint32_t h = dc_default_hash("my-bucket", "path/to/object");
+int rc = dc_get("my-bucket", "path/to/object", h, stdout, write_cb);
 if (rc != 0)
     fprintf(stderr, "dc_get error %d: %s\n", rc, dc_errmsg());
 
@@ -73,10 +76,18 @@ connections are closed.
 int dc_init(int n, const char *const *node);
 int dc_final(void);
 
-/* Fetch an object; callback is invoked once per DATA frame.
+/* Fetch an object from the owner of placement hash h (sent as ?h=);
+   callback is invoked once per DATA frame.
    Returns 0 on success or a DCERR_* code on failure. */
-int dc_get(const char *bucket, const char *key, void *context,
+int dc_get(const char *bucket, const char *key, uint32_t h, void *context,
            int (*callback)(void *context, const char *buf, int bufsz));
+
+/* Placement hash of an object in no group: hash of "cache/<bucket>/<key>". */
+uint32_t dc_default_hash(const char *bucket, const char *key);
+
+/* Write the nodeid that owns h on this client's ring into buf.
+   Returns 0, or -1 (DCERR_NO_NODE: empty ring; DCERR_NOMEM: buf too small). */
+int dc_owner(uint32_t h, char *buf, int bufsz);
 
 /* List all known live nodes as "host:port\n..." in a malloc'd, null-terminated
    buffer. Sets *n to the node count. Caller must free(*buf).
@@ -114,6 +125,7 @@ int dc_housekeeping(void);
 | `DCERR_S3_COPY` | 12 | Server: S3 copy/fetch failed |
 | `DCERR_IO` | 13 | Server: local I/O failure |
 | `DCERR_BAD_REQUEST` | 14 | Server: missing or invalid request field |
+| `DCERR_NAME_TOO_LONG` | 23 | Server: key component or cache path too long |
 | `DCERR_NETWORK` | 100 | Connection or transfer failure |
 | `DCERR_PROTOCOL` | 101 | Truncated or malformed response |
 | `DCERR_NOMEM` | 102 | malloc failed |

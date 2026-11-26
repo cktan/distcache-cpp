@@ -179,6 +179,35 @@ class TestRingAlgorithm(unittest.TestCase):
         self.assertEqual(dest_pos("b", "key"), dest_pos("b", "/key"))
         self.assertEqual(dest_pos("b", "key"), dest_pos("b", "//key"))
 
+    def test_default_hash_cross_verified(self):
+        """Proves default_hash matches the C client's dc_default_hash.
+        1. Compute default_hash for a fixed bucket/key.
+        2. Compare with the value the C client test expects."""
+        self.assertEqual(dc.default_hash("bucket", "key"), 0x6f7df6c6)
+
+    def test_owner_cross_verified(self):
+        """Proves owner(h) matches the C client's dc_owner on one ring.
+        1. Init with node1:4001 and node2:4002 (no live node needed).
+        2. Compare owner(h) for fixed hashes with the C client test."""
+        with patch("distcache.dc_housekeeping"):
+            dc.init(["node1:4001", "node2:4002"])
+        try:
+            self.assertEqual(dc.owner(0), "node1:4001")
+            self.assertEqual(dc.owner(0x6f7df6c6), "node2:4002")
+            self.assertEqual(dc.owner(0x80000000), "node2:4002")
+            self.assertEqual(dc.owner(0xffffffff), "node1:4001")
+        finally:
+            dc.final()
+
+    def test_owner_without_ring_raises(self):
+        """Proves owner() fails cleanly with no ring.
+        1. final() to clear the ring.
+        2. Expect DistCacheError with DCERR_NO_NODE."""
+        dc.final()
+        with self.assertRaises(DistCacheError) as ctx:
+            dc.owner(0)
+        self.assertEqual(ctx.exception.code, DCERR_NO_NODE)
+
     def test_fnv1a_cross_verified(self):
         """Cross-verify with C client expected value: hash(0, "test") == 0x0eb0635b"""
         self.assertEqual(_fnv1a_mod(0, "test"), 0x0eb0635b)
@@ -277,7 +306,7 @@ class TestModuleAPI(unittest.TestCase):
 
         with patch("distcache._do_request", side_effect=self._mock_request(redirect_body, ok_body)):
             chunks = []
-            dc.get("bucket", "key", chunks, lambda ctx, d: ctx.append(d))
+            dc.get("bucket", "key", 7, chunks, lambda ctx, d: ctx.append(d))
 
         self.assertIn("node2:4002", dc.get_nodes())
 
@@ -287,14 +316,14 @@ class TestModuleAPI(unittest.TestCase):
         body = make_data(b"hello ") + make_data(b"world") + make_fin()
         with patch("distcache._do_request", side_effect=self._mock_request(body)):
             chunks = []
-            dc.get("bucket", "key", chunks, lambda ctx, d: ctx.append(d))
+            dc.get("bucket", "key", 7, chunks, lambda ctx, d: ctx.append(d))
         self.assertEqual(b"".join(chunks), b"hello world")
 
     def test_get_server_error_raises(self):
         body = make_error("ERR_NOT_FOUND", "nope") + make_fin()
         with patch("distcache._do_request", side_effect=self._mock_request(body)):
             with self.assertRaises(DistCacheError) as ctx:
-                dc.get("bucket", "key", None, lambda _ctx, d: None)
+                dc.get("bucket", "key", 7, None, lambda _ctx, d: None)
         self.assertEqual(ctx.exception.code, DCERR_NOT_FOUND)
 
     def test_get_callback_exception_propagates(self):
@@ -303,7 +332,7 @@ class TestModuleAPI(unittest.TestCase):
             def bad_cb(ctx, data: bytes) -> None:
                 raise RuntimeError("abort")
             with self.assertRaises(RuntimeError):
-                dc.get("bucket", "key", None, bad_cb)
+                dc.get("bucket", "key", 7, None, bad_cb)
 
     def test_get_stale_connection_retried(self):
         body = make_data(b"hello") + make_fin()
@@ -317,8 +346,30 @@ class TestModuleAPI(unittest.TestCase):
             return result, False
         with patch("distcache._do_request", side_effect=side_effect):
             chunks = []
-            dc.get("bucket", "key", chunks, lambda ctx, d: ctx.append(d))
+            dc.get("bucket", "key", 7, chunks, lambda ctx, d: ctx.append(d))
         self.assertEqual(b"".join(chunks), b"hello")
+
+    def test_get_sends_h(self):
+        """Proves get() puts the placement hash on the wire.
+        1. get() with h = 4294967295 against a mocked node.
+        2. Check the request path ends with ?h=4294967295."""
+        body = make_data(b"x") + make_fin()
+        paths = []
+        def _req(conn, node, path, on_data=None):
+            paths.append(path)
+            return _ChunkReader(fake_response(body)).read_response(
+                on_data=on_data), False
+        with patch("distcache._do_request", side_effect=_req):
+            dc.get("bucket", "key", 0xFFFFFFFF, None, lambda _ctx, d: None)
+        self.assertTrue(paths[0].endswith("?h=4294967295"), paths[0])
+
+    def test_get_rejects_out_of_range_h(self):
+        """Proves get() refuses an h outside 32 bits before any request.
+        1. get() with h = -1 and h = 2**32.
+        2. Expect ValueError each time."""
+        for bad in (-1, 2**32):
+            with self.assertRaises(ValueError):
+                dc.get("bucket", "key", bad, None, lambda _ctx, d: None)
 
     # ---- health ----
 
@@ -376,7 +427,8 @@ class TestRestAPIIntegration(unittest.TestCase):
 
     def test_get_missing_key_raises(self):
         with self.assertRaises(DistCacheError) as ctx:
-            dc.get("no-such-bucket", "no-such-key", None, lambda _ctx, d: None)
+            dc.get("no-such-bucket", "no-such-key",
+                   dc.default_hash("no-such-bucket", "no-such-key"), None, lambda _ctx, d: None)
         self.assertNotEqual(ctx.exception.code, 0)
 
     def test_get_nodes_contains_seed(self):

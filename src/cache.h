@@ -13,7 +13,7 @@
 //
 // Manages cached objects stored as files under <homedir>/cache/.
 // Layout: <homedir>/cache/<bucket>/<key>
-// Callers use relpath = "cache/<bucket>/<key>" throughout.
+// Callers use relpath = "cache/<bucket>/<key>^^XXXXXXXX" throughout.
 //
 // Writes are atomic: data goes to a unique tmp file under <homedir>/tmp/,
 // then rename(2) to the final destination. tmp/ and cache/ are on the same

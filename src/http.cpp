@@ -7,6 +7,7 @@
 #include "wire.h"
 #include <algorithm>
 #include <cerrno>
+#include <charconv>
 #include <cstring>
 #include <ctime>
 #include <fcntl.h>
@@ -35,6 +36,20 @@ static bool split_path(const std::string &path, std::string &bucket,
   bucket = path.substr(1, second - 1);
   key = path.substr(second + 1);
   return !bucket.empty() && !key.empty();
+}
+
+// Parse the required ?h= placement hash: a decimal 32-bit unsigned integer.
+// Returns false if it is absent, empty, signed, non-numeric, or out of range.
+static bool parse_h(const httplib::Request &req, uint32_t &h) {
+  if (!req.has_param("h"))
+    return false;
+  std::string v = req.get_param_value("h");
+  const char *b = v.data();
+  const char *e = b + v.size();
+  if (b == e || *b < '0' || *b > '9')
+    return false;
+  auto [p, ec] = std::from_chars(b, e, h);
+  return ec == std::errc() && p == e;
 }
 
 // Send a 200 octet-stream response with body.
@@ -120,16 +135,23 @@ static void handle_get(node_t &node, const httplib::Request &req,
                        httplib::Response &res) {
   fd_t fd;
 
-  // Obtain bucket & key, form relpath, and compute relpath_pos.
-  // We need the relpath_pos to interrogate ring for the responsible node.
+  // Obtain bucket, key and placement hash h, and form relpath.
+  // h is the ring position used to interrogate the ring for the owner.
   std::string bucket, key;
   if (!split_path(req.path, bucket, key)) {
     send_raw(res, wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid path") +
                       WIRE_FIN);
     return;
   }
+  uint32_t h;
+  if (!parse_h(req, h)) {
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_BAD_REQUEST, "missing or invalid h") +
+                 WIRE_FIN);
+    return;
+  }
 
-  auto relpath_opt = compute_relpath(bucket, key);
+  auto relpath_opt = compute_relpath(bucket, key, h);
   if (!relpath_opt) {
     send_raw(res,
              wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid bucket or key") +
@@ -137,7 +159,13 @@ static void handle_get(node_t &node, const httplib::Request &req,
     return;
   }
   const relpath_t &relpath = *relpath_opt;
-  uint32_t rp_pos = ring_compute_pos(relpath.str().c_str());
+  // refuse before any S3 fetch or file I/O: the suffixed name must fit
+  if (!relpath_fits(node.cache.abspath(relpath))) {
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_NAME_TOO_LONG, "file name too long") +
+                 WIRE_FIN);
+    return;
+  }
 
   // Check for flags
   bool local_only = req.has_param("local");
@@ -148,7 +176,7 @@ static void handle_get(node_t &node, const httplib::Request &req,
     // The normal case! We need to redirect if this node is not dest.
 
     auto ring = node.ring.load();
-    nodeid_idx_t dest_idx = ring_successor(ring.get(), rp_pos);
+    nodeid_idx_t dest_idx = ring_successor(ring.get(), h);
     if (nodeid_valid(dest_idx) && !nodeid_eq(dest_idx, node.nodeid)) {
       // Key belongs to another ring node; look up string only for network ops.
       char host[254];
@@ -392,7 +420,14 @@ static void handle_put(node_t &node, const httplib::Request &req,
                       WIRE_FIN);
     return;
   }
-  auto relpath_opt = compute_relpath(bucket, key);
+  uint32_t h;
+  if (!parse_h(req, h)) {
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_BAD_REQUEST, "missing or invalid h") +
+                 WIRE_FIN);
+    return;
+  }
+  auto relpath_opt = compute_relpath(bucket, key, h);
   if (!relpath_opt) {
     send_raw(res,
              wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid bucket or key") +
@@ -400,6 +435,13 @@ static void handle_put(node_t &node, const httplib::Request &req,
     return;
   }
   const relpath_t &relpath = *relpath_opt;
+  // refuse before any S3 fetch or file I/O: the suffixed name must fit
+  if (!relpath_fits(node.cache.abspath(relpath))) {
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_NAME_TOO_LONG, "file name too long") +
+                 WIRE_FIN);
+    return;
+  }
 
   relpath_t tmp_rel = node.cache.tmp_relpath();
   int raw_fd = ::open(node.cache.abspath(tmp_rel).c_str(),
@@ -447,7 +489,14 @@ static void handle_delete(node_t &node, const httplib::Request &req,
                       WIRE_FIN);
     return;
   }
-  auto relpath_opt = compute_relpath(bucket, key);
+  uint32_t h;
+  if (!parse_h(req, h)) {
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_BAD_REQUEST, "missing or invalid h") +
+                 WIRE_FIN);
+    return;
+  }
+  auto relpath_opt = compute_relpath(bucket, key, h);
   if (!relpath_opt) {
     send_raw(res,
              wire_err(rc_errcode_t::ERR_INVALID_PATH, "invalid bucket or key") +
@@ -455,6 +504,13 @@ static void handle_delete(node_t &node, const httplib::Request &req,
     return;
   }
   const relpath_t &relpath = *relpath_opt;
+  // refuse before any S3 fetch or file I/O: the suffixed name must fit
+  if (!relpath_fits(node.cache.abspath(relpath))) {
+    send_raw(res,
+             wire_err(rc_errcode_t::ERR_NAME_TOO_LONG, "file name too long") +
+                 WIRE_FIN);
+    return;
+  }
   node.cache.drop(relpath);
   send_raw(res, WIRE_FIN);
 }

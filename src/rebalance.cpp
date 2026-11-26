@@ -14,17 +14,22 @@
 
 rebalancer_t::rebalancer_t(node_t &n) : m_node_(n) {}
 
-// Splits "cache/bucket/key..." back into bucket and key. Used by pull_one
-// to rebuild the request path for fetching from the source peer.
-static bool relpath_to_bk(const std::string &relpath, std::string &bucket,
-                          std::string &key) {
+// Splits "cache/bucket/key^^XXXXXXXX" back into bucket, key and h. Used by
+// pull_one to rebuild the request path for fetching from the source peer.
+static bool relpath_to_bkh(const std::string &relpath, std::string &bucket,
+                           std::string &key, uint32_t &h) {
   if (relpath.compare(0, 6, "cache/") != 0)
     return false;
+  auto hopt = relpath_hash(relpath);
+  if (!hopt)
+    return false;
+  h = *hopt;
+  size_t end = relpath.size() - RELPATH_SUFFIX_LEN; // strip "^^XXXXXXXX"
   size_t sl = relpath.find('/', 6);
-  if (sl == std::string::npos || sl + 1 >= relpath.size())
+  if (sl == std::string::npos || sl + 1 >= end)
     return false;
   bucket = relpath.substr(6, sl - 6);
-  key = relpath.substr(sl + 1);
+  key = relpath.substr(sl + 1, end - sl - 1);
   return !bucket.empty() && !key.empty();
 }
 
@@ -265,7 +270,8 @@ void rebalancer_t::pull_one(const std::string &src_addr,
                             const std::string &relpath) {
   // make sure it is valid bucket key
   std::string bucket, key;
-  if (!relpath_to_bk(relpath, bucket, key))
+  uint32_t h;
+  if (!relpath_to_bkh(relpath, bucket, key, h))
     return;
 
   // if file exists, don't pull
@@ -293,7 +299,8 @@ void rebalancer_t::pull_one(const std::string &src_addr,
   cli.set_read_timeout(30);
 
   // send to me only if you have it locally. Also, delete after sending.
-  std::string path = "/" + bucket + "/" + key + "?local=1&delete=1";
+  std::string path =
+      "/" + bucket + "/" + key + "?local=1&delete=1&h=" + std::to_string(h);
 
   // stream into this temp file
   relpath_t tmp_rel = m_node_.cache.tmp_relpath();

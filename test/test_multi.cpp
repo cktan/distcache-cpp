@@ -11,6 +11,8 @@
 #define DOCTEST_CONFIG_IMPLEMENT_WITH_MAIN
 #include "doctest.h"
 #include "node.h"
+#include "relpath.h"
+#include "ring.h"
 #include "wire.h"
 #include <algorithm>
 #include <array>
@@ -60,6 +62,37 @@ static std::string url_put(const std::string &host, int port,
 static std::string url_del(const std::string &host, int port,
                            const std::string &path) {
   return url_request("DELETE", host, port, path);
+}
+
+// Today's default placement hash for bucket/key: the hash of the suffix-free
+// relpath, so test keys spread over the ring as they did before h.
+static uint32_t default_h(const std::string &bucket, const std::string &key) {
+  std::string plain = "cache/" + bucket + "/" + key;
+  return ring_compute_pos(plain.c_str());
+}
+
+// Request path "/bucket/key?h=<h>", with "&extra" appended if given.
+static std::string obj_path(const std::string &bucket, const std::string &key,
+                            uint32_t h, const std::string &extra = "") {
+  std::string p = "/" + bucket + "/" + key + "?h=" + std::to_string(h);
+  return extra.empty() ? p : p + "&" + extra;
+}
+
+// Request path for moby/<key> with its default h.
+static std::string moby(const std::string &key, const std::string &extra = "") {
+  return obj_path("moby", key, default_h("moby", key), extra);
+}
+
+// Absolute cache file of bucket/key with hash h on node idx.
+static std::string cache_file(int idx, const std::string &bucket,
+                              const std::string &key, uint32_t h) {
+  return "/tmp/dc_qa_" + std::to_string(idx) + "/" +
+         compute_relpath(bucket, key, h)->str();
+}
+
+// Absolute cache file of moby/<key> with its default h on node idx.
+static std::string moby_file(int idx, const std::string &key) {
+  return cache_file(idx, "moby", key, default_h("moby", key));
 }
 
 // Parse "REDIRECT:N\nhost:port/first_pos\nFIN:0\n" → "host:port".
@@ -123,7 +156,8 @@ static uint64_t s3copy_served() {
   return res ? json_int(res->body, "objects_served") : 0;
 }
 
-// Count regular files under /tmp/dc_qa_{from..to-1}/cache.
+// Count regular files under /tmp/dc_qa_{from..to-1}/cache, skipping dot-files
+// such as the cache/.v2 layout marker (the startup walk skips them too).
 static int total_cache_files(int from, int to) {
   int count = 0;
   for (int i = from; i < to; i++) {
@@ -131,7 +165,7 @@ static int total_cache_files(int from, int to) {
     if (!std::filesystem::exists(dir))
       continue;
     for (auto &e : std::filesystem::recursive_directory_iterator(dir))
-      if (e.is_regular_file())
+      if (e.is_regular_file() && !e.path().filename().string().starts_with("."))
         count++;
   }
   return count;
@@ -274,16 +308,15 @@ TEST_CASE("TC2: cache miss triggers S3 fetch") {
 
   // ensure moby/1 is evicted from every node so the next GET is a cold miss
   for (int port = 4000; port <= 4004; port++)
-    url_del("127.0.0.1", port, "/moby/1");
+    url_del("127.0.0.1", port, moby("1"));
 
-  auto [owner_addr, resp] = follow_get("127.0.0.1:4000", "/moby/1");
+  auto [owner_addr, resp] = follow_get("127.0.0.1:4000", moby("1"));
   REQUIRE(!owner_addr.empty());
   CHECK(resp.starts_with("DATA:"));
   CHECK(resp.ends_with(WIRE_FIN));
 
   int idx = addr_to_idx(owner_addr);
-  CHECK(std::filesystem::exists("/tmp/dc_qa_" + std::to_string(idx) +
-                                "/cache/moby/1"));
+  CHECK(std::filesystem::exists(moby_file(idx, "1")));
 
   auto [host, port] = split_addr(owner_addr);
   auto h = url_get(host, port, "/_health");
@@ -306,7 +339,7 @@ TEST_CASE("TC3: redirect to ring owner") {
   std::string resp;
   int redir_key = -1;
   for (int i = 1; i <= 200 && redir_key < 0; i++) {
-    resp = url_get("127.0.0.1", 4000, "/moby/" + std::to_string(i));
+    resp = url_get("127.0.0.1", 4000, moby(std::to_string(i)));
     if (resp.starts_with("REDIRECT:"))
       redir_key = i;
   }
@@ -317,8 +350,7 @@ TEST_CASE("TC3: redirect to ring owner") {
 
   auto h = url_get("127.0.0.1", 4000, "/_health");
   CHECK(json_int(h, "redirects") == 1);
-  CHECK(!std::filesystem::exists("/tmp/dc_qa_0/cache/moby/" +
-                                 std::to_string(redir_key)));
+  CHECK(!std::filesystem::exists(moby_file(0, std::to_string(redir_key))));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -335,14 +367,14 @@ TEST_CASE("TC4: cache hit on repeat GET") {
   ClusterFixture cx;
 
   // prime the cache: first GET stores the object on its ring owner
-  auto [owner_addr, resp1] = follow_get("127.0.0.1:4000", "/moby/1");
+  auto [owner_addr, resp1] = follow_get("127.0.0.1:4000", moby("1"));
   REQUIRE(!owner_addr.empty());
   REQUIRE(resp1.starts_with("DATA:"));
 
   auto [host, port] = split_addr(owner_addr);
 
   auto h_before = url_get(host, port, "/_health");
-  auto resp2 = url_get(host, port, "/moby/1");
+  auto resp2 = url_get(host, port, moby("1"));
   auto h_after = url_get(host, port, "/_health");
 
   CHECK(resp2.starts_with("DATA:"));
@@ -363,11 +395,11 @@ TEST_CASE("TC5: PUT stores on node") {
   // 5. Read file and verify content matches the PUT body exactly.
   ClusterFixture cx;
 
-  auto resp = url_put("127.0.0.1", 4000, "/moby/testput", "hello_qa_test");
+  auto resp = url_put("127.0.0.1", 4000, moby("testput"), "hello_qa_test");
   CHECK(resp.ends_with(WIRE_FIN));
-  REQUIRE(std::filesystem::exists("/tmp/dc_qa_0/cache/moby/testput"));
+  REQUIRE(std::filesystem::exists(moby_file(0, "testput")));
 
-  std::ifstream f("/tmp/dc_qa_0/cache/moby/testput");
+  std::ifstream f(moby_file(0, "testput"));
   std::string content((std::istreambuf_iterator<char>(f)), {});
   CHECK(content == "hello_qa_test");
 }
@@ -385,17 +417,17 @@ TEST_CASE("TC6: DELETE removes cached key") {
   // 6. Verify response contains ERR_NOT_CACHED + FIN.
   ClusterFixture cx;
 
-  url_put("127.0.0.1", 4000, "/moby/testdel", "to_be_deleted");
-  REQUIRE(std::filesystem::exists("/tmp/dc_qa_0/cache/moby/testdel"));
+  url_put("127.0.0.1", 4000, moby("testdel"), "to_be_deleted");
+  REQUIRE(std::filesystem::exists(moby_file(0, "testdel")));
 
-  auto del = url_del("127.0.0.1", 4000, "/moby/testdel");
+  auto del = url_del("127.0.0.1", 4000, moby("testdel"));
   CHECK(del.ends_with(WIRE_FIN));
-  CHECK(!std::filesystem::exists("/tmp/dc_qa_0/cache/moby/testdel"));
+  CHECK(!std::filesystem::exists(moby_file(0, "testdel")));
 
   // ?local=1 suppresses redirect and S3 fetch; file gone → not-cached error.
   // wire_err() emits "ERROR:<n>\n{...}" — QA.md says "ERR:" but code says
   // "ERROR:".
-  auto miss = url_get("127.0.0.1", 4000, "/moby/testdel?local=1");
+  auto miss = url_get("127.0.0.1", 4000, moby("testdel", "local=1"));
   CHECK(miss.find("ERR_NOT_CACHED") != std::string::npos);
   CHECK(miss.ends_with(WIRE_FIN));
 }
@@ -417,7 +449,7 @@ TEST_CASE("TC7: cluster expansion rebalance") {
 
   // warm the 3-node cluster with moby/1..100, each landing on its ring owner
   for (int i = 1; i <= 100; i++)
-    follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
+    follow_get("127.0.0.1:4000", moby(std::to_string(i)));
 
   CHECK(total_cache_files(0, 3) == 100);
 
@@ -467,15 +499,18 @@ TEST_CASE("TC8: node failure resilience") {
 
   // warm all 5 nodes with moby/1..100
   for (int i = 1; i <= 100; i++)
-    follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
+    follow_get("127.0.0.1:4000", moby(std::to_string(i)));
 
   // record which keys ended up on node 1
   std::vector<std::string> node1_keys;
   std::string node1_dir = "/tmp/dc_qa_1/cache/moby";
   if (std::filesystem::exists(node1_dir)) {
     for (auto &e : std::filesystem::directory_iterator(node1_dir))
-      if (e.is_regular_file())
-        node1_keys.push_back(e.path().filename().string());
+      if (e.is_regular_file()) {
+        // file name is "<key>^^XXXXXXXX"; strip the hash suffix
+        std::string name = e.path().filename().string();
+        node1_keys.push_back(name.substr(0, name.size() - RELPATH_SUFFIX_LEN));
+      }
   }
   REQUIRE(!node1_keys.empty());
 
@@ -484,7 +519,7 @@ TEST_CASE("TC8: node failure resilience") {
 
   // every key that was on node 1 must be reachable via the reformed ring
   for (auto &key : node1_keys) {
-    auto [addr, body] = follow_get("127.0.0.1:4000", "/moby/" + key);
+    auto [addr, body] = follow_get("127.0.0.1:4000", moby(key));
     CHECK(!addr.empty());
     CHECK(body.starts_with("DATA:"));
     CHECK(body.ends_with(WIRE_FIN));
@@ -506,7 +541,7 @@ TEST_CASE("TC9: local and delete modifiers") {
   ClusterFixture cx;
 
   // cache moby/50 on its ring owner via follow_get
-  auto [owner_addr, resp] = follow_get("127.0.0.1:4000", "/moby/50");
+  auto [owner_addr, resp] = follow_get("127.0.0.1:4000", moby("50"));
   REQUIRE(!owner_addr.empty());
   REQUIRE(resp.starts_with("DATA:"));
 
@@ -516,20 +551,19 @@ TEST_CASE("TC9: local and delete modifiers") {
 
   // ?local=1 on non-owner: no redirect, no S3 fetch, file absent → not-cached
   // wire_err emits "ERROR:..." — QA.md says "ERR:" but code says "ERROR:".
-  auto miss = url_get("127.0.0.1", non_owner_port, "/moby/50?local=1");
+  auto miss = url_get("127.0.0.1", non_owner_port, moby("50", "local=1"));
   CHECK(miss.find("ERR_NOT_CACHED") != std::string::npos);
   CHECK(miss.ends_with(WIRE_FIN));
 
   // ?local=1 on owner: file is present → DATA
-  auto hit = url_get(owner_host, owner_port, "/moby/50?local=1");
+  auto hit = url_get(owner_host, owner_port, moby("50", "local=1"));
   CHECK(hit.starts_with("DATA:"));
   CHECK(hit.ends_with(WIRE_FIN));
 
   // ?delete=1 on owner: serves DATA then unlinks the file
-  auto del = url_get(owner_host, owner_port, "/moby/50?delete=1");
+  auto del = url_get(owner_host, owner_port, moby("50", "delete=1"));
   CHECK(del.starts_with("DATA:"));
-  CHECK(!std::filesystem::exists("/tmp/dc_qa_" + std::to_string(owner_idx) +
-                                 "/cache/moby/50"));
+  CHECK(!std::filesystem::exists(moby_file(owner_idx, "50")));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -549,9 +583,10 @@ TEST_CASE("TC11: nested key paths and health schema") {
   ClusterFixture cx(1);
 
   // nested key: path segments separated by slashes
-  auto pr = url_put("127.0.0.1", 4000, "/bucket/path/to/obj", "payload");
+  auto pr = url_put("127.0.0.1", 4000, obj_path("bucket", "path/to/obj", 7),
+                    "payload");
   CHECK(pr.ends_with(WIRE_FIN));
-  auto gr = url_get("127.0.0.1", 4000, "/bucket/path/to/obj");
+  auto gr = url_get("127.0.0.1", 4000, obj_path("bucket", "path/to/obj", 7));
   CHECK(gr.find("payload") != std::string::npos);
   CHECK(gr.ends_with(WIRE_FIN));
 
@@ -629,8 +664,7 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
   // warm: GET all 500 keys, track owner counts
   std::map<std::string, int> owner_count;
   for (int i = 1; i <= 500; i++) {
-    auto [addr, body] =
-        follow_get("127.0.0.1:4000", "/moby/" + std::to_string(i));
+    auto [addr, body] = follow_get("127.0.0.1:4000", moby(std::to_string(i)));
     REQUIRE(!addr.empty());
     CHECK(body.starts_with("DATA:"));
     CHECK(body.ends_with(WIRE_FIN));
@@ -663,7 +697,7 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
 
   // verify all 500 keys still reachable (dead nodes' keys re-fetched from S3)
   for (int i = 1; i <= 500; i++) {
-    auto [addr, body] = follow_get(start_addr, "/moby/" + std::to_string(i));
+    auto [addr, body] = follow_get(start_addr, moby(std::to_string(i)));
     CHECK(!addr.empty());
     CHECK(body.starts_with("DATA:"));
     CHECK(body.ends_with(WIRE_FIN));
@@ -682,4 +716,234 @@ TEST_CASE("TC13: 10-node S3 cluster: warm, 2-node failure, re-fetch") {
   }
   CHECK(total_hits > 0);
   CHECK(total_misses > 0);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC14: h is required and must be a decimal 32-bit unsigned integer
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC14: missing or invalid h is refused") {
+  // Proves GET, PUT and DELETE refuse a request whose h is absent or bad.
+  // 1. Start 1-node cluster.
+  // 2. GET moby/1 with no h, an empty h, -1, 2^32, "abc", "+5" and "1x".
+  // 3. Verify each response carries ERR_BAD_REQUEST + FIN.
+  // 4. PUT and DELETE with no h; verify ERR_BAD_REQUEST.
+  // 5. GET moby/1 with h = 4294967295; verify DATA: (the max value is valid).
+  ClusterFixture cx(1);
+
+  for (const char *q :
+       {"", "?h=", "?h=-1", "?h=4294967296", "?h=abc", "?h=+5", "?h=1x"}) {
+    auto resp = url_get("127.0.0.1", 4000, std::string("/moby/1") + q);
+    INFO("query: " << q);
+    CHECK(resp.find("ERR_BAD_REQUEST") != std::string::npos);
+    CHECK(resp.ends_with(WIRE_FIN));
+  }
+
+  auto pr = url_put("127.0.0.1", 4000, "/moby/nohash", "x");
+  CHECK(pr.find("ERR_BAD_REQUEST") != std::string::npos);
+  auto dr = url_del("127.0.0.1", 4000, "/moby/1");
+  CHECK(dr.find("ERR_BAD_REQUEST") != std::string::npos);
+
+  auto ok = url_get("127.0.0.1", 4000, obj_path("moby", "1", 4294967295u));
+  CHECK(ok.starts_with("DATA:"));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC15: keys that share one h land on one node
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC15: one h places all its keys on the owner of h") {
+  // Proves routing follows h, not the key: one h groups many keys on one node.
+  // 1. Start 3-node cluster.
+  // 2. Find the owner of h from node 0's ring.
+  // 3. GET moby/1..20, all with the same h, via follow_get from node 0.
+  // 4. Verify every GET was answered by the owner of h.
+  // 5. Verify the owner holds all 20 files and the other nodes hold none.
+  ClusterFixture cx(3);
+  const uint32_t h = 0x12345678u;
+
+  auto ring = cx.nodes[0]->ring.load();
+  const char *owner_id = nodeid_lookup(ring_successor(ring.get(), h));
+  REQUIRE(owner_id != nullptr);
+  std::string owner_addr = owner_id;
+  auto slash = owner_addr.find('/');
+  if (slash != std::string::npos)
+    owner_addr = owner_addr.substr(0, slash);
+  int owner_idx = addr_to_idx(owner_addr);
+
+  for (int i = 1; i <= 20; i++) {
+    auto [addr, body] =
+        follow_get("127.0.0.1:4000", obj_path("moby", std::to_string(i), h));
+    CHECK(addr == owner_addr);
+    CHECK(body.starts_with("DATA:"));
+    CHECK(std::filesystem::exists(
+        cache_file(owner_idx, "moby", std::to_string(i), h)));
+  }
+
+  for (int i = 0; i < 3; i++)
+    CHECK(total_cache_files(i, i + 1) == (i == owner_idx ? 20 : 0));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC16: a restarted node recovers each file's h from its name
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC16: restart rebuilds the LRU with each file's h") {
+  // Proves h survives a restart: the startup scan reads it from the suffix.
+  // 1. Start 1-node cluster.
+  // 2. GET moby/1..5, each with a distinct h, to cache them.
+  // 3. Stop node 0 and start it again on the same homedir.
+  // 4. Wait until the startup scan has put all 5 files in the LRU.
+  // 5. Verify each LRU entry's relpath_pos equals the h in its path.
+  // 6. GET each key with ?local=1 and its h; verify DATA: (a cache hit).
+  ClusterFixture cx(1);
+  auto h_of = [](int i) { return (uint32_t)i * 0x10000001u; };
+
+  for (int i = 1; i <= 5; i++) {
+    auto r = url_get("127.0.0.1", 4000,
+                     obj_path("moby", std::to_string(i), h_of(i)));
+    REQUIRE(r.starts_with("DATA:"));
+  }
+
+  cx.stop_node(0);
+  cx.add_nodes(0, 1);
+  cx.wait_converged(1);
+
+  auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+  while (cx.nodes[0]->cache.size() < 5 &&
+         std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  REQUIRE(cx.nodes[0]->cache.size() == 5);
+
+  cx.nodes[0]->cache.scan([&](const std::string &rp, time_t, uint32_t pos) {
+    CHECK(relpath_hash(rp) == pos);
+  });
+
+  for (int i = 1; i <= 5; i++) {
+    auto r = url_get("127.0.0.1", 4000,
+                     obj_path("moby", std::to_string(i), h_of(i), "local=1"));
+    CHECK(r.starts_with("DATA:"));
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC17: old-layout cache is wiped once
+// ─────────────────────────────────────────────────────────────────────────────
+
+// Poll /_health on port until it answers (max 5 s). node_t::stop() is a no-op
+// on http until the http thread has created its server, so wait for it first.
+static bool wait_ready(int port) {
+  for (int i = 0; i < 50; i++) {
+    httplib::Client cli("127.0.0.1", port);
+    cli.set_connection_timeout(1);
+    auto res = cli.Get("/_health");
+    if (res && res->status == 200)
+      return true;
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+  }
+  return false;
+}
+
+TEST_CASE("TC17: first start wipes an old-layout cache once") {
+  // Proves old files (no "^^XXXXXXXX" suffix) go, and only on the first start.
+  // 1. Create a homedir holding an old-layout file cache/moby/1, no marker.
+  // 2. Start a node on it; verify the old file is gone and cache/.v2 exists.
+  // 3. Stop the node, drop a new-layout file in, and start it again.
+  // 4. Verify the new-layout file survives the second start.
+  std::string hd = "/tmp/dc_qa_layout";
+  std::filesystem::remove_all(hd);
+  std::filesystem::create_directories(hd + "/cache/moby");
+  std::ofstream(hd + "/cache/moby/1") << "old";
+  nodeid_idx_t nid = nodeid_find("127.0.0.1:4020");
+
+  {
+    node_t n(hd, nid);
+    REQUIRE(n.start());
+    REQUIRE(wait_ready(4020));
+    CHECK(!std::filesystem::exists(hd + "/cache/moby/1"));
+    CHECK(std::filesystem::exists(hd + "/cache/.v2"));
+    n.stop();
+    n.join();
+  }
+
+  std::string kept = hd + "/" + compute_relpath("moby", "1", 9)->str();
+  std::filesystem::create_directories(hd + "/cache/moby");
+  std::ofstream(kept) << "new";
+
+  {
+    node_t n(hd, nid);
+    REQUIRE(n.start());
+    REQUIRE(wait_ready(4020));
+    CHECK(std::filesystem::exists(kept));
+    n.stop();
+    n.join();
+  }
+  std::filesystem::remove_all(hd);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC18: a stored file name never blocks another key's directory
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC18: suffix never collides with a key directory") {
+  // Proves "^^" in a key is refused in either order, so x^^00000001 (a file)
+  // and a directory x^^00000001/ can never both be needed.
+  // 1. Start 1-node cluster.
+  // 2. PUT moby/x with h=1, then PUT moby/x^^00000001/y with h=1.
+  // 3. Verify the first stores and the second gets ERR_INVALID_PATH.
+  // 4. In the other order: PUT moby/z^^00000001/y, then PUT moby/z with h=1.
+  // 5. Verify the first gets ERR_INVALID_PATH and the second stores.
+  ClusterFixture cx(1);
+
+  auto a = url_put("127.0.0.1", 4000, obj_path("moby", "x", 1), "x");
+  CHECK(a == WIRE_FIN);
+  auto b =
+      url_put("127.0.0.1", 4000, obj_path("moby", "x^^00000001/y", 1), "y");
+  CHECK(b.find("ERR_INVALID_PATH") != std::string::npos);
+  CHECK(std::filesystem::exists(cache_file(0, "moby", "x", 1)));
+
+  auto c =
+      url_put("127.0.0.1", 4000, obj_path("moby", "z^^00000001/y", 1), "y");
+  CHECK(c.find("ERR_INVALID_PATH") != std::string::npos);
+  auto d = url_put("127.0.0.1", 4000, obj_path("moby", "z", 1), "z");
+  CHECK(d == WIRE_FIN);
+  CHECK(std::filesystem::exists(cache_file(0, "moby", "z", 1)));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TC19: a name too long for the filesystem is refused, not an I/O error
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST_CASE("TC19: too-long names get ERR_NAME_TOO_LONG") {
+  // Proves the 10-byte suffix limits a final key component to 245 bytes and
+  // that longer names are refused up front, before any S3 fetch.
+  // 1. Start 1-node cluster.
+  // 2. PUT keys whose final component is 245, 246 and 255 bytes, h=1.
+  // 3. Verify 245 stores and 246 and 255 get ERR_NAME_TOO_LONG.
+  // 4. GET a 246-byte key; verify ERR_NAME_TOO_LONG and that s3copy served
+  //    nothing for it.
+  // 5. PUT a key whose whole cache path exceeds PATH_MAX; verify
+  //    ERR_NAME_TOO_LONG.
+  ClusterFixture cx(1);
+
+  auto put = [](const std::string &key) {
+    return url_put("127.0.0.1", 4000, obj_path("moby", key, 1), "v");
+  };
+  CHECK(put(std::string(245, 'k')) == WIRE_FIN);
+  CHECK(put(std::string(246, 'k')).find("ERR_NAME_TOO_LONG") !=
+        std::string::npos);
+  CHECK(put(std::string(255, 'k')).find("ERR_NAME_TOO_LONG") !=
+        std::string::npos);
+
+  uint64_t served = s3copy_served();
+  auto g =
+      url_get("127.0.0.1", 4000, obj_path("moby", std::string(246, 'g'), 1));
+  CHECK(g.find("ERR_NAME_TOO_LONG") != std::string::npos);
+  CHECK(s3copy_served() == served);
+
+  std::string deep;
+  while (deep.size() < 4200)
+    deep += std::string(99, 'd') + "/";
+  deep += "k";
+  CHECK(put(deep).find("ERR_NAME_TOO_LONG") != std::string::npos);
 }

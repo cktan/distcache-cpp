@@ -56,6 +56,30 @@ if (dc_node(&nodes_buf, &nodes_n) == 0) {
 dc_final();
 ```
 
+### Placement hash
+
+Every `dc_get` takes a placement hash `h`: the object's
+position on the ring. Objects with the same `h` are cached
+on the same node. Use it to keep related files together,
+for example every column file of one row group:
+
+```c
+/* one hash per group; any stable name for the group works */
+uint32_t h = dc_default_hash("tbl-bucket", "orders/rg-0007");
+
+dc_get("tbl-bucket", "orders/rg-0007/col-price", h, ctx, cb);
+dc_get("tbl-bucket", "orders/rg-0007/col-qty",   h, ctx, cb);
+
+/* find the node that holds the group, to run work there */
+char owner[256];
+if (dc_owner(h, owner, sizeof(owner)) == 0)
+    printf("rg-0007 lives on %s\n", owner);
+```
+
+An object that belongs to no group uses
+`dc_default_hash(bucket, key)` on its own name. See
+DESIGN.md, "Placement hash", for the rationale.
+
 One cluster per process. Each node owns its mutex and a
 pool of `DC_POOL_SIZE` (default 4) libcurl handles;
 concurrent `dc_get` calls proceed in parallel. The ring

@@ -34,8 +34,13 @@ position. A request without a valid `h` gets
 `ERR_BAD_REQUEST`.
 
 The caller chooses `h`. Objects given the same `h` land on
-one node. An object that belongs to no group uses the
-default hash `FNV-1a-64(0, "cache/{bucket}/{key}")` (see
+one node. This lets a caller keep related files together:
+for example, a database gives every column file of one row
+group the same `h`, so a query can run on the node that
+caches them and read them from local disk. The rationale is
+in DESIGN.md, under "Placement hash". An object that belongs
+to no group uses the default hash
+`FNV-1a-64(0, "cache/{bucket}/{key}")` (see
 `dc_default_hash`), the position used before `h` existed.
 
 The node stores the object at

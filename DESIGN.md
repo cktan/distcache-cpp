@@ -6,6 +6,10 @@ local filesystem. Nodes form a chord consistent-hash ring,
 communicate via HTTP, and redirect clients directly to the
 responsible node on a cache miss.
 
+The caller places each object on the ring with a placement
+hash `h`, so related files can be kept together on one
+chord node (see [Placement hash](#placement-hash)).
+
 **Language:** C++20  
 **HTTP:** cpp-httplib (thread-per-request, vendored
 `ext/httplib.h`)  
@@ -136,11 +140,56 @@ predecessor splits that node's keyspace without touching
 anyone else's. All 10 positions shift together since they
 chain from `pos[0]`.
 
-### Key routing
+### Placement hash
 
 Every object request carries a placement hash `h` (`?h=`,
-required), chosen by the caller. Objects with the same `h`
-land on one node.
+required): the object's position on the ring, chosen by
+the caller. Objects with the same `h` land on one chord
+node.
+
+**Why the caller chooses the position.** If every object's
+position were the hash of its own name, related files would
+scatter over the cluster. A columnar database (digres) keeps
+a table as row groups, and each row group is one S3 object
+per column. A query reads several columns of one row group.
+Hashed by name, those column files sit on different nodes,
+so a query on any one node reads most of its input over the
+network.
+
+With `h`, the caller gives every file of a row group the
+same hash, and all of them land on one node. Because the
+clients hold the same ring as the servers, the caller can
+also find that node itself (`dc_owner(h)`) and run the work
+there, reading the files from that node's local disk.
+
+**Why the server does not derive the group.** The server
+could hash only part of the key, up to some separator. That
+would bind distcache to one naming scheme for keys. With
+`h`, the caller decides what "related" means, and the
+server only routes and stores.
+
+**Why `h` is required, not optional.** Placement is decided
+in one place: the client. The server has no default of its
+own to keep in step with the clients, and a request that
+forgot its hash fails with `ERR_BAD_REQUEST` instead of
+quietly landing on the wrong node. A caller with no group
+uses `dc_default_hash(bucket, key)`, which is the position
+objects had before `h` existed.
+
+**Consequences.**
+- A group is the unit of placement: all its files share one
+  node, so they move together when the ring changes
+  (rebalance moves each file to the owner of its `h`).
+- A very large or very hot group loads one node. The caller
+  chooses how coarse a group is (a row group, not a table).
+- `h` is not part of the S3 key. The same key cached under
+  two hashes is two files on disk; both are correct, since
+  an object does not change.
+- Every node and client must speak `h`: an old node ignores
+  it and routes by name, which can bounce a request between
+  versions until `DCERR_REDIRECT_LOOP`. Upgrade together.
+
+### Key routing
 
 ```
 relpath     = "cache/{bucket}/{key}^^" + hex8(h)

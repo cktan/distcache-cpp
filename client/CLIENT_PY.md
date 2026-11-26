@@ -33,6 +33,28 @@ for node in dc.get_nodes():
 dc.final()
 ```
 
+### Placement hash
+
+Every `get` takes a placement hash `h`: the object's
+position on the ring. Objects with the same `h` are cached
+on the same node. Use it to keep related files together,
+for example every column file of one row group:
+
+```python
+# one hash per group; any stable name for the group works
+h = dc.default_hash("tbl-bucket", "orders/rg-0007")
+
+dc.get("tbl-bucket", "orders/rg-0007/col-price", h, buf, on_data)
+dc.get("tbl-bucket", "orders/rg-0007/col-qty",   h, buf, on_data)
+
+# find the node that holds the group, to run work there
+print("rg-0007 lives on", dc.owner(h))
+```
+
+An object that belongs to no group uses
+`default_hash(bucket, key)` on its own name. See
+DESIGN.md, "Placement hash", for the rationale.
+
 One cluster per process. Each node owns a pool of `_POOL_SIZE` (default 4)
 persistent HTTP/1.1 connections; concurrent calls proceed in parallel. Connections
 are lazy-initialised and expire after 5 minutes; expired idle connections are
